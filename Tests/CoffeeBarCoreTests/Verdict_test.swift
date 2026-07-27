@@ -75,3 +75,17 @@ private func makeReport(_ spikes: [SpikeResult]) -> ProbeReport {
     #expect(Verdict.notYetRun.rawValue == "notYetRun")
     #expect(Verdict.error.rawValue == "error")
 }
+
+@Test func verdictCaseSetIsPinned() {
+    // Case-count tripwire with no source change. `Verdict` is same-module,
+    // so this switch must be exhaustive — adding a case fails COMPILATION
+    // here, which is the point. Pinning raw values alone leaves a
+    // silently-added sixth case green, and those values feed the M0 report
+    // schema the acceptance grep consumes.
+    for v in [Verdict.pass, .fail, .notApplicable, .notYetRun, .error] {
+        switch v {
+        case .pass, .fail, .notApplicable, .notYetRun, .error:
+            #expect(!v.rawValue.isEmpty)
+        }
+    }
+}
