@@ -1909,7 +1909,14 @@ import CoffeeBarCore
 // Sources/CoffeeBarPower/DemotionProbe.swift) is authoritative:
 //     setpriority(PRIO_DARWIN_PROCESS, who, PRIO_DARWIN_BG)  // demote
 //     setpriority(PRIO_DARWIN_PROCESS, who, 0)               // restore
-// Note the restore value is 0, not 1.
+//
+// CORRECTION TO THE CORRECTION: an earlier version of this note, and commit
+// 429d801's message, claimed the restore value must be 0 "and not 1". That
+// is FALSE — measured: restoring with 1 also returns the process to
+// backgroundAfter == 0. Any non-PRIO_DARWIN_BG value clears the state. Only
+// the *which* argument was ever wrong. I propagated the original builder's
+// claim without measuring it, one commit after writing up that exact
+// failure mode.
 //
 // How this got into the plan: I grepped the SDK header, confirmed the
 // constant existed at the line cited above, and recorded it as "verified".
