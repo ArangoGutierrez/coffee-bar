@@ -1,0 +1,37 @@
+{
+  "fill": {
+    "solid": "#EFEDE7"
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "base.svg",
+          "name": "base"
+        }
+      ]
+    },
+    {
+      "layers": [
+        {
+          "image-name": "vessel.svg",
+          "name": "vessel"
+        }
+      ]
+    },
+    {
+      "layers": [
+        {
+          "image-name": "liquid.svg",
+          "name": "liquid"
+        }
+      ]
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared",
+    "circles": [
+      "watchOS"
+    ]
+  }
+}
