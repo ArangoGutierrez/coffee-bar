@@ -133,3 +133,44 @@ private func sample(prior: Bool = false) -> JournalRecord {
     try store.write(sample(prior: true))
     #expect(try store.load()?.priorValue == true)
 }
+
+// Root bypasses the permission check this test depends on, which would leave
+// it vacuously green rather than failing honestly.
+@Test(.enabled(if: geteuid() != 0))
+func aFailedDirectoryBarrierStillLeavesTheWriteSuccessful() throws {
+    // write() takes a barrier on the PARENT DIRECTORY after the rename, so the
+    // journal's NAME is durable and not merely its contents. That barrier is
+    // best-effort by design: a directory that cannot be opened must not turn a
+    // successful write into a failed arm. The bytes are already on media, and
+    // the caller is about to disable sleep on the strength of this call
+    // returning — failing here would refuse to arm over a lost guarantee we
+    // never had before this code existed.
+    //
+    // Mode 0o300 (write + execute, no read) is that case exactly: createFile,
+    // F_FULLFSYNC and replaceItemAt all succeed while open(dir, O_RDONLY)
+    // fails with EACCES.
+    //
+    // This does NOT test durability. No user-space API reports whether a
+    // barrier reached media; only a real power cut can. It tests the barrier's
+    // failure path, which is observable.
+    let url = tempURL()
+    let dir = url.deletingLastPathComponent()
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    try FileManager.default.setAttributes(
+        [.posixPermissions: 0o300], ofItemAtPath: dir.path)
+    defer {
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: dir.path)
+    }
+
+    // Pins the premise: if 0o300 ever stopped denying the open, the rest of
+    // this test would pass without exercising the failure path at all.
+    let probeFD = open(dir.path, O_RDONLY)
+    if probeFD >= 0 { close(probeFD) }
+    #expect(probeFD == -1)
+
+    let store = FileJournalStore(url: url)
+    let record = sample(prior: true)
+    try store.write(record)          // must not throw
+    #expect(try store.load() == record)
+}

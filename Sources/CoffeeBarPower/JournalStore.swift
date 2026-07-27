@@ -77,9 +77,10 @@ public struct FileJournalStore: JournalStoring {
     }
 
     /// Writes to a sibling temp file, forces it to stable storage with
-    /// `F_FULLFSYNC`, then atomically renames. Plain `fsync(2)` on macOS
-    /// only pushes to the drive cache and can be lost on power failure —
-    /// `F_FULLFSYNC` is the documented durable barrier.
+    /// `F_FULLFSYNC`, atomically renames, then barriers the parent directory
+    /// so the new *name* is durable and not just the bytes behind it. Plain
+    /// `fsync(2)` on macOS only pushes to the drive cache and can be lost on
+    /// power failure — `F_FULLFSYNC` is the documented durable barrier.
     public func write(_ record: JournalRecord) throws {
         let dir = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(
@@ -105,6 +106,22 @@ public struct FileJournalStore: JournalStoring {
         }
 
         _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)
+
+        // The rename above is a directory metadata change. Syncing the file's
+        // contents does not make its NAME durable — after a power failure the
+        // entry can be absent while the system mutation it describes has
+        // already landed. Sync the parent directory too, so the journal exists
+        // before anything acts on it.
+        //
+        // Best-effort on purpose: a barrier we cannot take must not turn a
+        // successful write into a failed arm. The bytes are already on media,
+        // so failing here would refuse to arm over a guarantee that is weaker
+        // than what the caller already has, not stronger.
+        let dirFD = open(dir.path, O_RDONLY)
+        if dirFD >= 0 {
+            _ = fcntl(dirFD, F_FULLFSYNC)
+            close(dirFD)
+        }
     }
 
     public func clear() throws {
