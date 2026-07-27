@@ -982,6 +982,44 @@ private func sample(prior: Bool = false) -> JournalRecord {
     #expect(throws: JournalError.self) { try store.load() }
 }
 
+@Test func journalIsWrittenAsISO8601NotAnEpochDouble() throws {
+    // Pins the coder strategy at this boundary. Under the default
+    // .deferredToDate the date lands as a bare Double: unreadable in an
+    // incident, and not bit-exact on reload for a live Date().
+    let url = tempURL()
+    try FileJournalStore(url: url).write(sample())
+    let text = String(decoding: try Data(contentsOf: url), as: UTF8.self)
+    #expect(text.contains("\"setAt\":\"19"))     // ISO-8601 string form
+    #expect(!text.contains("\"setAt\":-"))       // reference-date double form
+}
+
+@Test func subSecondStampsDoNotSurviveAndMustNotBeUsed() throws {
+    // Documents the contract rather than pretending it does not exist:
+    // ISO-8601 has SECOND granularity, so a sub-second setAt cannot
+    // round-trip. Journals are therefore stamped with HostInfo.now(), which
+    // truncates. This test fails loudly if someone "improves" the strategy
+    // to something lossy in a different way.
+    let url = tempURL()
+    let store = FileJournalStore(url: url)
+    let fractional = JournalRecord(
+        intent: .sleepDisabled, priorValue: false,
+        setAt: Date(timeIntervalSince1970: 1_000_000.75),
+        ttlSeconds: 900, armedBy: prov)
+    try store.write(fractional)
+    let reloaded = try store.load()
+    #expect(reloaded != fractional)                      // the lossy case
+    #expect(reloaded?.setAt.timeIntervalSince1970 == 1_000_000)
+
+    // And the whole-second form, which is what HostInfo.now() produces,
+    // round-trips exactly.
+    let whole = JournalRecord(
+        intent: .sleepDisabled, priorValue: false,
+        setAt: Date(timeIntervalSince1970: 1_000_000),
+        ttlSeconds: 900, armedBy: prov)
+    try store.write(whole)
+    #expect(try store.load() == whole)
+}
+
 @Test func writeIsAtomicUnderOverwrite() throws {
     let url = tempURL()
     let store = FileJournalStore(url: url)
@@ -1030,11 +1068,35 @@ public struct FileJournalStore: JournalStoring {
         self.url = url
     }
 
+    // ISO-8601 on BOTH sides, pinned here rather than left to the default.
+    //
+    // `JSONEncoder`'s default `.deferredToDate` writes a Double, which does
+    // not round-trip bit-exactly for a live `Date()`. A round-trip test using
+    // a whole-second fixture passes anyway — so the test would be green while
+    // the invariant is false, and a journal written at 14:03:07.412 would
+    // reload as a different record. Since the watchdog compares `setAt`
+    // against `now` to decide whether to revert a system-wide sleep flag,
+    // that is not a cosmetic difference.
+    //
+    // `CoffeeBarCore` stays strategy-agnostic; pinning belongs at this
+    // boundary, which is the only place journals become bytes.
+    private static func makeEncoder() -> JSONEncoder {
+        let e = JSONEncoder()
+        e.dateEncodingStrategy = .iso8601
+        return e
+    }
+
+    private static func makeDecoder() -> JSONDecoder {
+        let d = JSONDecoder()
+        d.dateDecodingStrategy = .iso8601
+        return d
+    }
+
     public func load() throws -> JournalRecord? {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         let data = try Data(contentsOf: url)
         do {
-            return try JSONDecoder().decode(JournalRecord.self, from: data)
+            return try Self.makeDecoder().decode(JournalRecord.self, from: data)
         } catch {
             // Deliberately NOT nil: a corrupt journal must not be mistaken
             // for "nothing was armed". Callers revert on this error.
@@ -1051,7 +1113,7 @@ public struct FileJournalStore: JournalStoring {
         try FileManager.default.createDirectory(
             at: dir, withIntermediateDirectories: true)
 
-        let data = try JSONEncoder().encode(record)
+        let data = try Self.makeEncoder().encode(record)
         let tmp = dir.appendingPathComponent(".probe-journal.\(UUID().uuidString).tmp")
 
         guard FileManager.default.createFile(atPath: tmp.path, contents: nil) else {
@@ -2513,7 +2575,7 @@ enum ArmCommand {
         }
 
         let record = JournalRecord(
-            intent: .sleepDisabled, priorValue: prior, setAt: Date(),
+            intent: .sleepDisabled, priorValue: prior, setAt: HostInfo.now(),
             ttlSeconds: ttlSeconds,
             armedBy: ArmProvenance(pid: getpid(),
                                    binaryPath: CommandLine.arguments[0],
