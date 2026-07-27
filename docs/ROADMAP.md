@@ -95,6 +95,39 @@ explicit that no mechanism exists to promote a process onto P-cores — the READ
 "quiet everything else", never "boost agents". Battery numbers appear only once S6's
 measurement harness has produced them.
 
+## M5 security precondition — the journal is an instruction to a root process
+
+Found during M0 Task 5 (2026-07-27) and recorded before M5 inherits it.
+
+`FileJournalStore` writes to `/Library/Application Support/coffee-bar/state/`,
+measured at **0755 directories, 0644 journal**. Nothing currently pins those modes
+or verifies that every component of the path is root-owned.
+
+That is harmless in M0, where the probe runs as the user and only affects itself.
+It stops being harmless in M5. There, a **root** helper reads that file and acts on
+it: the journal says "restore `SleepDisabled` to `priorValue`", and the helper does
+it. A file a non-root process can create or modify is therefore an instruction
+channel into a privileged process.
+
+Concrete failure: if the directory does not exist and an unprivileged process
+creates the path first, it owns the file the root helper will later trust.
+
+Binding requirements for M5, none of which are satisfied today:
+
+1. The helper verifies **every** component of the journal path is owned by root
+   and not group/other-writable, before reading — not just the leaf.
+2. The helper refuses to act on a journal it did not write, or whose ownership or
+   mode does not match expectation, and quarantines it instead.
+3. Directory and file are created by the **privileged** side with explicit modes
+   (`0700` / `0600`), never left to whatever created the path first.
+4. `armedBy` provenance (pid, binary path, uid) is treated as **advisory
+   forensics, not authentication**. It is attacker-controlled data in this threat
+   model.
+
+This is a design precondition, not a code review nit: it must be true before the
+helper reads its first journal, because the whole point of the helper is that it
+does something the user cannot.
+
 ## Design principle: no hidden durations
 
 **If the UI does not expose a time control, the behaviour is indefinite.**

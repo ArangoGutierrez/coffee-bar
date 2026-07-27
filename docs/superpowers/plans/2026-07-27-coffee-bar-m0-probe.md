@@ -1193,7 +1193,7 @@ public struct FileJournalStore: JournalStoring {
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `swift test
-Expected: PASS, 7 tests.
+Expected: PASS. Read the total from the run rather than trusting a number here — sibling tasks land between the plan being written and this task running.
 
 - [ ] **Step 5: Mutation-check the corrupt-journal guard**
 
@@ -1443,7 +1443,7 @@ public struct PmsetSleepDisabledController: SleepDisabledControlling {
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `swift test
-Expected: PASS, 7 tests.
+Expected: PASS. Read the total from the run rather than trusting a number here — sibling tasks land between the plan being written and this task running.
 
 - [ ] **Step 6: Add the PATH-shim failure-injection test**
 
