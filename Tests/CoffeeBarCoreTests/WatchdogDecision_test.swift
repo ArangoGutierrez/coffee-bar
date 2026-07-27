@@ -190,8 +190,7 @@ private func inputs(journal j: JournalRecord? = journal(),
     // Nothing else in the suite passes a policy, so `policy.heartbeatTimeout`
     // could be the literal 45 and no test would notice. Default is 45s, under
     // which 20s HOLDs; with a 10s policy the same inputs must revert.
-    let strict = WatchdogPolicy(heartbeatTimeout: 10, batteryFloorPercent: 20,
-                                knownSchemaVersion: 1)
+    let strict = WatchdogPolicy(heartbeatTimeout: 10, batteryFloorPercent: 20)
     #expect(decide(inputs(now: t0.addingTimeInterval(20), heartbeat: t0),
                    policy: strict) == .revert(.heartbeatLost))
 }
@@ -199,8 +198,7 @@ private func inputs(journal j: JournalRecord? = journal(),
 @Test func customBatteryFloorIsHonoured() {
     // Default floor is 20, under which 40% HOLDs; with a floor of 50 the same
     // inputs must revert. Pins `policy.batteryFloorPercent` against a literal.
-    let strict = WatchdogPolicy(heartbeatTimeout: 45, batteryFloorPercent: 50,
-                                knownSchemaVersion: 1)
+    let strict = WatchdogPolicy(heartbeatTimeout: 45, batteryFloorPercent: 50)
     #expect(decide(inputs(battery: 40, onBattery: true), policy: strict)
             == .revert(.batteryFloor))
 }
@@ -215,10 +213,62 @@ private func inputs(journal j: JournalRecord? = journal(),
             == .revert(.unknownSchema))
 }
 
+@Test func policyDefaultsToTheCurrentSchemaVersion() {
+    // Without the default, a policy carries whatever literal its author typed.
+    // A stale one makes every armed journal revert as `.unknownSchema`: safe,
+    // but the feature silently stops working, and no other test would notice
+    // because they all pin the version they themselves passed in.
+    let p = WatchdogPolicy(heartbeatTimeout: 45, batteryFloorPercent: 20)
+    #expect(p.knownSchemaVersion == JournalRecord.currentSchemaVersion)
+    #expect(decide(inputs(), policy: p) == .hold)
+}
+
+@Test func infiniteHeartbeatTimeoutIsClampedAndTheGuardStillFires() {
+    // The dangerous degenerate value. `gap <= .infinity` is ALWAYS true, so
+    // the heartbeat guard never fires and the machine never sleeps — the
+    // policy fails OPEN, which is the exact harm this project prevents.
+    let p = WatchdogPolicy(heartbeatTimeout: .infinity, batteryFloorPercent: 20)
+    #expect(p.heartbeatTimeout == 300)
+    // Brackets the clamped bound: at exactly 300s the supervisor is still
+    // alive, one second later it is not. Unclamped, BOTH would hold.
+    #expect(decide(inputs(now: t0.addingTimeInterval(300), heartbeat: t0),
+                   policy: p) == .hold)
+    #expect(decide(inputs(now: t0.addingTimeInterval(301), heartbeat: t0),
+                   policy: p) == .revert(.heartbeatLost))
+}
+
+@Test func nanHeartbeatTimeoutYieldsAFiniteInRangeValue() {
+    // `min`/`max` PROPAGATE NaN — every comparison against NaN is false, so
+    // `min(max(.nan, 1), 300)` returns .nan and a naive clamp lets the
+    // degenerate value straight through. Downstream, `gap <= .nan` is always
+    // false, so the policy reverts unconditionally: safe, but the feature is
+    // dead and nothing says why.
+    let p = WatchdogPolicy(heartbeatTimeout: .nan, batteryFloorPercent: 20)
+    #expect(p.heartbeatTimeout.isFinite)
+    #expect(p.heartbeatTimeout == 45)
+    #expect(decide(inputs(now: t0.addingTimeInterval(10), heartbeat: t0),
+                   policy: p) == .hold)
+}
+
+@Test func zeroBatteryFloorIsRaisedToTheMinimum() {
+    // A floor of 0 fires only at exactly 0%, i.e. after the machine is dead.
+    let p = WatchdogPolicy(heartbeatTimeout: 45, batteryFloorPercent: 0)
+    #expect(p.batteryFloorPercent == 5)
+    #expect(decide(inputs(battery: 5, onBattery: true), policy: p)
+            == .revert(.batteryFloor))
+    #expect(decide(inputs(battery: 6, onBattery: true), policy: p) == .hold)
+}
+
+@Test func batteryFloorAboveOneHundredIsCapped() {
+    // Percentages above 100 are unrepresentable, not merely aggressive.
+    let p = WatchdogPolicy(heartbeatTimeout: 45, batteryFloorPercent: 1000)
+    #expect(p.batteryFloorPercent == 100)
+}
+
 @Test func thermalLevelRawValuesMatchProcessInfo() {
     // Core redeclares ThermalLevel to stay Foundation-only. If these drift, a
     // Power-side rawValue mapping silently misreads the machine's thermal
-    // state — and an unknown future state must map to WORST, never best.
+    // state.
     #expect(ThermalLevel.nominal.rawValue  == ProcessInfo.ThermalState.nominal.rawValue)
     #expect(ThermalLevel.fair.rawValue     == ProcessInfo.ThermalState.fair.rawValue)
     #expect(ThermalLevel.serious.rawValue  == ProcessInfo.ThermalState.serious.rawValue)
