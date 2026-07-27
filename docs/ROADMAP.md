@@ -95,6 +95,40 @@ explicit that no mechanism exists to promote a process onto P-cores — the READ
 "quiet everything else", never "boost agents". Battery numbers appear only once S6's
 measurement harness has produced them.
 
+## Design principle: no hidden durations
+
+**If the UI does not expose a time control, the behaviour is indefinite.**
+
+A user-facing hold lasts until the user ends it. coffee-bar does not invent a
+duration the user cannot see, cannot change, and did not ask for. A toggle that
+silently expires after N minutes is a bug report waiting to happen — the machine
+sleeps, the user does not know why, and nothing in the interface explains it.
+
+Current behaviour already complies. The POC's assertion is created with no
+timeout and is released only on toggle-off; `pmset -g assertions` shows no
+`Timeout will fire` line for it, unlike `caffeinate -t`.
+
+### The one exception, and why it is not one
+
+The `SleepDisabled` TTL in M5 (8h hard cap, handoff §8.2(5)) *is* a fixed
+duration the user cannot raise. It is not a convenience timer — it is a safety
+interlock on a **root-level, global, reboot-surviving** kernel flag. If coffee-bar
+is killed while that flag is set, nothing else on the system will clear it, and
+the failure mode is a laptop that never sleeps again and cooks in a bag.
+
+The distinction that matters:
+
+| | User-facing hold | `SleepDisabled` TTL |
+|---|---|---|
+| Scope | this process' assertion | system-wide, survives reboot |
+| Cleared by | toggling off, or process exit | nothing, unless we clear it |
+| Duration | **indefinite** | capped at 8h |
+| Purpose | do what the user asked | bound the blast radius of a crash |
+
+So the rule stands as written: no hidden durations on anything the user controls.
+A cap on a privileged global flag that outlives the process is a different thing
+wearing a similar shape.
+
 ## Competitive check — 2026-07-27
 
 Two facts established before M4 invests in naming and copy.
