@@ -1404,6 +1404,13 @@ import Foundation
 @testable import CoffeeBarPower
 @testable import CoffeeBarCore
 
+@Test func nowIsTruncatedToWholeSeconds() {
+    // Contract for ISO-8601 round-tripping: no sub-second component.
+    // Fails immediately if someone "simplifies" now() back to Date().
+    let t = HostInfo.now().timeIntervalSince1970
+    #expect(t == t.rounded(.down))
+}
+
 @Test func hostStampIsPopulatedFromTheRunningMachine() {
     let s = HostInfo.stamp()
     #expect(!s.hardwareModel.isEmpty)
@@ -1457,6 +1464,18 @@ import IOKit.ps
 import CoffeeBarCore
 
 public enum HostInfo {
+    /// Whole-second timestamp for report stamping.
+    ///
+    /// `OutputFormatter` encodes dates as ISO-8601, which has second
+    /// granularity. A sub-second `Date()` therefore cannot round-trip, and a
+    /// round-trip test written against a whole-number fixture would pass for
+    /// a reason that does not generalise. Truncating at the source makes
+    /// `decode(encode(report)) == report` a real invariant rather than a
+    /// property of the test data.
+    public static func now() -> Date {
+        Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down))
+    }
+
     public static func stamp() -> HostStamp {
         HostStamp(hardwareModel: sysctlString("hw.model"),
                   osVersion: ProcessInfo.processInfo
@@ -2018,9 +2037,33 @@ private let report = ProbeReport(
 
 @Test func jsonOutputIsParseableBackIntoAReport() throws {
     let json = try OutputFormatter.json(report)
-    let decoded = try JSONDecoder().decode(
-        ProbeReport.self, from: Data(json.utf8))
+    let decoded = try OutputFormatter.makeDecoder()
+        .decode(ProbeReport.self, from: Data(json.utf8))
     #expect(decoded == report)
+}
+
+@Test func jsonDatesAreISO8601NotEpochDoubles() throws {
+    // Guards the encoder strategy itself. Under the default
+    // .deferredToDate the date serialises as a bare Double — unreadable to
+    // jq and not bit-exact for a live Date(). Both assertions below fail
+    // under the default, so this test discriminates on the strategy.
+    let json = try OutputFormatter.json(report)
+    #expect(json.contains("\"generatedAt\" : \"2026-"))
+    #expect(!json.contains("\"generatedAt\" : 7"))  // epoch-double form
+}
+
+@Test func reportTimestampsAreWholeSecondsSoRoundTripIsExact() throws {
+    // .iso8601 has SECOND granularity. A report stamped with a sub-second
+    // Date cannot round-trip, so emitters must truncate — see RunCommand.
+    // This test pins that contract rather than leaving it to comments.
+    let fractional = Date(timeIntervalSince1970: 1_785_000_000.75)
+    let truncated = Date(
+        timeIntervalSince1970: fractional.timeIntervalSince1970.rounded(.down))
+    let r = ProbeReport(generatedAt: truncated,
+                        host: report.host, spikes: [])
+    let back = try OutputFormatter.makeDecoder()
+        .decode(ProbeReport.self, from: Data(try OutputFormatter.json(r).utf8))
+    #expect(back == r)
 }
 
 @Test func humanOutputNamesTheOSBuild() {
@@ -2055,7 +2098,22 @@ public enum OutputFormatter {
     public static func json(_ report: ProbeReport) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        // ISO-8601, not the default .deferredToDate. The default encodes Date
+        // as a Double, which does not round-trip bit-exactly for a live
+        // `Date()` even though a whole-number fixture does — so a round-trip
+        // test can pass for a reason that will not generalise. It is also the
+        // only form a human or `jq` consumer can read.
+        encoder.dateEncodingStrategy = .iso8601
         return String(decoding: try encoder.encode(report), as: UTF8.self)
+    }
+
+    /// Decoder matching `json(_:)`. Any consumer parsing a probe report must
+    /// use this, or `.iso8601` explicitly — a default `JSONDecoder` will fail
+    /// on the date field.
+    public static func makeDecoder() -> JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
     }
 
     public static func human(_ report: ProbeReport) -> String {
@@ -2123,7 +2181,7 @@ enum RunCommand {
             detail: "measured during an armed run",
             durationMS: 0, evidence: [:]))
 
-        return ProbeReport(generatedAt: Date(),
+        return ProbeReport(generatedAt: HostInfo.now(),
                            host: HostInfo.stamp(),
                            spikes: results)
     }
@@ -2621,7 +2679,7 @@ enum ReportCommand {
 
         guard samples.count >= 2 else {
             return ProbeReport(
-                generatedAt: Date(), host: HostInfo.stamp(),
+                generatedAt: HostInfo.now(), host: HostInfo.stamp(),
                 spikes: [
                     SpikeResult(id: .s1LidCloseSleep, verdict: .notYetRun,
                                 detail: "fewer than 2 samples; run `arm` first",
@@ -2638,7 +2696,7 @@ enum ReportCommand {
         let anyDisplayAwake = samples.contains { $0.1 == true }
 
         return ProbeReport(
-            generatedAt: Date(), host: HostInfo.stamp(),
+            generatedAt: HostInfo.now(), host: HostInfo.stamp(),
             spikes: [
                 SpikeResult(
                     id: .s1LidCloseSleep,
