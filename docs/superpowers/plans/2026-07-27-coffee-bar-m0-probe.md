@@ -1897,6 +1897,30 @@ import Foundation
 import Darwin
 import CoffeeBarCore
 
+// CORRECTION — the two `setpriority` calls below are WRONG. Do not transcribe.
+//
+// `PRIO_DARWIN_BG` (0x1000, sys/resource.h:120) is a *prio VALUE*, not a
+// *which SELECTOR*. `setpriority(PRIO_DARWIN_BG, pid, 0)` therefore returns
+// -1/EINVAL and demotes nothing at all. Proven by transcribing this block
+// and its tests verbatim into a clean checkout: they fail with
+// `finalStateRestored → "false"`.
+//
+// The shipped implementation (commit `18d3ec0`,
+// Sources/CoffeeBarPower/DemotionProbe.swift) is authoritative:
+//     setpriority(PRIO_DARWIN_PROCESS, who, PRIO_DARWIN_BG)  // demote
+//     setpriority(PRIO_DARWIN_PROCESS, who, 0)               // restore
+// Note the restore value is 0, not 1.
+//
+// How this got into the plan: I grepped the SDK header, confirmed the
+// constant existed at the line cited above, and recorded it as "verified".
+// I checked that `PRIO_DARWIN_BG` EXISTS; I never checked how it is USED —
+// and the same ledger entry already noted the enable/disable semantics were
+// undocumented, which should have stopped me. A verified constant in the
+// wrong argument position is still a wrong call.
+//
+// Left in place with this correction rather than rewritten, so the defect
+// and its diagnosis stay in the record.
+
 /// S5 — does `setpriority(PRIO_DARWIN_BG)` succeed on a same-uid process,
 /// and does clearing it work?
 ///
