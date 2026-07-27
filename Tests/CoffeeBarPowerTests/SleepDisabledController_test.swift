@@ -284,17 +284,28 @@ private func openFileDescriptorCount() throws -> Int {
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let missing = dir.appendingPathComponent("does-not-exist").path
 
+    // 400 iterations rather than the 40 the successful path uses, because this
+    // one costs almost nothing and the descriptor count is process-global.
+    // This test finishes in milliseconds, so it samples `before` and `after`
+    // on either side of the suite's PARALLEL RAMP-UP and charges every
+    // descriptor the sibling tests open in between to itself. Measured over 8
+    // full-suite runs at 40 iterations, that ramp alone contributed deltas of
+    // 16, 19, 21, 17, 21, 22, 18 and -1 — enough to trip a bound of 20 in
+    // three of the eight. The ramp is a fixed offset that does not grow with
+    // the iteration count, so raising the count raises only the signal.
     let runner = SystemCommandRunner()
     _ = try? runner.run(missing, [])            // warm-up, as above
     let before = try openFileDescriptorCount()
-    for _ in 0..<40 {
+    for _ in 0..<400 {
         #expect(throws: (any Error).self) { try runner.run(missing, []) }
     }
     let after = try openFileDescriptorCount()
 
-    // Unfixed this delta is +160; fixed it is 0.
-    #expect(after - before <= 20,
-            "descriptor count grew by \(after - before) over 40 failed spawns (\(before) -> \(after))")
+    // Unfixed this delta is +1600; fixed it is the ramp alone. 100 sits a
+    // factor of four above the worst ramp observed and a factor of sixteen
+    // below the leak it has to catch.
+    #expect(after - before <= 100,
+            "descriptor count grew by \(after - before) over 400 failed spawns (\(before) -> \(after))")
 }
 
 @Test func aDegenerateTimeoutIsBoundedBeforeItReachesDispatch() {
