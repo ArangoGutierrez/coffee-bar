@@ -1070,13 +1070,18 @@ public struct FileJournalStore: JournalStoring {
 
     // ISO-8601 on BOTH sides, pinned here rather than left to the default.
     //
-    // `JSONEncoder`'s default `.deferredToDate` writes a Double, which does
-    // not round-trip bit-exactly for a live `Date()`. A round-trip test using
-    // a whole-second fixture passes anyway — so the test would be green while
-    // the invariant is false, and a journal written at 14:03:07.412 would
-    // reload as a different record. Since the watchdog compares `setAt`
-    // against `now` to decide whether to revert a system-wide sleep flag,
-    // that is not a cosmetic difference.
+    // The reason is legibility under failure. A dirty journal is read by a
+    // human during an incident — the machine did not sleep and they need to
+    // know when it was armed and by what. `"setAt":"2026-07-27T14:03:07Z"`
+    // answers that; `"setAt":806849904.1234568` does not.
+    //
+    // NOT a precision fix, despite an earlier claim in this plan that it was.
+    // That claim was disproven by measurement: `Date` IS a `Double` and
+    // JSONEncoder emits the shortest-round-trippable form, so
+    // `.deferredToDate` is lossless. ISO-8601 is in fact LOSSIER — second
+    // granularity — which is exactly why `ArmCommand` stamps `setAt` via
+    // `HostInfo.now()` rather than `Date()`. The truncation is a required
+    // consequence of this choice, not an independent safety measure.
     //
     // `CoffeeBarCore` stays strategy-agnostic; pinning belongs at this
     // boundary, which is the only place journals become bytes.
@@ -2160,11 +2165,22 @@ public enum OutputFormatter {
     public static func json(_ report: ProbeReport) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        // ISO-8601, not the default .deferredToDate. The default encodes Date
-        // as a Double, which does not round-trip bit-exactly for a live
-        // `Date()` even though a whole-number fixture does — so a round-trip
-        // test can pass for a reason that will not generalise. It is also the
-        // only form a human or `jq` consumer can read.
+        // ISO-8601, not the default .deferredToDate. The reason is
+        // READABILITY, not precision: a probe report is a human-inspected
+        // artifact and a bare epoch number in it is hostile to whoever is
+        // reading a verdict at 2am.
+        //
+        // Do NOT re-justify this as a precision fix. It was originally
+        // claimed as one and that claim is false, disproven by measurement:
+        // `Date` IS a `Double` and JSONEncoder emits the
+        // shortest-round-trippable form, so `.deferredToDate` is lossless by
+        // construction (2000/2000 live `Date()` values round-tripped
+        // bit-identical).
+        //
+        // The real consequence is the opposite of a free win: ISO-8601 has
+        // SECOND granularity, so this strategy is strictly lossier than the
+        // default. That is why report timestamps are stamped with
+        // `HostInfo.now()`, which truncates — see below.
         encoder.dateEncodingStrategy = .iso8601
         return String(decoding: try encoder.encode(report), as: UTF8.self)
     }
