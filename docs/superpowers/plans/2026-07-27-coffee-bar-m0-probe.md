@@ -24,6 +24,8 @@ Every task's requirements implicitly include this section. Values are copied ver
 - **Commits are signed:** `git commit -s -S`. Conventional format `type(scope): description`.
 - **Builds and tests must run unsandboxed** on the dev machine (clang module cache is outside the agent sandbox allowlist).
 - **S1 is reported `notYetRun` until a real armed run with a real closed lid occurs.** No test may assert S1 passes.
+- **Swift test files are named `<Subject>_test.swift`, NOT the idiomatic `<Subject>Tests.swift`.** Do not "correct" this. SwiftPM discovers tests by the `@Test` attribute, so the filename is free, and the `_test` form is what the repo's `tdd-guard.sh` PreToolUse hook recognises as a test file. Verified against the live hook: with a clean tree, writing `Sources/CoffeeBarCore/Verdict.swift` is BLOCKED (rc=2); once an uncommitted `*_test.swift` exists, every implementation path is allowed (rc=0). Renaming these files to `…Tests.swift` re-blocks all implementation writes and pushes workers into routing around the guard.
+- **Write the failing test FIRST, in its own step.** This is not only TDD discipline here — it is mechanically required. The guard unlocks implementation writes only once a `*_test.*` file appears as an uncommitted change.
 
 ---
 
@@ -65,7 +67,7 @@ Establishes the build, the test harness, and the CI gate in one deliverable. End
 - Create: `README.md`
 - Create: `Sources/CoffeeBarCore/SpikeID.swift`
 - Create: `.github/workflows/ci.yml`
-- Test: `Tests/CoffeeBarCoreTests/SpikeIDTests.swift`
+- Test: `Tests/CoffeeBarCoreTests/SpikeID_test.swift`
 
 **Interfaces:**
 - Consumes: nothing (first task)
@@ -142,7 +144,7 @@ nominatively; coffee-bar is not affiliated with or endorsed by their owners.
 
 - [ ] **Step 5: Write the failing test**
 
-Create `Tests/CoffeeBarCoreTests/SpikeIDTests.swift`:
+Create `Tests/CoffeeBarCoreTests/SpikeID_test.swift`:
 
 ```swift
 import Testing
@@ -169,7 +171,7 @@ import Testing
 
 - [ ] **Step 6: Run the test to verify it fails**
 
-Run: `swift test --filter SpikeIDTests`
+Run: `swift test
 Expected: FAIL — `cannot find 'SpikeID' in scope`.
 
 - [ ] **Step 7: Write the minimal implementation**
@@ -200,7 +202,7 @@ public enum SpikeID: String, Codable, CaseIterable, Sendable {
 
 - [ ] **Step 8: Run the tests to verify they pass**
 
-Run: `swift test --filter SpikeIDTests`
+Run: `swift test
 Expected: PASS, 2 tests.
 
 - [ ] **Step 9: Create the CI workflow**
@@ -251,7 +253,7 @@ Expected: all three `rc=0`.
 ```bash
 git add Package.swift .gitignore LICENSE README.md \
         Sources/CoffeeBarCore/SpikeID.swift \
-        Tests/CoffeeBarCoreTests/SpikeIDTests.swift \
+        Tests/CoffeeBarCoreTests/SpikeID_test.swift \
         .github/workflows/ci.yml
 git commit -s -S -m "feat(core): scaffold SwiftPM package, CI, and SpikeID
 
@@ -267,7 +269,7 @@ silently."
 
 **Files:**
 - Create: `Sources/CoffeeBarCore/Verdict.swift`
-- Test: `Tests/CoffeeBarCoreTests/VerdictTests.swift`
+- Test: `Tests/CoffeeBarCoreTests/Verdict_test.swift`
 
 **Interfaces:**
 - Consumes: `SpikeID` from Task 1.
@@ -279,7 +281,7 @@ silently."
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `Tests/CoffeeBarCoreTests/VerdictTests.swift`:
+Create `Tests/CoffeeBarCoreTests/Verdict_test.swift`:
 
 ```swift
 import Testing
@@ -343,7 +345,7 @@ private func makeReport(_ spikes: [SpikeResult]) -> ProbeReport {
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `swift test --filter VerdictTests`
+Run: `swift test
 Expected: FAIL — `cannot find 'SpikeResult' in scope`.
 
 - [ ] **Step 3: Write the implementation**
@@ -428,13 +430,13 @@ public struct ProbeReport: Codable, Equatable, Sendable {
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `swift test --filter VerdictTests`
+Run: `swift test
 Expected: PASS, 4 tests.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add Sources/CoffeeBarCore/Verdict.swift Tests/CoffeeBarCoreTests/VerdictTests.swift
+git add Sources/CoffeeBarCore/Verdict.swift Tests/CoffeeBarCoreTests/Verdict_test.swift
 git commit -s -S -m "feat(core): add Verdict, SpikeResult and ProbeReport envelope
 
 HostStamp is non-optional so no report can be produced without the OS
@@ -450,7 +452,7 @@ The subtle bug this task exists to prevent: clamping the TTL in `init` but not i
 
 **Files:**
 - Create: `Sources/CoffeeBarCore/JournalRecord.swift`
-- Test: `Tests/CoffeeBarCoreTests/JournalRecordTests.swift`
+- Test: `Tests/CoffeeBarCoreTests/JournalRecord_test.swift`
 
 **Interfaces:**
 - Consumes: nothing from prior tasks.
@@ -461,7 +463,7 @@ The subtle bug this task exists to prevent: clamping the TTL in `init` but not i
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `Tests/CoffeeBarCoreTests/JournalRecordTests.swift`:
+Create `Tests/CoffeeBarCoreTests/JournalRecord_test.swift`:
 
 ```swift
 import Testing
@@ -518,7 +520,7 @@ private let provenance = ArmProvenance(
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `swift test --filter JournalRecordTests`
+Run: `swift test
 Expected: FAIL — `cannot find 'JournalRecord' in scope`.
 
 - [ ] **Step 3: Write the implementation**
@@ -597,13 +599,13 @@ public struct JournalRecord: Codable, Equatable, Sendable {
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `swift test --filter JournalRecordTests`
+Run: `swift test
 Expected: PASS, 5 tests.
 
 - [ ] **Step 5: Mutation-check the clamp**
 
 Temporarily change `Self.clamp(try c.decode(...))` to `try c.decode(...)` in `init(from:)`.
-Run: `swift test --filter ttlIsClampedToEightHoursOnDecode`
+Run: `swift test
 Expected: FAIL. If it passes, the test is theatre — fix the test before restoring the guard.
 Restore the guard and re-run to confirm PASS.
 
@@ -611,7 +613,7 @@ Restore the guard and re-run to confirm PASS.
 
 ```bash
 git add Sources/CoffeeBarCore/JournalRecord.swift \
-        Tests/CoffeeBarCoreTests/JournalRecordTests.swift
+        Tests/CoffeeBarCoreTests/JournalRecord_test.swift
 git commit -s -S -m "feat(core): add JournalRecord with TTL clamped on both paths
 
 The synthesised Codable decoder bypasses init, so a journal on disk could
@@ -627,7 +629,7 @@ The heart of the safety guarantee, and the code M3 reuses verbatim. Pure, hermet
 
 **Files:**
 - Create: `Sources/CoffeeBarCore/WatchdogDecision.swift`
-- Test: `Tests/CoffeeBarCoreTests/WatchdogDecisionTests.swift`
+- Test: `Tests/CoffeeBarCoreTests/WatchdogDecision_test.swift`
 
 **Interfaces:**
 - Consumes: `JournalRecord`, `ArmProvenance` from Task 3.
@@ -643,7 +645,7 @@ The heart of the safety guarantee, and the code M3 reuses verbatim. Pure, hermet
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `Tests/CoffeeBarCoreTests/WatchdogDecisionTests.swift`:
+Create `Tests/CoffeeBarCoreTests/WatchdogDecision_test.swift`:
 
 ```swift
 import Testing
@@ -751,7 +753,7 @@ private func inputs(journal j: JournalRecord? = journal(),
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `swift test --filter WatchdogDecisionTests`
+Run: `swift test
 Expected: FAIL — `cannot find 'decide' in scope`.
 
 - [ ] **Step 3: Write the implementation**
@@ -865,7 +867,7 @@ public func decide(_ inputs: WatchdogInputs,
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `swift test --filter WatchdogDecisionTests`
+Run: `swift test
 Expected: PASS, 14 tests.
 
 - [ ] **Step 5: Mutation-check every safety branch**
@@ -888,7 +890,7 @@ Any guard whose removal leaves the suite green means that test is theatre. Fix t
 
 ```bash
 git add Sources/CoffeeBarCore/WatchdogDecision.swift \
-        Tests/CoffeeBarCoreTests/WatchdogDecisionTests.swift
+        Tests/CoffeeBarCoreTests/WatchdogDecision_test.swift
 git commit -s -S -m "feat(core): add pure watchdog decision function
 
 Implements handoff §8.2 precedence: boot recovery outranks thermal, which
@@ -902,7 +904,7 @@ reverting. All seven guards mutation-checked."
 
 **Files:**
 - Create: `Sources/CoffeeBarPower/JournalStore.swift`
-- Test: `Tests/CoffeeBarPowerTests/JournalStoreTests.swift`
+- Test: `Tests/CoffeeBarPowerTests/JournalStore_test.swift`
 
 **Interfaces:**
 - Consumes: `JournalRecord` from Task 3.
@@ -913,7 +915,7 @@ reverting. All seven guards mutation-checked."
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `Tests/CoffeeBarPowerTests/JournalStoreTests.swift`:
+Create `Tests/CoffeeBarPowerTests/JournalStore_test.swift`:
 
 ```swift
 import Testing
@@ -991,7 +993,7 @@ private func sample(prior: Bool = false) -> JournalRecord {
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `swift test --filter JournalStoreTests`
+Run: `swift test
 Expected: FAIL — `cannot find 'FileJournalStore' in scope`.
 
 - [ ] **Step 3: Write the implementation**
@@ -1080,20 +1082,20 @@ public struct FileJournalStore: JournalStoring {
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `swift test --filter JournalStoreTests`
+Run: `swift test
 Expected: PASS, 7 tests.
 
 - [ ] **Step 5: Mutation-check the corrupt-journal guard**
 
 Change the `catch` in `load()` to `return nil`.
-Run: `swift test --filter corruptJournalThrowsRatherThanReturningNil`
+Run: `swift test
 Expected: FAIL. Restore and confirm PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add Sources/CoffeeBarPower/JournalStore.swift \
-        Tests/CoffeeBarPowerTests/JournalStoreTests.swift
+        Tests/CoffeeBarPowerTests/JournalStore_test.swift
 git commit -s -S -m "feat(power): add durable atomic journal store
 
 Uses fcntl(F_FULLFSYNC) rather than fsync(2): on macOS the latter only
@@ -1110,7 +1112,7 @@ absent, so a set flag can never be mistaken for an unarmed machine."
 **Files:**
 - Create: `Sources/CoffeeBarPower/CommandRunner.swift`
 - Create: `Sources/CoffeeBarPower/SleepDisabledController.swift`
-- Test: `Tests/CoffeeBarPowerTests/SleepDisabledControllerTests.swift`
+- Test: `Tests/CoffeeBarPowerTests/SleepDisabledController_test.swift`
 
 **Interfaces:**
 - Consumes: nothing from prior tasks.
@@ -1124,7 +1126,7 @@ absent, so a set flag can never be mistaken for an unarmed machine."
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `Tests/CoffeeBarPowerTests/SleepDisabledControllerTests.swift`:
+Create `Tests/CoffeeBarPowerTests/SleepDisabledController_test.swift`:
 
 ```swift
 import Testing
@@ -1206,7 +1208,7 @@ private struct RecordingRunner: CommandRunning, @unchecked Sendable {
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `swift test --filter SleepDisabledControllerTests`
+Run: `swift test
 Expected: FAIL — `cannot find 'PmsetSleepDisabledController' in scope`.
 
 - [ ] **Step 3: Write `CommandRunner.swift`**
@@ -1330,12 +1332,12 @@ public struct PmsetSleepDisabledController: SleepDisabledControlling {
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
-Run: `swift test --filter SleepDisabledControllerTests`
+Run: `swift test
 Expected: PASS, 7 tests.
 
 - [ ] **Step 6: Add the PATH-shim failure-injection test**
 
-Append to `Tests/CoffeeBarPowerTests/SleepDisabledControllerTests.swift`:
+Append to `Tests/CoffeeBarPowerTests/SleepDisabledController_test.swift`:
 
 ```swift
 @Test func realRunnerSurfacesExitCodeFromAFailingBinary() throws {
@@ -1359,7 +1361,7 @@ Append to `Tests/CoffeeBarPowerTests/SleepDisabledControllerTests.swift`:
 }
 ```
 
-Run: `swift test --filter realRunnerSurfacesExitCodeFromAFailingBinary`
+Run: `swift test
 Expected: PASS.
 
 - [ ] **Step 7: Commit**
@@ -1367,7 +1369,7 @@ Expected: PASS.
 ```bash
 git add Sources/CoffeeBarPower/CommandRunner.swift \
         Sources/CoffeeBarPower/SleepDisabledController.swift \
-        Tests/CoffeeBarPowerTests/SleepDisabledControllerTests.swift
+        Tests/CoffeeBarPowerTests/SleepDisabledController_test.swift
 git commit -s -S -m "feat(power): add command runner seam and pmset controller
 
 Absent SleepDisabled key reads as false, matching observed macOS 26.5.2
@@ -1382,7 +1384,7 @@ corruption that only misbehaves under a sandbox."
 
 **Files:**
 - Create: `Sources/CoffeeBarPower/BaselineProbes.swift`
-- Test: `Tests/CoffeeBarPowerTests/BaselineProbeTests.swift`
+- Test: `Tests/CoffeeBarPowerTests/BaselineProbe_test.swift`
 
 **Interfaces:**
 - Consumes: `HostStamp`, `SpikeResult`, `Verdict`, `SpikeID`, `ThermalLevel` from Core.
@@ -1394,7 +1396,7 @@ corruption that only misbehaves under a sandbox."
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `Tests/CoffeeBarPowerTests/BaselineProbeTests.swift`:
+Create `Tests/CoffeeBarPowerTests/BaselineProbe_test.swift`:
 
 ```swift
 import Testing
@@ -1437,7 +1439,7 @@ import Foundation
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `swift test --filter BaselineProbeTests`
+Run: `swift test
 Expected: FAIL — `cannot find 'HostInfo' in scope`.
 
 - [ ] **Step 3: Write the implementation**
@@ -1561,14 +1563,14 @@ public struct AssertionProbe {
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `swift test --filter BaselineProbeTests`
+Run: `swift test
 Expected: PASS, 4 tests.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add Sources/CoffeeBarPower/BaselineProbes.swift \
-        Tests/CoffeeBarPowerTests/BaselineProbeTests.swift
+        Tests/CoffeeBarPowerTests/BaselineProbe_test.swift
 git commit -s -S -m "feat(power): add host stamp and assertion/thermal/battery baseline
 
 Unknown thermal states map to .critical so an unrecognised future value
@@ -1583,7 +1585,7 @@ build the verdict was measured on."
 **Files:**
 - Create: `Sources/CoffeeBarPower/EnergyProbe.swift`
 - Create: `Sources/CoffeeBarPower/DemotionProbe.swift`
-- Test: `Tests/CoffeeBarPowerTests/SpikeProbeTests.swift`
+- Test: `Tests/CoffeeBarPowerTests/SpikeProbe_test.swift`
 
 **Interfaces:**
 - Consumes: `SpikeResult`, `Verdict`, `SpikeID`.
@@ -1593,7 +1595,7 @@ build the verdict was measured on."
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `Tests/CoffeeBarPowerTests/SpikeProbeTests.swift`:
+Create `Tests/CoffeeBarPowerTests/SpikeProbe_test.swift`:
 
 ```swift
 import Testing
@@ -1637,7 +1639,7 @@ import Foundation
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `swift test --filter SpikeProbeTests`
+Run: `swift test
 Expected: FAIL — `cannot find 'EnergyProbe' in scope`.
 
 - [ ] **Step 3: Write `EnergyProbe.swift`**
@@ -1761,7 +1763,7 @@ public struct DemotionProbe {
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
-Run: `swift test --filter SpikeProbeTests`
+Run: `swift test
 Expected: PASS, 4 tests.
 
 - [ ] **Step 6: Commit**
@@ -1769,7 +1771,7 @@ Expected: PASS, 4 tests.
 ```bash
 git add Sources/CoffeeBarPower/EnergyProbe.swift \
         Sources/CoffeeBarPower/DemotionProbe.swift \
-        Tests/CoffeeBarPowerTests/SpikeProbeTests.swift
+        Tests/CoffeeBarPowerTests/SpikeProbe_test.swift
 git commit -s -S -m "feat(power): add S3 energy-field and S5 demotion probes
 
 Both restore any state they touch and report notApplicable rather than
@@ -1783,7 +1785,7 @@ capability failure."
 
 **Files:**
 - Create: `Sources/CoffeeBarPower/TelemetryRecon.swift`
-- Test: `Tests/CoffeeBarPowerTests/TelemetryReconTests.swift`
+- Test: `Tests/CoffeeBarPowerTests/TelemetryRecon_test.swift`
 
 **Interfaces:**
 - Consumes: `SpikeResult`, `Verdict`, `SpikeID`.
@@ -1793,7 +1795,7 @@ capability failure."
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `Tests/CoffeeBarPowerTests/TelemetryReconTests.swift`:
+Create `Tests/CoffeeBarPowerTests/TelemetryRecon_test.swift`:
 
 ```swift
 import Testing
@@ -1867,7 +1869,7 @@ private func recon(managed: URL? = nil, user: URL? = nil,
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `swift test --filter TelemetryReconTests`
+Run: `swift test
 Expected: FAIL — `cannot find 'TelemetryRecon' in scope`.
 
 - [ ] **Step 3: Write the implementation**
@@ -1954,14 +1956,14 @@ public struct TelemetryRecon {
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `swift test --filter TelemetryReconTests`
+Run: `swift test
 Expected: PASS, 6 tests.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add Sources/CoffeeBarPower/TelemetryRecon.swift \
-        Tests/CoffeeBarPowerTests/TelemetryReconTests.swift
+        Tests/CoffeeBarPowerTests/TelemetryRecon_test.swift
 git commit -s -S -m "feat(power): add S8 telemetry collision recon
 
 Managed settings outrank user settings, matching §15.4's note that they
@@ -1979,7 +1981,7 @@ Completes the session's acceptance criteria: `swift run coffee-bar-probe --json`
 - Create: `Sources/CoffeeBarPower/OutputFormatter.swift`
 - Create: `Sources/CoffeeBarProbe/RunCommand.swift`
 - Create: `Sources/CoffeeBarProbe/main.swift`
-- Test: `Tests/CoffeeBarPowerTests/OutputFormatterTests.swift`
+- Test: `Tests/CoffeeBarPowerTests/OutputFormatter_test.swift`
 
 **Interfaces:**
 - Consumes: everything from Tasks 1–9.
@@ -1989,7 +1991,7 @@ Move `OutputFormatter` into `CoffeeBarPower` so it is reachable from the test ta
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `Tests/CoffeeBarPowerTests/OutputFormatterTests.swift`:
+Create `Tests/CoffeeBarPowerTests/OutputFormatter_test.swift`:
 
 ```swift
 import Testing
@@ -2037,7 +2039,7 @@ private let report = ProbeReport(
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `swift test --filter OutputFormatterTests`
+Run: `swift test
 Expected: FAIL — `cannot find 'OutputFormatter' in scope`.
 
 - [ ] **Step 3: Write `Sources/CoffeeBarPower/OutputFormatter.swift`**
@@ -2175,7 +2177,7 @@ default:
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
-Run: `swift test --filter OutputFormatterTests`
+Run: `swift test
 Expected: PASS, 4 tests.
 
 - [ ] **Step 7: Verify the session acceptance criteria**
@@ -2199,7 +2201,7 @@ Expected: every `rc=0`, and `jq` prints `true`.
 git add Sources/CoffeeBarPower/OutputFormatter.swift \
         Sources/CoffeeBarProbe/RunCommand.swift \
         Sources/CoffeeBarProbe/main.swift \
-        Tests/CoffeeBarPowerTests/OutputFormatterTests.swift
+        Tests/CoffeeBarPowerTests/OutputFormatter_test.swift
 git commit -s -S -m "feat(probe): add run verb, JSON and human output
 
 S1 and S2 appear as notYetRun rather than being omitted, so a pending
@@ -2218,7 +2220,7 @@ The privileged half. Everything here is gated behind root and writes the journal
 - Create: `Sources/CoffeeBarPower/DisplayStateProbe.swift`
 - Create: `Sources/CoffeeBarProbe/ArmCommand.swift`
 - Modify: `Sources/CoffeeBarProbe/main.swift` — replace the exit-64 stub arm
-- Test: `Tests/CoffeeBarPowerTests/LaunchDaemonInstallerTests.swift`
+- Test: `Tests/CoffeeBarPowerTests/LaunchDaemonInstaller_test.swift`
 
 **Interfaces:**
 - Consumes: `JournalStoring`, `SleepDisabledControlling`, `CommandRunning`, `decide()`, `WatchdogInputs`.
@@ -2228,7 +2230,7 @@ The privileged half. Everything here is gated behind root and writes the journal
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `Tests/CoffeeBarPowerTests/LaunchDaemonInstallerTests.swift`:
+Create `Tests/CoffeeBarPowerTests/LaunchDaemonInstaller_test.swift`:
 
 ```swift
 import Testing
@@ -2298,7 +2300,7 @@ private func scratchPlist() -> URL {
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `swift test --filter LaunchDaemonInstallerTests`
+Run: `swift test
 Expected: FAIL — `cannot find 'LaunchDaemonInstaller' in scope`.
 
 - [ ] **Step 3: Write `LaunchDaemonInstaller.swift`**
@@ -2664,7 +2666,7 @@ enum ReportCommand {
 
 - [ ] **Step 8: Run the tests to verify they pass**
 
-Run: `swift test --filter LaunchDaemonInstallerTests`
+Run: `swift test
 Expected: PASS, 6 tests.
 Run: `swift test`
 Expected: PASS, whole suite.
@@ -2683,7 +2685,7 @@ git add Sources/CoffeeBarPower/LaunchDaemonInstaller.swift \
         Sources/CoffeeBarPower/DisplayStateProbe.swift \
         Sources/CoffeeBarProbe/ArmCommand.swift \
         Sources/CoffeeBarProbe/main.swift \
-        Tests/CoffeeBarPowerTests/LaunchDaemonInstallerTests.swift
+        Tests/CoffeeBarPowerTests/LaunchDaemonInstaller_test.swift
 git commit -s -S -m "feat(probe): add arm, report, revert and watchdog verbs
 
 Journal is written and fsynced before SleepDisabled is touched, and a
