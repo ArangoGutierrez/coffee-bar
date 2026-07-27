@@ -54,6 +54,20 @@ private func inputs(journal j: JournalRecord? = journal(),
             == .revert(.heartbeatLost))
 }
 
+@Test func heartbeatExactlyAtTimeoutStillHolds() {
+    // Pins `<=`. Under `<` this reverts, and nothing else in the suite notices.
+    // 45s is the policy timeout: at exactly the boundary the supervisor is
+    // still considered alive.
+    #expect(decide(inputs(now: t0.addingTimeInterval(45),
+                          heartbeat: t0)) == .hold)
+}
+
+@Test func heartbeatOneSecondPastTimeoutReverts() {
+    // The other side of the same boundary, so the pair brackets it.
+    #expect(decide(inputs(now: t0.addingTimeInterval(46),
+                          heartbeat: t0)) == .revert(.heartbeatLost))
+}
+
 @Test func bootWithDirtyJournalRevertsUnconditionally() {
     // Handoff §8.2(4): an unclean exit is not a state we reason about.
     // Even a perfectly live TTL and fresh heartbeat must revert at boot.
@@ -69,6 +83,19 @@ private func inputs(journal j: JournalRecord? = journal(),
     // now < setAt means the clock moved; TTL arithmetic is untrustworthy.
     #expect(decide(inputs(now: t0.addingTimeInterval(-60),
                           heartbeat: t0.addingTimeInterval(-60)))
+            == .revert(.clockAnomaly))
+}
+
+@Test func clockExactlyAtSetAtIsNotAnAnomaly() {
+    // Pins `<`. Under `<=` this returns .revert(.clockAnomaly).
+    // now == setAt is the normal case at arm time, not a clock jump.
+    #expect(decide(inputs(now: t0, heartbeat: t0)) == .hold)
+}
+
+@Test func clockOneSecondBeforeSetAtIsAnAnomaly() {
+    // Brackets the other side: strictly before setAt is a real jump.
+    #expect(decide(inputs(now: t0.addingTimeInterval(-1),
+                          heartbeat: t0.addingTimeInterval(-1)))
             == .revert(.clockAnomaly))
 }
 
