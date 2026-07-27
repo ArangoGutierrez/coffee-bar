@@ -217,6 +217,86 @@ private struct RecordingRunner: CommandRunning, @unchecked Sendable {
     #expect(elapsed < 5)
 }
 
+/// Open descriptors of THIS process. Counted by listing `/dev/fd` rather than
+/// by shelling out to `lsof`, which would spawn a process and open pipes of
+/// its own — perturbing the very number being measured.
+private func openFileDescriptorCount() throws -> Int {
+    try FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count
+}
+
+@Test func realRunnerDoesNotStrandPipeDescriptorsAcrossRepeatedCalls() throws {
+    // `Pipe` does not close its descriptors when it is deallocated, and
+    // `Process` takes ownership of only the two WRITE ends — it invalidates
+    // those during spawn. Nothing owned the read ends but `run()` itself,
+    // which dropped them: measured +2 descriptors per SUCCESSFUL call, linear
+    // and unbounded. Census sampled every 8 calls over 40 was
+    // [6, 22, 38, 54, 70, 86] both before and after the timeout work, so the
+    // leak long predates it.
+    //
+    // Why this is not cosmetic. M5's privileged watchdog calls this in a loop
+    // for days. The first thing to fail once the descriptor table is exhausted
+    // is `run()`'s own `dup()` of the read end, and that failure used to fall
+    // back to reading the SHARED descriptor — the exact unsafe path the dup
+    // was introduced to prevent. The leak is what made EMFILE reachable, so
+    // the safety mechanism degraded precisely when it was needed.
+    let dir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("cb-fd-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let shim = dir.appendingPathComponent("quiet")
+    try Data("#!/bin/sh\necho hello\nexit 0\n".utf8).write(to: shim)
+    try FileManager.default.setAttributes(
+        [.posixPermissions: 0o755], ofItemAtPath: shim.path)
+
+    let runner = SystemCommandRunner()
+    // One warm-up call outside the measurement so lazily-created globals
+    // (dispatch worker queues, the loader's caches) are already charged.
+    _ = try runner.run(shim.path, [])
+
+    let before = try openFileDescriptorCount()
+    for _ in 0..<40 {
+        let result = try runner.run(shim.path, [])
+        // The runs must actually SUCCEED, or a `run()` that failed fast would
+        // satisfy the descriptor assertion without doing the work.
+        #expect(result.exitCode == 0)
+        #expect(result.stdout == "hello\n")
+    }
+    let after = try openFileDescriptorCount()
+
+    // The discriminating assertion. Unfixed this delta is +80; fixed it is 0.
+    // The 20 of headroom absorbs descriptors transiently held by tests running
+    // in parallel with this one, while staying a factor of four below the
+    // leak it has to catch.
+    #expect(after - before <= 20,
+            "descriptor count grew by \(after - before) over 40 runs (\(before) -> \(after))")
+}
+
+@Test func realRunnerDoesNotStrandPipeDescriptorsWhenTheSpawnItselfFails() throws {
+    // The failed-spawn path leaked twice as fast as the successful one — +4
+    // descriptors per call, measured 8 -> 88 over 20 calls — because when
+    // `process.run()` throws, `Process` has not yet taken the write ends, so
+    // all four of the pipe's descriptors are stranded rather than two.
+    //
+    // This path is not exotic: a probe pointed at a tool that is absent on
+    // this host takes it on every single iteration of the watchdog loop, which
+    // is exactly the caller least able to afford a leak.
+    let dir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("cb-fd-nospawn-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let missing = dir.appendingPathComponent("does-not-exist").path
+
+    let runner = SystemCommandRunner()
+    _ = try? runner.run(missing, [])            // warm-up, as above
+    let before = try openFileDescriptorCount()
+    for _ in 0..<40 {
+        #expect(throws: (any Error).self) { try runner.run(missing, []) }
+    }
+    let after = try openFileDescriptorCount()
+
+    // Unfixed this delta is +160; fixed it is 0.
+    #expect(after - before <= 20,
+            "descriptor count grew by \(after - before) over 40 failed spawns (\(before) -> \(after))")
+}
+
 @Test func aDegenerateTimeoutIsBoundedBeforeItReachesDispatch() {
     // `DispatchTime.now() + Double.nan` yields a deadline that NEVER arrives.
     // Measured on macOS 26.5.2: a DispatchGroup with an outstanding enter(),

@@ -24,6 +24,20 @@ public enum CommandError: Error, Equatable {
     /// `pmset -g` read as complete is how a caller concludes `SleepDisabled`
     /// is unset when it is in fact held.
     case timedOut(after: TimeInterval)
+
+    /// A reader could not be given its own copy of a pipe's read end. Carries
+    /// `errno` from the failed `dup(2)` — `EMFILE` (24) once this process has
+    /// exhausted its descriptor table.
+    ///
+    /// Deliberately fatal to the call rather than a fallback to reading the
+    /// shared descriptor. `run` closes the pipe's own descriptors on the way
+    /// out, so a reader left holding one would be reading a descriptor this
+    /// function had already closed — and a closed number is handed to the next
+    /// `open`, at which point the parked read steals bytes from an unrelated
+    /// file. Failing the call is the only outcome that stays correct, and a
+    /// caller that is out of descriptors needs to hear about it rather than
+    /// receive quietly corrupted output.
+    case descriptorUnavailable(errno: Int32)
 }
 
 public protocol CommandRunning: Sendable {
@@ -69,6 +83,27 @@ public struct SystemCommandRunner: CommandRunning {
         let out = Pipe(), err = Pipe()
         process.standardOutput = out
         process.standardError = err
+        // Nothing else closes these four descriptors. `Pipe` does not close
+        // them when it is deallocated, and `Process` takes ownership of only
+        // the two WRITE ends — it invalidates those handles during spawn, so
+        // closing them again here is a no-op. Nothing owns the READ ends but
+        // this function, and nothing owns any of the four if the spawn below
+        // throws. Measured before this `defer` existed: +2 descriptors per
+        // successful call and +4 per failed spawn, linear and unbounded, with
+        // the census over 40 successful runs sampled every 8 reading
+        // [6, 22, 38, 54, 70, 86].
+        //
+        // That mattered beyond tidiness: M5's watchdog runs this in a loop for
+        // days, and the first casualty of an exhausted table is the `dup`
+        // below — the very thing keeping a parked reader off a shared
+        // descriptor. Closing the originals here is safe against that parked
+        // reader precisely because it holds a dup, not one of these.
+        defer {
+            try? out.fileHandleForReading.close()
+            try? out.fileHandleForWriting.close()
+            try? err.fileHandleForReading.close()
+            try? err.fileHandleForWriting.close()
+        }
         try process.run()
 
         // Both pipes are drained concurrently. Reading stdout to EOF first and
@@ -79,10 +114,24 @@ public struct SystemCommandRunner: CommandRunning {
         // capable of a megabyte of output, so this is not hypothetical.
         let sink = OutputSink()
         let group = DispatchGroup()
-        Self.drain(out.fileHandleForReading.fileDescriptor,
-                   into: sink, isStdout: true, group: group)
-        Self.drain(err.fileHandleForReading.fileDescriptor,
-                   into: sink, isStdout: false, group: group)
+        // Each reader gets its own copy of the pipe's read end, and BOTH are
+        // taken before either reader starts: a failure here then leaves
+        // nothing already parked on a queue to reason about. `errno` is
+        // captured per call because a later successful call is permitted to
+        // overwrite it.
+        let outFD = dup(out.fileHandleForReading.fileDescriptor)
+        let outErrno = errno
+        let errFD = dup(err.fileHandleForReading.fileDescriptor)
+        let errErrno = errno
+        guard outFD >= 0, errFD >= 0 else {
+            if outFD >= 0 { close(outFD) }
+            if errFD >= 0 { close(errFD) }
+            if process.isRunning { process.terminate() }
+            throw CommandError.descriptorUnavailable(
+                errno: outFD < 0 ? outErrno : errErrno)
+        }
+        Self.drain(outFD, into: sink, isStdout: true, group: group)
+        Self.drain(errFD, into: sink, isStdout: false, group: group)
         // Waiting on the drain BEFORE `waitUntilExit()` is the ordering the
         // comment above is about; the bound goes on the drain wait because
         // that is the one that can block indefinitely.
@@ -126,24 +175,24 @@ public struct SystemCommandRunner: CommandRunning {
         return clamped.isFinite ? clamped : defaultTimeout
     }
 
-    /// Reads one descriptor to EOF on a background queue. The descriptor is
-    /// passed as an `Int32` rather than a `FileHandle` because the pipe's
-    /// handle is not `Sendable` under the v6 language mode.
+    /// Reads one descriptor to EOF on a background queue, then closes it. The
+    /// descriptor is passed as an `Int32` rather than a `FileHandle` because
+    /// the pipe's handle is not `Sendable` under the v6 language mode.
+    ///
+    /// Ownership is the point: the caller hands over a `dup` of the pipe's
+    /// read end, never the pipe's own. On the timeout path `run` returns while
+    /// this read is still blocked on a grandchild that inherited the pipe, and
+    /// closes the pipe's descriptors as it goes. Closing a descriptor another
+    /// thread is sitting in `read(2)` on does not unblock that thread, and the
+    /// number can then be handed to the next `open` — at which point the
+    /// parked read would steal bytes from an unrelated file.
     private static func drain(_ descriptor: Int32, into sink: OutputSink,
                               isStdout: Bool, group: DispatchGroup) {
-        // The descriptor is dup'd so the reader owns its own copy. On the
-        // timeout path `run` returns while this read is still blocked on a
-        // grandchild that inherited the pipe, and the `Pipe` is torn down as
-        // it goes out of scope. Closing a descriptor another thread is sitting
-        // in `read(2)` on does not unblock that thread, and the number can
-        // then be handed to the next `open` — at which point the parked read
-        // would steal bytes from an unrelated file.
-        let owned = dup(descriptor)
-        let fd = owned >= 0 ? owned : descriptor
         DispatchQueue.global().async(group: group) {
-            let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
+            let handle = FileHandle(fileDescriptor: descriptor,
+                                    closeOnDealloc: false)
             sink.append(handle.readDataToEndOfFile(), isStdout: isStdout)
-            if owned >= 0 { close(owned) }
+            close(descriptor)
         }
     }
 }
