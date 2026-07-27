@@ -43,15 +43,29 @@ observation for `AssertionProbe`.
 
 ## Open residuals
 
-**fd leak in `SystemCommandRunner.run`** — leaks 2 fds per *successful* call,
-linearly and unbounded. Measured census over 40 runs: `[5,21,37,53,69,85]`,
-identical before and after the timeout work, so it is long-standing.
+**~~fd leak in `SystemCommandRunner.run`~~ — FIXED.** Kept here because the diagnosis
+is worth not rediscovering.
 
-The severity is indirect. `CommandRunner.swift` degrades silently when `dup` fails —
-`let fd = owned >= 0 ? owned : descriptor` — which restores the unsafe
-shared-descriptor path *exactly at EMFILE*, and the leak is what makes EMFILE
-reachable. **M5's watchdog is a long-lived loop calling this.** Tracked as its own
-task.
+`Process` takes ownership of only the two **write** ends of the pipes — it closes and
+invalidates them at spawn, which is *why* the drain ever sees EOF. Nothing owned the
+**read** ends; `run()` dup'd them and closed only the dups. Census over 40 successful
+runs went `[6,22,38,54,70,86]` (+2/call) to `[4,4,4,4,4,4]` (flat). A second leak on
+the spawn-failure path (+4/call) came from the same root: when `process.run()` throws,
+`Process` has not taken the write ends either. One `defer` before the spawn, closing
+all four handles, fixes both.
+
+**The `dup`-failure fallback was removed, and that was a prerequisite rather than a
+tidy-up.** The old code did `let fd = owned >= 0 ? owned : descriptor`. Once `run()`
+closes the pipe read ends on unwind, a reader left on the *shared* descriptor is
+reading one `run()` has already closed — and a closed fd number is handed to the next
+`open()`, so a parked read silently steals bytes from an unrelated file. Keeping the
+fallback alongside the leak fix would have promoted a rare EMFILE hazard into routine
+cross-file corruption on the ordinary success path. It now throws
+`CommandError.descriptorUnavailable(errno:)`.
+
+That path is deliberately untested: forcing a real `dup` failure needs `setrlimit` or
+table exhaustion, both process-global, and this suite runs in parallel — it would
+trade a deterministic bug for a flaky suite.
 
 **Timed-out runs park two threads** until the pipe holder exits — self-cleaning, but
 N timeouts park 2N threads. The real fix is killing the process *group*, which needs
