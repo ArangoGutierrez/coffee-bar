@@ -3,6 +3,7 @@
 
 import Testing
 import Foundation
+import Darwin
 @testable import CoffeeBarPower
 @testable import CoffeeBarCore
 
@@ -37,7 +38,19 @@ private func darwinBackgroundState(of pid: pid_t) -> Int32? {
     #expect(r.id == .s3EnergyFields)
     #expect(r.evidence["returnCode"] == "0")
     #expect(r.evidence["ri_billed_energy"] != nil)
+
+    // The V4 pin, checked against what the probe ACTUALLY measured rather
+    // than against a string it hardcodes. Both keys are derived inside the
+    // probe — one from the flavour constant handed to `proc_pid_rusage`, one
+    // from the struct it declares — so an upgrade moves them together: "V4"
+    // → "V6" and 296 → 464 bytes on this SDK. (v5 is 304; no two flavours
+    // share a size, so the byte count discriminates.) The right-hand side
+    // here comes from the SDK type, never from the probe. Comparing the
+    // probe's literal against a literal here is what let an earlier mutation
+    // swap `rusage_info_v4` for `rusage_info_v6` with the suite still green —
+    // the exact silent upgrade the pin exists to prevent.
     #expect(r.evidence["rusageFlavor"] == "V4")
+    #expect(r.evidence["rusageStructBytes"] == String(MemoryLayout<rusage_info_v4>.size))
 }
 
 @Test func energyProbeWithNoTargetIsNotApplicableNotAFailure() {

@@ -16,6 +16,11 @@ import CoffeeBarCore
 /// change which struct layout it measured on the next SDK bump — an answer
 /// that moves with the toolchain answers nothing. V4 is the earliest flavour
 /// carrying `ri_billed_energy` (`sys/resource.h:322`).
+///
+/// The `rusageFlavor` and `rusageStructBytes` evidence is derived from the
+/// constant and the struct this probe actually uses, never written out as a
+/// fixed string: evidence that restates an intention rather than a measurement
+/// would report "V4" from a run that had been quietly upgraded to V6.
 public struct EnergyProbe {
     public init() {}
 
@@ -27,11 +32,16 @@ public struct EnergyProbe {
                 evidence: [:])
         }
         let start = Date()
+        let flavor = RUSAGE_INFO_V4
         var info = rusage_info_v4()
+        // Read off the struct that is about to be handed to the kernel, so the
+        // evidence below describes the buffer that was really measured. 296
+        // bytes for v4, 464 for v6 on the current SDK.
+        let structBytes = MemoryLayout.size(ofValue: info)
         errno = 0
         let rc = withUnsafeMutablePointer(to: &info) { ptr in
             ptr.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) {
-                proc_pid_rusage(pid, RUSAGE_INFO_V4, $0)
+                proc_pid_rusage(pid, flavor, $0)
             }
         }
         // Captured before anything else can run: `Date()` below is a syscall in
@@ -52,7 +62,9 @@ public struct EnergyProbe {
                 id: .s3EnergyFields, verdict: .fail,
                 detail: "proc_pid_rusage failed (errno \(callErrno)) for pid \(pid)",
                 durationMS: ms,
-                evidence: ["rusageFlavor": "V4", "returnCode": String(rc),
+                evidence: ["rusageFlavor": "V\(flavor)",
+                           "rusageStructBytes": String(structBytes),
+                           "returnCode": String(rc),
                            "errno": String(callErrno), "pid": String(pid)])
         }
 
@@ -65,7 +77,8 @@ public struct EnergyProbe {
                 ? "ri_billed_energy populated for pid \(pid)"
                 : "proc_pid_rusage succeeded but ri_billed_energy is zero",
             durationMS: ms,
-            evidence: ["rusageFlavor": "V4",
+            evidence: ["rusageFlavor": "V\(flavor)",
+                       "rusageStructBytes": String(structBytes),
                        "returnCode": String(rc),
                        "ri_billed_energy": String(billed),
                        "ri_interrupt_wkups": String(info.ri_interrupt_wkups),
