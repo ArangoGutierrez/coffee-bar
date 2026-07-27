@@ -55,3 +55,23 @@ private func makeReport(_ spikes: [SpikeResult]) -> ProbeReport {
     #expect(json.contains("25F84"))
     #expect(json.contains("26.5.2"))
 }
+
+@Test func reportCannotDecodeWithoutAHostStamp() {
+    // §14: a verdict without the OS build it was measured on is worthless.
+    // Without this, making `host` optional keeps the whole suite green.
+    let hostless = #"{"schemaVersion":1,"generatedAt":806692800,"spikes":[]}"#
+    #expect(throws: DecodingError.self) {
+        try JSONDecoder().decode(ProbeReport.self, from: Data(hostless.utf8))
+    }
+}
+
+@Test func verdictRawValuesArePinned() {
+    // Every case is load-bearing: `notYetRun` keeps S1 from ever reading as
+    // pass or fail before a real lid-close run, and the raw values are what
+    // the acceptance grep and any downstream consumer match on.
+    #expect(Verdict.pass.rawValue == "pass")
+    #expect(Verdict.fail.rawValue == "fail")
+    #expect(Verdict.notApplicable.rawValue == "notApplicable")
+    #expect(Verdict.notYetRun.rawValue == "notYetRun")
+    #expect(Verdict.error.rawValue == "error")
+}
