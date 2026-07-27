@@ -70,6 +70,13 @@ each call returns 0 and no user-space API reports whether a barrier reached medi
 Deleting the barrier entirely leaves the suite green. This is inherent. Do not "fix"
 it with a test that greps source for a token — that asserts structure, not behaviour.
 
+**CF ownership is likewise review-only.** `IOPSGetProvidingPowerSourceType` is an
+unaudited `Get`, so its result must be taken *unretained*. That is correct by the
+header contract (`IOPowerSources.h:315-317`), but mutating it back to
+`takeRetainedValue()` leaves the suite green — an over-release of an immortal CF
+constant is not deterministically observable in-process. Do not record it as
+test-covered; it is a code-review invariant.
+
 ---
 
 ## M5 security precondition
