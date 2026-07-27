@@ -126,3 +126,104 @@ private func inputs(journal j: JournalRecord? = journal(),
                           thermal: .critical))
             == .revert(.dirtyJournalAtBoot))
 }
+
+@Test func precedenceLadderIsDeterministic() {
+    // The order IS the spec: several inputs can hold at once and the reported
+    // reason must be deterministic. Each rung turns on its own condition AND
+    // every lower-precedence one that can hold at the same time, so swapping
+    // it with either neighbour changes the answer. Without this rung-by-rung
+    // pinning, all six adjacent swaps pass the suite.
+    //
+    // `clockAnomaly` (now < setAt) and `ttlExpired` (now > setAt + ttl) can
+    // never both hold, so the two rungs above the clock guard are asserted in
+    // both flavours: one `now` rewound before setAt, one advanced past expiry.
+    let hot: ThermalLevel = .critical
+    let rewound = t0.addingTimeInterval(-10_000)  // now < setAt: clock anomaly
+    let expired = t0.addingTimeInterval(100_000)  // now > expiry (setAt + 900)
+    let deadBeat = rewound.addingTimeInterval(-100)  // >45s before `rewound`
+
+    // 2 schema — over boot, clock, thermal, battery, heartbeat …
+    #expect(decide(inputs(journal: journal(schema: 99), now: rewound,
+                          heartbeat: deadBeat, boot: true, thermal: hot,
+                          battery: 1, onBattery: true))
+            == .revert(.unknownSchema))
+    // … and over TTL.
+    #expect(decide(inputs(journal: journal(schema: 99), now: expired,
+                          heartbeat: t0, boot: true, thermal: hot,
+                          battery: 1, onBattery: true))
+            == .revert(.unknownSchema))
+
+    // 3 boot — over clock, thermal, battery, heartbeat …
+    #expect(decide(inputs(now: rewound, heartbeat: deadBeat, boot: true,
+                          thermal: hot, battery: 1, onBattery: true))
+            == .revert(.dirtyJournalAtBoot))
+    // … and over TTL.
+    #expect(decide(inputs(now: expired, heartbeat: t0, boot: true,
+                          thermal: hot, battery: 1, onBattery: true))
+            == .revert(.dirtyJournalAtBoot))
+
+    // 4 clock — over thermal, battery, heartbeat (TTL cannot also hold).
+    #expect(decide(inputs(now: rewound, heartbeat: deadBeat, thermal: hot,
+                          battery: 1, onBattery: true))
+            == .revert(.clockAnomaly))
+
+    // 5 thermal — over battery, TTL, heartbeat.
+    #expect(decide(inputs(now: expired, heartbeat: t0, thermal: hot,
+                          battery: 1, onBattery: true))
+            == .revert(.thermalAbort))
+
+    // 6 battery — over TTL, heartbeat.
+    #expect(decide(inputs(now: expired, heartbeat: t0, battery: 1,
+                          onBattery: true))
+            == .revert(.batteryFloor))
+
+    // 7 TTL — over heartbeat.
+    #expect(decide(inputs(now: expired, heartbeat: t0))
+            == .revert(.ttlExpired))
+
+    // 8 heartbeat alone: the last rung, with the TTL still live.
+    #expect(decide(inputs(now: t0.addingTimeInterval(100), heartbeat: t0))
+            == .revert(.heartbeatLost))
+}
+
+@Test func customHeartbeatTimeoutIsHonoured() {
+    // Nothing else in the suite passes a policy, so `policy.heartbeatTimeout`
+    // could be the literal 45 and no test would notice. Default is 45s, under
+    // which 20s HOLDs; with a 10s policy the same inputs must revert.
+    let strict = WatchdogPolicy(heartbeatTimeout: 10, batteryFloorPercent: 20,
+                                knownSchemaVersion: 1)
+    #expect(decide(inputs(now: t0.addingTimeInterval(20), heartbeat: t0),
+                   policy: strict) == .revert(.heartbeatLost))
+}
+
+@Test func customBatteryFloorIsHonoured() {
+    // Default floor is 20, under which 40% HOLDs; with a floor of 50 the same
+    // inputs must revert. Pins `policy.batteryFloorPercent` against a literal.
+    let strict = WatchdogPolicy(heartbeatTimeout: 45, batteryFloorPercent: 50,
+                                knownSchemaVersion: 1)
+    #expect(decide(inputs(battery: 40, onBattery: true), policy: strict)
+            == .revert(.batteryFloor))
+}
+
+@Test func customKnownSchemaVersionIsHonoured() {
+    // Default known version is 1, so a v1 journal HOLDs. Under a policy that
+    // knows only v2, that same journal is unknown-schema — which is how a
+    // future reader refuses to act on a record it cannot interpret.
+    let v2 = WatchdogPolicy(heartbeatTimeout: 45, batteryFloorPercent: 20,
+                            knownSchemaVersion: 2)
+    #expect(decide(inputs(journal: journal(schema: 1)), policy: v2)
+            == .revert(.unknownSchema))
+}
+
+@Test func thermalLevelRawValuesMatchProcessInfo() {
+    // Core redeclares ThermalLevel to stay Foundation-only. If these drift, a
+    // Power-side rawValue mapping silently misreads the machine's thermal
+    // state — and an unknown future state must map to WORST, never best.
+    #expect(ThermalLevel.nominal.rawValue  == ProcessInfo.ThermalState.nominal.rawValue)
+    #expect(ThermalLevel.fair.rawValue     == ProcessInfo.ThermalState.fair.rawValue)
+    #expect(ThermalLevel.serious.rawValue  == ProcessInfo.ThermalState.serious.rawValue)
+    #expect(ThermalLevel.critical.rawValue == ProcessInfo.ThermalState.critical.rawValue)
+    // A value beyond the known set must NOT construct — forcing callers to
+    // choose a fallback explicitly rather than getting .nominal by accident.
+    #expect(ThermalLevel(rawValue: 99) == nil)
+}

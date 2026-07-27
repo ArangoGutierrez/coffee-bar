@@ -33,8 +33,13 @@ public struct WatchdogPolicy: Equatable, Sendable {
     public let batteryFloorPercent: Int
     public let knownSchemaVersion: Int
 
+    // `knownSchemaVersion` tracks the record type rather than repeating its
+    // literal: a bump to `JournalRecord.currentSchemaVersion` that this policy
+    // did not follow would make every armed journal revert as `.unknownSchema`
+    // — safe, but the feature would silently stop working.
     public static let `default` = WatchdogPolicy(
-        heartbeatTimeout: 45, batteryFloorPercent: 20, knownSchemaVersion: 1)
+        heartbeatTimeout: 45, batteryFloorPercent: 20,
+        knownSchemaVersion: JournalRecord.currentSchemaVersion)
 
     public init(heartbeatTimeout: TimeInterval, batteryFloorPercent: Int,
                 knownSchemaVersion: Int) {
