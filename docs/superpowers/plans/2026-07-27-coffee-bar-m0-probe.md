@@ -1323,6 +1323,29 @@ Expected: FAIL — `cannot find 'PmsetSleepDisabledController' in scope`.
 
 - [ ] **Step 3: Write `CommandRunner.swift`**
 
+> **CORRECTION — the code block below is WRONG and must not be transcribed.**
+>
+> It reads stdout to EOF and *then* stderr. That deadlocks as soon as the child
+> fills the 64 KB stderr pipe buffer, because nothing is draining it.
+> Reproduced twice independently: 32 KB completes in ~1 s; **1 MB hangs
+> indefinitely**. Harmless for `pmset` (~1 KB) and fatal for anything verbose.
+>
+> The shipped implementation (commit `2e7fd5f`,
+> `Sources/CoffeeBarPower/CommandRunner.swift`) drains both descriptors
+> concurrently via `DispatchGroup` into a lock-guarded sink, and calls
+> `group.wait()` **before** `waitUntilExit()`. That ordering is load-bearing.
+> A reviewer attacked it with 1 MB on both streams simultaneously, a child
+> writing nothing, a child closing stdout early, and 64 concurrent callers —
+> it held in every case.
+>
+> **Treat the shipped file as authoritative, not this block.** It is left here
+> only so the defect and its diagnosis stay in the record.
+>
+> Known residual on the shipped version: `run()` drains to EOF with no bound,
+> so a child that exits while leaking a **grandchild** holding the pipes blocks
+> the caller until the grandchild exits (demonstrated: 12.35 s). Fixed in a
+> later round; see the ledger.
+
 ```swift
 // Copyright 2026 Carlos Eduardo Arango Gutierrez
 // SPDX-License-Identifier: Apache-2.0
