@@ -1020,6 +1020,29 @@ private func sample(prior: Bool = false) -> JournalRecord {
     #expect(try store.load() == whole)
 }
 
+@Test func quarantineMovesTheFileAsideRatherThanDeletingIt() throws {
+    // A journal that will not decode is the only evidence of why a machine
+    // stopped sleeping. Deleting it destroys that; renaming preserves it.
+    let url = tempURL()
+    try FileManager.default.createDirectory(
+        at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data("{ not json".utf8).write(to: url)
+
+    let store = FileJournalStore(url: url)
+    let moved = try store.quarantine()
+
+    #expect(moved != nil)
+    #expect(!FileManager.default.fileExists(atPath: url.path))
+    #expect(FileManager.default.fileExists(atPath: moved!.path))
+    // Contents preserved verbatim — this is forensic evidence.
+    #expect(String(decoding: try Data(contentsOf: moved!), as: UTF8.self)
+            == "{ not json")
+}
+
+@Test func quarantineOnMissingJournalReturnsNil() throws {
+    #expect(try FileJournalStore(url: tempURL()).quarantine() == nil)
+}
+
 @Test func writeIsAtomicUnderOverwrite() throws {
     let url = tempURL()
     let store = FileJournalStore(url: url)
@@ -1055,6 +1078,14 @@ public protocol JournalStoring: Sendable {
     func load() throws -> JournalRecord?
     func write(_ record: JournalRecord) throws
     func clear() throws
+    /// Move an unreadable journal aside and return where it went.
+    ///
+    /// A journal that will not decode still proves something WAS armed — we
+    /// just cannot tell what. Deleting it destroys the only evidence of why
+    /// a machine stopped sleeping, so it is renamed rather than removed and
+    /// left for a human to find.
+    @discardableResult
+    func quarantine() throws -> URL?
 }
 
 public struct FileJournalStore: JournalStoring {
@@ -1143,6 +1174,18 @@ public struct FileJournalStore: JournalStoring {
     public func clear() throws {
         guard FileManager.default.fileExists(atPath: url.path) else { return }
         try FileManager.default.removeItem(at: url)
+    }
+
+    /// Renames rather than deletes. `pid` disambiguates repeated failures so
+    /// a crash loop leaves a trail instead of overwriting one file.
+    @discardableResult
+    public func quarantine() throws -> URL? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let dest = url.deletingLastPathComponent()
+            .appendingPathComponent("probe-journal.corrupt.\(getpid()).json")
+        try? FileManager.default.removeItem(at: dest)
+        try FileManager.default.moveItem(at: url, to: dest)
+        return dest
     }
 }
 ```
@@ -2687,7 +2730,36 @@ enum ArmCommand {
         var isBoot = true
 
         while true {
-            let journal = (try? store.load()) ?? nil
+            // Three outcomes, and collapsing them is a real bug:
+            //   nil      -> nothing was armed        -> hold
+            //   record   -> evaluate normally
+            //   THROWS   -> a journal exists but will not decode. Something
+            //              WAS armed. `try?` here would yield nil, decide()
+            //              would return .hold, and the machine would never
+            //              sleep again — exactly the failure this product
+            //              exists to prevent, and it would silently defeat
+            //              JournalStore's "corrupt must not read as absent"
+            //              contract.
+            let journal: JournalRecord?
+            do {
+                journal = try store.load()
+            } catch {
+                // priorValue is unrecoverable, so drive to the safe state:
+                // sleep ENABLED. Clobbering a user who deliberately set
+                // disablesleep is the lesser harm versus a laptop cooking in
+                // a bag. The file is moved aside, never deleted, so the
+                // evidence survives for whoever investigates.
+                try? controller.set(false)
+                let moved = try? store.quarantine()
+                FileHandle.standardError.write(Data("""
+                UNSAFE_STATE: journal unreadable (\(error)).
+                Reverted SleepDisabled to 0 without a known prior value.
+                Quarantined to: \(moved??.path ?? "<none>")
+
+                """.utf8))
+                Thread.sleep(forTimeInterval: 5)
+                continue
+            }
             // In M0 this process IS the only supervisor, so its own liveness
             // is the heartbeat — launchd restarts it if it dies. Passing
             // `journal.setAt` here would make `now - heartbeat` grow without
