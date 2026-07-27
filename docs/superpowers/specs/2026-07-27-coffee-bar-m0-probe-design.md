@@ -129,7 +129,7 @@ Five verbs, split by privilege. `--json` on any verb switches to machine output.
 | `run` (default) | no | Unprivileged spikes S3, S5, S8 + assertion/thermal/battery baseline |
 | `arm --ttl <s>` | yes | S1/S2 phase 1: journal → set flag → install watchdog → start sampler |
 | `report` | no | S1/S2 phase 2: read sample log + journal, emit verdict |
-| `revert [--force]` | yes | Developer escape hatch: revert, clear journal, uninstall daemon |
+| `revert` | yes | Developer escape hatch: revert, clear journal, uninstall daemon |
 | `watchdog` | yes | launchd-invoked only; not human-facing |
 
 `watchdog` is the **same binary** under a different argv, not a second product — one

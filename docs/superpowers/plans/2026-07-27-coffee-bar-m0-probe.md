@@ -48,7 +48,7 @@ Every task's requirements implicitly include this section. Values are copied ver
 | `Sources/CoffeeBarProbe/main.swift` | Verb dispatch, exit codes |
 | `Sources/CoffeeBarProbe/RunCommand.swift` | `run` verb: unprivileged spikes |
 | `Sources/CoffeeBarProbe/ArmCommand.swift` | `arm`, `report`, `revert`, `watchdog` verbs |
-| `Sources/CoffeeBarProbe/OutputFormatter.swift` | JSON and human rendering |
+| `Sources/CoffeeBarPower/OutputFormatter.swift` | JSON and human rendering. Lives in `Power`, not `Probe`: executable targets cannot be imported by test targets. |
 | `.github/workflows/ci.yml` | `swift build`, `swift build -c release`, `swift test` |
 | `Formula/coffee-bar.rb` | Homebrew formula, builds from source |
 
@@ -1971,7 +1971,7 @@ MDM-managed machine can acquire managed settings at any time."
 Completes the session's acceptance criteria: `swift run coffee-bar-probe --json` emits a report containing all five spike ids.
 
 **Files:**
-- Create: `Sources/CoffeeBarProbe/OutputFormatter.swift`
+- Create: `Sources/CoffeeBarPower/OutputFormatter.swift`
 - Create: `Sources/CoffeeBarProbe/RunCommand.swift`
 - Create: `Sources/CoffeeBarProbe/main.swift`
 - Test: `Tests/CoffeeBarPowerTests/OutputFormatterTests.swift`
@@ -2482,7 +2482,7 @@ enum ArmCommand {
         """)
     }
 
-    static func revert(force: Bool) {
+    static func revert() {
         requireRoot()
         let runner = SystemCommandRunner()
         let controller = PmsetSleepDisabledController(runner: runner)
@@ -2513,9 +2513,15 @@ enum ArmCommand {
 
         while true {
             let journal = (try? store.load()) ?? nil
+            // In M0 this process IS the only supervisor, so its own liveness
+            // is the heartbeat — launchd restarts it if it dies. Passing
+            // `journal.setAt` here would make `now - heartbeat` grow without
+            // bound and trip `.heartbeatLost` 45s into every armed run,
+            // reverting SleepDisabled before any lid-close measurement could
+            // finish. The real cross-process heartbeat arrives in M3 over XPC.
             let decision = decide(WatchdogInputs(
                 journal: journal, now: Date(),
-                lastHeartbeat: journal?.setAt,
+                lastHeartbeat: Date(),
                 isBootEvaluation: isBoot && journal != nil,
                 thermal: reader.thermalLevel(),
                 batteryPercent: reader.batteryPercent(),
@@ -2570,7 +2576,7 @@ case "arm":
     ArmCommand.arm(ttlSeconds: ttl)
 
 case "revert":
-    ArmCommand.revert(force: arguments.contains("--force"))
+    ArmCommand.revert()
 
 case "watchdog":
     ArmCommand.watchdog()
