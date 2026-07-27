@@ -1601,12 +1601,17 @@ import Foundation
 @testable import CoffeeBarPower
 @testable import CoffeeBarCore
 
-@Test func energyProbeReportsAgainstOwnProcess() {
+@Test func energyProbeSyscallSucceedsOnOwnProcess() {
+    // The syscall must succeed for a process we own — that is a real
+    // invariant and this test goes red if it regresses. Whether
+    // ri_billed_energy is POPULATED is the open question S3 exists to
+    // answer, so it is recorded as evidence and deliberately NOT asserted:
+    // pinning the verdict here would presuppose the spike's result.
     let r = EnergyProbe().run(targetPID: getpid())
     #expect(r.id == .s3EnergyFields)
-    // Own process must always be readable; anything else is a real finding.
-    #expect(r.verdict == .pass || r.verdict == .fail)
-    #expect(r.evidence["rusageFlavor"] != nil)
+    #expect(r.evidence["returnCode"] == "0")
+    #expect(r.evidence["ri_billed_energy"] != nil)
+    #expect(r.evidence["rusageFlavor"] == "V4")
 }
 
 @Test func energyProbeWithNoTargetIsNotApplicableNotAFailure() {
