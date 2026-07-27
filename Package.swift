@@ -6,6 +6,8 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .executable(name: "coffee-bar-probe", targets: ["CoffeeBarProbe"]),
+        // Spike: the menu-bar POC. M1 replaces this target wholesale.
+        .executable(name: "coffee-bar-poc", targets: ["CoffeeBarMenuBarPOC"]),
         .library(name: "CoffeeBarCore", targets: ["CoffeeBarCore"]),
     ],
     targets: [
@@ -13,6 +15,8 @@ let package = Package(
         .target(name: "CoffeeBarPower", dependencies: ["CoffeeBarCore"],
                 swiftSettings: [.swiftLanguageMode(.v6)]),
         .executableTarget(name: "CoffeeBarProbe", dependencies: ["CoffeeBarPower"],
+                          swiftSettings: [.swiftLanguageMode(.v6)]),
+        .executableTarget(name: "CoffeeBarMenuBarPOC", dependencies: ["CoffeeBarPower"],
                           swiftSettings: [.swiftLanguageMode(.v6)]),
         .testTarget(name: "CoffeeBarCoreTests", dependencies: ["CoffeeBarCore"],
                     swiftSettings: [.swiftLanguageMode(.v6)]),

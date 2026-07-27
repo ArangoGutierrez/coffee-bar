@@ -1,5 +1,7 @@
 .build/
 .swiftpm/
+# Output of scripts/build-poc-app.sh
+build/
 *.xcodeproj
 DerivedData/
 .DS_Store
