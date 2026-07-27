@@ -33,10 +33,60 @@ private func sample(prior: Bool = false) -> JournalRecord {
 }
 
 @Test func writeCreatesIntermediateDirectories() throws {
-    let url = tempURL()
+    // TWO levels missing, deliberately. M5's real path is
+    // …/coffee-bar/state/probe-journal.json, so both `coffee-bar` and `state`
+    // can be absent on a first arm. `tempURL()` alone leaves only ONE level
+    // absent, and `createDirectory` creates a single missing level whether or
+    // not `withIntermediateDirectories` is set — so one level proves nothing.
+    let url = tempURL().deletingLastPathComponent()
+        .appendingPathComponent("state")
+        .appendingPathComponent("probe-journal.json")
     let store = FileJournalStore(url: url)
     try store.write(sample())
     #expect(FileManager.default.fileExists(atPath: url.path))
+    #expect(try store.load() == sample())
+}
+
+// Root bypasses the permission denial this test depends on, which would leave
+// it vacuously green rather than failing honestly.
+@Test(.enabled(if: geteuid() != 0))
+func anUncreatableTempFileSurfacesWriteFailed() throws {
+    // `JournalError.writeFailed` is the arm path's "the journal did not land"
+    // signal — the caller must NOT go on to disable sleep — and nothing
+    // reached it, so the arm sequence's own failure branch was unexercised.
+    //
+    // Mode 0o500 (read + execute, no write) is that case exactly: the
+    // directory already exists so `createDirectory` is a no-op, then
+    // `createFile` on the sibling temp file fails with EACCES.
+    let url = tempURL()
+    let dir = url.deletingLastPathComponent()
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    try FileManager.default.setAttributes(
+        [.posixPermissions: 0o500], ofItemAtPath: dir.path)
+    defer {
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: dir.path)
+    }
+
+    // Pins the premise: if 0o500 ever stopped denying the create, this test
+    // would pass without exercising the failure path at all.
+    let probeFD = open(dir.appendingPathComponent("probe").path,
+                       O_WRONLY | O_CREAT, 0o644)
+    if probeFD >= 0 { close(probeFD) }
+    #expect(probeFD == -1)
+
+    let thrown = #expect(throws: JournalError.self) {
+        try FileJournalStore(url: url).write(sample())
+    }
+    // The message names the file that could not be created, so an incident
+    // reader can tell a permission problem from a full disk. Only the UUID in
+    // the temp name is unpinnable.
+    if case .writeFailed(let message) = thrown {
+        #expect(message.hasPrefix("could not create \(dir.path)/.probe-journal."))
+        #expect(message.hasSuffix(".tmp"))
+    } else {
+        Issue.record("expected .writeFailed, got \(String(describing: thrown))")
+    }
 }
 
 @Test func clearRemovesTheJournal() throws {
@@ -127,10 +177,31 @@ private func sample(prior: Bool = false) -> JournalRecord {
 }
 
 @Test func writeIsAtomicUnderOverwrite() throws {
+    // Atomicity IS observable, so assert it rather than asserting "the last
+    // write won" — an in-place `data.write(to: url)` satisfies that just as
+    // well, which left the previous version of this test green with the
+    // guarantee gone.
+    //
+    // `replaceItemAt` swaps a fully-written sibling in by rename, so a reader
+    // that already opened the journal keeps its descriptor on the ORIGINAL
+    // inode and goes on seeing the original bytes. An in-place write truncates
+    // the very file that descriptor points at, so the held reader sees the new
+    // bytes or a torn prefix instead. That difference is the whole test.
     let url = tempURL()
     let store = FileJournalStore(url: url)
     try store.write(sample(prior: false))
+    let original = try Data(contentsOf: url)
+
+    let fd = open(url.path, O_RDONLY)
+    try #require(fd >= 0)
+    defer { close(fd) }
+
     try store.write(sample(prior: true))
+
+    let held = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
+    #expect(held.readDataToEndOfFile() == original)
+    // And the path itself now resolves to the new record — so this is an
+    // atomic REPLACEMENT, not a write that quietly failed.
     #expect(try store.load()?.priorValue == true)
 }
 
