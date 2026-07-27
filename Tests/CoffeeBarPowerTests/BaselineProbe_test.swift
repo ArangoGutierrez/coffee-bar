@@ -3,14 +3,42 @@
 
 import Testing
 import Foundation
+import IOKit.ps
+import IOKit.pwr_mgt
 @testable import CoffeeBarPower
 @testable import CoffeeBarCore
+
+/// Power-management assertions currently owned by *this* process, filtered to a
+/// given assertion name.
+///
+/// Key strings are the documented literals (`kIOPMAssertionNameKey` ==
+/// `"AssertName"`), spelled out so the test does not depend on the same
+/// constants the implementation uses. Deliberately a second copy of the helper
+/// in `AssertionHolder_test.swift`: that one is private to its suite, and this
+/// file is the only other place that needs to read live IOKit state.
+private func liveAssertions(named name: String) -> [[String: Any]] {
+    var unmanaged: Unmanaged<CFDictionary>?
+    guard IOPMCopyAssertionsByProcess(&unmanaged) == kIOReturnSuccess,
+        let byProcess = unmanaged?.takeRetainedValue() as? [NSNumber: [[String: Any]]]
+    else {
+        return []
+    }
+    let pid = NSNumber(value: ProcessInfo.processInfo.processIdentifier)
+    return (byProcess[pid] ?? []).filter { $0["AssertName"] as? String == name }
+}
 
 @Test func nowIsTruncatedToWholeSeconds() {
     // Contract for ISO-8601 round-tripping: no sub-second component.
     // Fails immediately if someone "simplifies" now() back to Date().
     let t = HostInfo.now().timeIntervalSince1970
     #expect(t == t.rounded(.down))
+
+    // ...and truncated *downwards*. Whole-second-ness alone is equally
+    // satisfied by rounding up, which would stamp every journal up to a second
+    // in the future. `decide()` reverts with `.clockAnomaly` when `now` is
+    // before the journal's `setAt`, so a report stamped ahead of the clock that
+    // later reads it is a spurious revert — arming and immediately disarming.
+    #expect(HostInfo.now() <= Date())
 }
 
 @Test func hostStampIsPopulatedFromTheRunningMachine() {
@@ -31,10 +59,33 @@ import Foundation
 @Test func assertionProbeAcquiresAndReleasesCleanly() {
     // Verified reachable in this environment: IOPMAssertionCreateWithName
     // returned rc=0 on macOS 26.5.2.
-    let result = AssertionProbe().run()
+    //
+    // The verdict alone cannot tell these three probes apart: one that holds
+    // the right assertion, one that holds `PreventUserIdleDisplaySleep`, and
+    // one that acquires and never releases. All three report `.pass`. So the
+    // assertion is read back out of live IOKit state instead, on both sides of
+    // the release — holding the display assertion would delete the product's
+    // entire reason to exist (§6.1), and a leak would keep this machine awake
+    // for the rest of the process's life with nothing left to release it.
+    #expect(liveAssertions(named: AssertionProbe.assertionName).isEmpty,
+            "stale probe assertion before the run; the readings below would be its")
+
+    var heldTypes: [String]?
+    let result = AssertionProbe().run(whileHeld: {
+        heldTypes = liveAssertions(named: AssertionProbe.assertionName)
+            .compactMap { $0["AssertType"] as? String }
+    })
+
+    // Deliberately NOT `if let heldTypes { ... }` — that form is vacuously
+    // green for a `run` that never enters the seam at all.
+    #expect(heldTypes == ["PreventUserIdleSystemSleep"])
+    #expect(liveAssertions(named: AssertionProbe.assertionName).isEmpty,
+            "probe returned with its assertion still live: it leaked")
+
     #expect(result.id == .baseline)
     #expect(result.verdict == .pass)
     #expect(result.evidence["assertionReturnCode"] == "0")
+    #expect(result.evidence["released"] == "true")
 }
 
 @Test func thermalMappingCoversEveryDocumentedState() {
@@ -67,6 +118,30 @@ import Foundation
     #expect(ThermalLevel.nominal.rawValue < ThermalLevel.serious.rawValue)
     #expect(ThermalLevel.fair.rawValue    < ThermalLevel.serious.rawValue)
     #expect(ThermalLevel.critical.rawValue >= ThermalLevel.serious.rawValue)
+}
+
+@Test func onlyBatteryPowerCountsAsRunningOnBattery() {
+    // The live `isOnBattery()` cannot discriminate its own sense: on a host
+    // WITH a battery, inverting the comparison flips which branch of the test
+    // below runs and every assertion still holds, and on the battery-less CI
+    // runner it is never true at all. Machine topology is not a test, so the
+    // decision is extracted and tabled — exactly like `level(from:)`.
+    //
+    // Spelled with the `kIOPM*Key` constants IOPowerSources.h documents as the
+    // return values of `IOPSGetProvidingPowerSourceType`, NOT the `kIOPS*Value`
+    // constants the implementation compares against. Same strings, different
+    // header: the test cannot agree with a wrong implementation by sharing its
+    // constant, and it pins the real API contract.
+    #expect(SystemPowerReader.onBattery(providingType: kIOPMBatteryPowerKey) == true)
+    #expect(SystemPowerReader.onBattery(providingType: kIOPMACPowerKey) == false)
+
+    // A UPS is a deliberate `false`, not an oversight: §8.1 aborts on a
+    // *depleting* battery at or below the floor, and a UPS is an external
+    // supply the probe run is not draining.
+    #expect(SystemPowerReader.onBattery(providingType: kIOPMUPSPowerKey) == false)
+
+    // No snapshot at all, or a source type Apple adds later.
+    #expect(SystemPowerReader.onBattery(providingType: nil) == false)
 }
 
 @Test func batteryAndPowerSourceReadingsAreMutuallyConsistent() {
