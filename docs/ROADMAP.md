@@ -21,7 +21,7 @@ is even viable on current macOS.
 | **M1** | Menu-bar app, assertion only. Holds `PreventUserIdleSystemSleep`, **does not** hold the display assertion (§6.1) | v0.1 |
 | **M2** | Claude Code adapter + SessionHub. HTTP ingest, session state machine, wake bound to agent state | v0.1 |
 | **M3** | Codex + Cursor adapters + `coffeebar-hook` shim | v0.1 |
-| **M4** | Open-source repo: GitHub Actions CI/release, Apache-2.0 compliance, contribution docs, Homebrew installability | **v0.1 — cut here** |
+| **M4** | Open-source repo hygiene — see M4 scope below | **v0.1 — cut here** |
 | **M5** | Privileged helper + lid-closed mode (`SleepDisabled`, XPC, journal watchdog) | v0.2 |
 | **M6** | Power triage + telemetry (protected/demotable sets, restore-on-exit) | v0.2 |
 | **M7** | Token Tap — local OTLP token accounting (handoff §15) | v0.3 |
@@ -49,6 +49,51 @@ Concretely:
 
 The M0 probe still runs S1/S2 so the M5 decision rests on measurement rather than the
 conflicting sources in handoff §2.2 — but nothing in v0.1 depends on the answer.
+
+## M4 scope — open-source repo hygiene
+
+The release-readiness milestone. v0.1 is cut on its completion.
+
+| Item | Requirement |
+|---|---|
+| **Issue templates** | `.github/ISSUE_TEMPLATE/` — bug report, feature request, config `blank_issues_enabled: false`. Bug template must collect macOS build, hardware model, coffee-bar version, and which agent tool — the fields every triage otherwise costs a round trip to obtain. |
+| **PR template** | `.github/pull_request_template.md` — problem, approach, testing done, breaking changes, `Closes #N`. |
+| **CONTRIBUTING.md** | Build from source, run tests, TDD expectation, `_test.swift` naming rule and why, DCO sign-off + GPG signing requirement, conventional commit format, how to run the capability probe. |
+| **SECURITY.md** | Private disclosure route, supported versions, explicit scope statement: coffee-bar reads agent metadata only and never transcript contents (handoff §12), makes no network egress, and — once M5 lands — what the privileged helper may do. |
+| **README** | Optimised for both search and generative-engine retrieval. See below. |
+| **CI** | GitHub Actions, minimal but real: `swift build`, `swift build -c release`, `swift test`. Least-privilege `permissions:`, `timeout-minutes`, `concurrency` with `cancel-in-progress`, actions pinned by SHA rather than moving tags. |
+| **Repo description** | Short GitHub description + topics, consistent with the README's positioning. |
+| **Homebrew** | Installable via `brew`. Formula builds from source; tap layout decided and documented. |
+
+### README: SEO and GEO
+
+Two different retrieval paths, one document.
+
+**SEO** — the terms a person types: `macos menu bar app`, `keep mac awake`,
+`caffeinate alternative`, `KeepingYouAwake alternative`, `Claude Code`, `Codex CLI`,
+`Cursor`, `agent monitoring`, `prevent sleep macOS`. These belong in the description,
+the first paragraph, the topics, and real headings — not a keyword dump.
+
+**GEO** (generative-engine optimisation) — being accurately citable when an assistant is
+asked "what keeps my Mac awake while my coding agent runs?". That rewards different
+properties than SEO:
+
+- A one-sentence definition near the top that answers "what is this" without context.
+- Self-contained, quotable claims. "Releases the wake assertion when every agent is
+  blocked on the human" is retrievable; "smart power management" is not.
+- Explicit comparison to the known alternative (KeepingYouAwake, `caffeinate -d`),
+  since that is the phrasing users bring to an assistant.
+- Concrete requirements stated as facts: macOS version floor, Apple Silicon, no root
+  required in v0.1, no network egress.
+- Q&A-shaped headings matching real questions ("Does it work with the lid closed?" —
+  answered honestly for v0.1: no, that is M5).
+- Every capability claim traceable to something true. Overstating here is both a
+  product lie and, once assistants cite it, a durable one.
+
+**Honesty constraint, binding on both:** no claim may outrun the probe. Handoff §2.1 is
+explicit that no mechanism exists to promote a process onto P-cores — the README says
+"quiet everything else", never "boost agents". Battery numbers appear only once S6's
+measurement harness has produced them.
 
 ## Note on M0
 
