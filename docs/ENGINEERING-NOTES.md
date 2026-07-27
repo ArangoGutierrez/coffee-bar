@@ -57,6 +57,18 @@ task.
 N timeouts park 2N threads. The real fix is killing the process *group*, which needs
 `posix_spawn` attributes Foundation's `Process` does not expose.
 
+**Third-party demotion cannot currently be verified.** `setpriority(PRIO_DARWIN_PROCESS,
+pid, PRIO_DARWIN_BG)` demotes and restores correctly on a process we own, and the
+readback confirms it. For a *foreign* pid, `getpriority` reads 0 even while the target
+is demoted — and it reads 0 after Apple's own `taskpolicy -b -p` too, so the failing
+component is the **readback**, not necessarily the demotion.
+
+`DemotionProbe` records `targetIsSelf` for exactly this reason: `finalStateRestored`
+is a verified fact when the target is self and a return-code claim otherwise. Do not
+let a consumer treat them as equal. Before any milestone depends on demoting a foreign
+process, answer this with a different instrument — sampling the target's thread QoS,
+or measuring core residency under load.
+
 **`WatchdogPolicy` validation is a clamp, not a contract.** The initialiser clamps
 `heartbeatTimeout` to `[1,300]` and `batteryFloorPercent` to `[5,100]`, but nothing
 prevents a caller passing a legal-but-wrong policy. Clamping rather than
