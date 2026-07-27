@@ -1502,12 +1502,37 @@ import Foundation
     #expect(result.evidence["assertionReturnCode"] == "0")
 }
 
-@Test func powerReaderReportsAConsistentPowerSource() {
+@Test func thermalMappingCoversEveryDocumentedState() {
+    // The live reader cannot be driven to .serious on demand, so the MAPPING
+    // is extracted and tested directly. This is the part with a bug budget:
+    // an off-by-one here silently disarms the thermal abort in §8.1.
+    #expect(SystemPowerReader.level(from: .nominal)  == .nominal)
+    #expect(SystemPowerReader.level(from: .fair)     == .fair)
+    #expect(SystemPowerReader.level(from: .serious)  == .serious)
+    #expect(SystemPowerReader.level(from: .critical) == .critical)
+}
+
+@Test func seriousAndCriticalOutrankTheAbortThreshold() {
+    // decide() aborts on `>= .serious`. Pin the ordering the comparison
+    // depends on, so reordering the enum cannot silently raise the threshold.
+    #expect(ThermalLevel.nominal.rawValue < ThermalLevel.serious.rawValue)
+    #expect(ThermalLevel.fair.rawValue    < ThermalLevel.serious.rawValue)
+    #expect(ThermalLevel.critical.rawValue >= ThermalLevel.serious.rawValue)
+}
+
+@Test func batteryAndPowerSourceReadingsAreMutuallyConsistent() {
+    // Deliberately NOT `if let pct { ... }` — that form passes for a reader
+    // that always returns nil, which is the failure it should catch.
+    // Asserted instead: a real invariant that CAN fail. Running on battery
+    // requires a battery to exist, so a nil percentage while onBattery is a
+    // genuine contradiction. Both branches are meaningful, and neither is
+    // vacuous on a CI runner with no battery.
     let reader = SystemPowerReader()
     let pct = reader.batteryPercent()
-    if let pct { #expect(pct >= 0 && pct <= 100) }
-    // Thermal must be one of the four documented levels.
-    #expect(ThermalLevel(rawValue: reader.thermalLevel().rawValue) != nil)
+    if reader.isOnBattery() {
+        #expect(pct != nil, "drawing from battery but no battery percentage")
+    }
+    #expect(pct == nil || (pct! >= 0 && pct! <= 100))
 }
 ```
 
@@ -1578,14 +1603,21 @@ public protocol PowerReading: Sendable {
 public struct SystemPowerReader: PowerReading {
     public init() {}
 
-    public func thermalLevel() -> ThermalLevel {
-        switch ProcessInfo.processInfo.thermalState {
+    /// Pure mapping, extracted so every documented state is testable without
+    /// needing to drive the hardware into thermal distress. The live reader
+    /// below is a one-line adapter over it.
+    public static func level(from state: ProcessInfo.ThermalState) -> ThermalLevel {
+        switch state {
         case .nominal:  return .nominal
         case .fair:     return .fair
         case .serious:  return .serious
         case .critical: return .critical
         @unknown default: return .critical   // unknown means treat as worst
         }
+    }
+
+    public func thermalLevel() -> ThermalLevel {
+        Self.level(from: ProcessInfo.processInfo.thermalState)
     }
 
     public func batteryPercent() -> Int? {
