@@ -6,5 +6,11 @@
 //
 // The import is load-bearing: it is the Probe -> Power edge.
 import CoffeeBarPower
+import Foundation
 
-print("coffee-bar-probe: not implemented yet (M0 scaffolding)")
+// Exit non-zero so a smoke check gating on the exit code cannot read the
+// unimplemented placeholder as success. EX_USAGE (64) matches the usage-error
+// convention the real CLI adopts once the verbs land.
+FileHandle.standardError.write(
+    Data("coffee-bar-probe: not implemented yet (M0 scaffolding)\n".utf8))
+exit(64)

@@ -18,3 +18,11 @@ import Testing
     #expect(!raws.contains("S4"))
     #expect(!raws.contains("S6"))
 }
+
+@Test func spikeIDCoversBaselineAndNothingElse() {
+    // `baseline` is a real case the brief mandates; without this assertion
+    // deleting it leaves the suite green.
+    #expect(SpikeID.baseline.rawValue == "baseline")
+    // Pins the total so a silently-added or silently-dropped case fails here.
+    #expect(SpikeID.allCases.count == 6)
+}
