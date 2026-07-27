@@ -38,7 +38,17 @@ public struct PmsetSleepDisabledController: SleepDisabledControlling {
         for line in r.stdout.split(separator: "\n") {
             let fields = line.split(whereSeparator: \.isWhitespace)
             if fields.count >= 2, fields[0] == "SleepDisabled" {
-                return fields[1] == "1"
+                switch fields[1] {
+                case "1": return true
+                case "0": return false
+                // A value we cannot interpret must not collapse to "off". The
+                // caller would conclude there is nothing to revert and leave a
+                // genuinely-held flag set across the next reboot, which is the
+                // failure this whole component exists to prevent.
+                default:
+                    throw PowerControlError.unreadableState(
+                        "SleepDisabled=\(fields[1])")
+                }
             }
         }
         return false   // key absent means unset

@@ -7,7 +7,8 @@ import Foundation
 
 private struct FakeRunner: CommandRunning {
     let result: CommandResult
-    func run(_ executable: String, _ arguments: [String]) throws -> CommandResult {
+    func run(_ executable: String, _ arguments: [String],
+             timeout: TimeInterval) throws -> CommandResult {
         result
     }
 }
@@ -16,7 +17,8 @@ private struct RecordingRunner: CommandRunning, @unchecked Sendable {
     final class Box: @unchecked Sendable { var calls: [[String]] = [] }
     let box = Box()
     let result: CommandResult
-    func run(_ executable: String, _ arguments: [String]) throws -> CommandResult {
+    func run(_ executable: String, _ arguments: [String],
+             timeout: TimeInterval) throws -> CommandResult {
         box.calls.append([executable] + arguments)
         return result
     }
@@ -44,6 +46,49 @@ private struct RecordingRunner: CommandRunning, @unchecked Sendable {
         exitCode: 0, stdout: " SleepDisabled\t0\n", stderr: ""))
     let c = PmsetSleepDisabledController(runner: runner)
     #expect(try c.isEnabled() == false)
+}
+
+@Test func isEnabledIssuesTheExactReadInvocation() throws {
+    // `FakeRunner` DISCARDS its arguments and every other isEnabled() test uses
+    // it, so the read's argv was pinned by nothing at all: `isEnabled()` could
+    // have issued ANY invocation — including a WRITE one — and the suite would
+    // have stayed green. For a flag that survives reboot, pinning this is the
+    // one guarantee the seam exists to provide.
+    let runner = RecordingRunner(result: CommandResult(
+        exitCode: 0, stdout: " SleepDisabled\t1\n", stderr: ""))
+    let c = PmsetSleepDisabledController(runner: runner)
+    #expect(try c.isEnabled() == true)
+    #expect(runner.box.calls == [["/usr/bin/pmset", "-g"]])
+}
+
+@Test func malformedSleepDisabledValueThrowsRatherThanReadingAsOff() {
+    // Reading an uninterpretable value as "off" is the dangerous direction: the
+    // caller concludes there is nothing to revert and leaves a genuinely-held
+    // flag set across reboot. `==` and `!=` on the parsed field agree on every
+    // value pmset actually prints, so only a malformed one tells them apart.
+    let runner = FakeRunner(result: CommandResult(
+        exitCode: 0,
+        stdout: "System-wide power settings:\n SleepDisabled\tyes\n", stderr: ""))
+    #expect(throws: PowerControlError.unreadableState("SleepDisabled=yes")) {
+        try PmsetSleepDisabledController(runner: runner).isEnabled()
+    }
+}
+
+@Test func anAbsentKeyStaysFalseAlongsideValuesWeDoNotParse() throws {
+    // The throw is scoped to the SleepDisabled key. An absent key stays false —
+    // verified real behaviour, pmset -g omits it when unset — and a neighbouring
+    // key carrying a value this parser does not understand is none of its
+    // business. Without this, widening the throw to every line would pass.
+    let runner = FakeRunner(result: CommandResult(
+        exitCode: 0,
+        stdout: """
+        System-wide power settings:
+         SleepDisabledButNotReally\tyes
+         DestroyFVKeyOnStandby\t0
+
+        """,
+        stderr: ""))
+    #expect(try PmsetSleepDisabledController(runner: runner).isEnabled() == false)
 }
 
 @Test func nonZeroExitOnReadThrows() {
@@ -132,4 +177,59 @@ private struct RecordingRunner: CommandRunning, @unchecked Sendable {
     // stderr does arrive in full either way -- awk drains into the pipe once
     // the parent unblocks -- so this pins the payload, not the deadlock.
     #expect(result.stderr.count > 1_000_000)
+}
+
+@Test func realRunnerTimesOutRatherThanWaitingOnALeakedGrandchild() throws {
+    // Waiting for EOF on the pipes waits on whoever HOLDS them, which is not
+    // necessarily the child: a child that exits immediately can leave a
+    // backgrounded grandchild with the inherited write ends still open.
+    // Measured against the unbounded runner: run() blocked for 12.35 s on a
+    // child that had already exited, and folded the grandchild's late bytes
+    // into stdout as if the child had written them. Tasks 8-12 and M5 all
+    // shell out through this seam.
+    //
+    // Bounded by the elapsed-time assertion below rather than by
+    // swift-testing's `.timeLimit`, which reports the test red but still lets
+    // the process hang.
+    let dir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("cb-leak-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let shim = dir.appendingPathComponent("leaky")
+    let script = #"""
+    #!/bin/sh
+    ( sleep 20; echo late ) &
+    echo early
+    exit 0
+
+    """#
+    try Data(script.utf8).write(to: shim)
+    try FileManager.default.setAttributes(
+        [.posixPermissions: 0o755], ofItemAtPath: shim.path)
+
+    let started = Date()
+    #expect(throws: CommandError.timedOut(after: 1)) {
+        try SystemCommandRunner().run(shim.path, [], timeout: 1)
+    }
+    let elapsed = Date().timeIntervalSince(started)
+    // The discriminating assertion. Unbounded, this call returns only once the
+    // 20 s grandchild exits; 5 s leaves room for a loaded machine while staying
+    // nowhere near 20.
+    #expect(elapsed < 5)
+}
+
+@Test func aDegenerateTimeoutIsBoundedBeforeItReachesDispatch() {
+    // `DispatchTime.now() + Double.nan` yields a deadline that NEVER arrives.
+    // Measured on macOS 26.5.2: a DispatchGroup with an outstanding enter(),
+    // waited on that deadline, was still blocked when the probe was killed at
+    // 5 minutes. Passing a caller's NaN straight through would reintroduce —
+    // through the bound itself — the exact unbounded hang the bound exists to
+    // prevent, and `min`/`max` propagate NaN rather than clamping it.
+    //
+    // Asserted on the bounding function directly: the only end-to-end
+    // discriminator for the unbounded version is "hangs forever", which cannot
+    // live in a suite.
+    #expect(SystemCommandRunner.boundedTimeout(.nan) == 30)
+    #expect(SystemCommandRunner.boundedTimeout(.infinity) == 86_400)
+    #expect(SystemCommandRunner.boundedTimeout(-5) == 0.001)
+    #expect(SystemCommandRunner.boundedTimeout(1.5) == 1.5)
 }

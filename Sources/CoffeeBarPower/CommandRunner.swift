@@ -15,8 +15,34 @@ public struct CommandResult: Equatable, Sendable {
     }
 }
 
+public enum CommandError: Error, Equatable {
+    /// The child did not finish — or left a descendant holding its pipes —
+    /// within the caller's bound. Carries the bound that actually applied,
+    /// which is not necessarily the one passed in (see `boundedTimeout`).
+    ///
+    /// Partial output is deliberately NOT returned as a success: a truncated
+    /// `pmset -g` read as complete is how a caller concludes `SleepDisabled`
+    /// is unset when it is in fact held.
+    case timedOut(after: TimeInterval)
+}
+
 public protocol CommandRunning: Sendable {
-    func run(_ executable: String, _ arguments: [String]) throws -> CommandResult
+    func run(_ executable: String, _ arguments: [String],
+             timeout: TimeInterval) throws -> CommandResult
+}
+
+public extension CommandRunning {
+    /// Every command in this codebase is a short power-state query. 30 s is
+    /// far beyond any of them on a loaded machine and far below "hung
+    /// forever", which is the failure being bounded.
+    static var defaultTimeout: TimeInterval { 30 }
+
+    /// The two-argument form every existing call site uses. It lives in an
+    /// extension because Swift does not permit a default argument on a
+    /// protocol *requirement*.
+    func run(_ executable: String, _ arguments: [String]) throws -> CommandResult {
+        try run(executable, arguments, timeout: Self.defaultTimeout)
+    }
 }
 
 /// The only place in the codebase that constructs a `Process`. Keeping this
@@ -29,8 +55,9 @@ public struct SystemCommandRunner: CommandRunning {
         self.searchPath = searchPath
     }
 
-    public func run(_ executable: String,
-                    _ arguments: [String]) throws -> CommandResult {
+    public func run(_ executable: String, _ arguments: [String],
+                    timeout: TimeInterval) throws -> CommandResult {
+        let bound = Self.boundedTimeout(timeout)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -56,7 +83,26 @@ public struct SystemCommandRunner: CommandRunning {
                    into: sink, isStdout: true, group: group)
         Self.drain(err.fileHandleForReading.fileDescriptor,
                    into: sink, isStdout: false, group: group)
-        group.wait()
+        // Waiting on the drain BEFORE `waitUntilExit()` is the ordering the
+        // comment above is about; the bound goes on the drain wait because
+        // that is the one that can block indefinitely.
+        //
+        // What it bounds is subtler than a slow child: EOF arrives when the
+        // last HOLDER of the write end closes it, and that need not be the
+        // child. A child that exits immediately having backgrounded
+        // `( sleep 20; … ) &` leaves the grandchild holding the pipes, and the
+        // drain then waits on the grandchild — measured at 12.35 s for a child
+        // that had already exited, with the grandchild's late bytes folded
+        // into stdout as if the child had produced them.
+        guard group.wait(timeout: .now() + bound) == .success else {
+            // Terminate what can be terminated, then abandon the read rather
+            // than block on it — waiting is precisely the hang being bounded,
+            // and the grandchild will not be reached by this signal anyway.
+            // The drain queues stay parked on their own dup'd descriptors
+            // until whoever holds the write end lets go.
+            if process.isRunning { process.terminate() }
+            throw CommandError.timedOut(after: bound)
+        }
         process.waitUntilExit()
         return CommandResult(
             exitCode: process.terminationStatus,
@@ -64,15 +110,40 @@ public struct SystemCommandRunner: CommandRunning {
             stderr: sink.stderr)
     }
 
+    /// Clamps a caller's timeout into something `DispatchTime` can represent.
+    ///
+    /// `DispatchTime.now() + Double.nan` yields a deadline that NEVER arrives:
+    /// measured on macOS 26.5.2, a group with an outstanding `enter()` waited
+    /// on that deadline was still blocked when the probe was killed at five
+    /// minutes. Passing a degenerate interval through would therefore
+    /// reintroduce, via the bound itself, the unbounded hang the bound exists
+    /// to prevent.
+    ///
+    /// `min`/`max` propagate NaN — every comparison against NaN is false — so
+    /// finiteness is tested AFTER clamping, matching `WatchdogPolicy`.
+    static func boundedTimeout(_ timeout: TimeInterval) -> TimeInterval {
+        let clamped = min(max(timeout, 0.001), 86_400)
+        return clamped.isFinite ? clamped : defaultTimeout
+    }
+
     /// Reads one descriptor to EOF on a background queue. The descriptor is
     /// passed as an `Int32` rather than a `FileHandle` because the pipe's
     /// handle is not `Sendable` under the v6 language mode.
     private static func drain(_ descriptor: Int32, into sink: OutputSink,
                               isStdout: Bool, group: DispatchGroup) {
+        // The descriptor is dup'd so the reader owns its own copy. On the
+        // timeout path `run` returns while this read is still blocked on a
+        // grandchild that inherited the pipe, and the `Pipe` is torn down as
+        // it goes out of scope. Closing a descriptor another thread is sitting
+        // in `read(2)` on does not unblock that thread, and the number can
+        // then be handed to the next `open` — at which point the parked read
+        // would steal bytes from an unrelated file.
+        let owned = dup(descriptor)
+        let fd = owned >= 0 ? owned : descriptor
         DispatchQueue.global().async(group: group) {
-            let handle = FileHandle(fileDescriptor: descriptor,
-                                    closeOnDealloc: false)
+            let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
             sink.append(handle.readDataToEndOfFile(), isStdout: isStdout)
+            if owned >= 0 { close(owned) }
         }
     }
 }
