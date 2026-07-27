@@ -95,6 +95,50 @@ explicit that no mechanism exists to promote a process onto P-cores — the READ
 "quiet everything else", never "boost agents". Battery numbers appear only once S6's
 measurement harness has produced them.
 
+## Competitive check — 2026-07-27
+
+Two facts established before M4 invests in naming and copy.
+
+**The name is free.** `brew search --formula coffee-bar` and
+`brew search --cask coffee-bar` both return no match (only the fuzzy
+`coffeescript`). This closes handoff §16 Q5, which required the check before the
+first public commit. The GitHub repo already exists, is **public**, and is empty —
+so the first push is the first public commit.
+
+**CodexBar exists, and the handoff's §11 landscape misses it.**
+
+| | |
+|---|---|
+| Cask | `codexbar`, v0.45.2, https://codexbar.app/ |
+| Description | "Menu bar usage monitor for Codex and Claude" |
+| Requires | macOS >= 14 — the same floor as coffee-bar |
+| Ships | `CodexBar.app` plus a `CodexBarCLI` helper binary |
+| Installs | **8,282 / 30 days · 14,237 / 90 days · 18,574 / 365 days** |
+
+This is a real product with real adoption occupying the menu-bar-for-agent-tools
+space, and it overlaps **M7's Token Tap** almost exactly. Handoff §15.10 argues the
+Token Tap is "the thing that makes coffee-bar worth opening when no agent is
+running" — that claim is now contested by an incumbent, so it must not be made
+without qualification.
+
+Consequences, in priority order:
+
+1. **The re-scoped v0.1 is the right call, and this is independent evidence for
+   it.** coffee-bar's defensible ground is the power side — an assertion whose
+   lifetime is bound to agent state, display-off-while-awake as the default, and
+   releasing the assertion precisely when every agent is blocked on a human.
+   Nothing in that list is usage monitoring. v0.1 = M0–M4 ships exactly that.
+2. **M4 copy must not claim novelty in usage monitoring.** No "the only tool
+   that…" phrasing about tokens. When M7 lands, the honest framing is that
+   coffee-bar joins token data to the battery delta — which requires holding both
+   streams — not that local token accounting is new.
+3. **SEO/GEO must account for it.** Users will ask assistants for a "CodexBar
+   alternative". Being accurately retrievable for that means stating plainly what
+   coffee-bar does that CodexBar does not (wake policy, power) and what it does
+   not do (as of v0.1, no token accounting at all).
+4. **Re-run this check before v0.1 ships.** A 30-day install count is a moving
+   number and the field is active.
+
 ## Note on M0
 
 M0 is a gate, not a shipped artifact. Its `CoffeeBarCore` and `CoffeeBarPower` modules are
