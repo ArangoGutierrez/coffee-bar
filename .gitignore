@@ -1,6 +1,6 @@
 .build/
 .swiftpm/
-# Output of scripts/build-poc-app.sh
+# Output of scripts/build-app.sh
 build/
 *.xcodeproj
 DerivedData/
