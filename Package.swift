@@ -6,21 +6,27 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .executable(name: "coffee-bar-probe", targets: ["CoffeeBarProbe"]),
-        // Spike: the menu-bar POC. M1 replaces this target wholesale.
-        .executable(name: "coffee-bar-poc", targets: ["CoffeeBarMenuBarPOC"]),
+        .executable(name: "coffee-bar", targets: ["CoffeeBarApp"]),
         .library(name: "CoffeeBarCore", targets: ["CoffeeBarCore"]),
     ],
     targets: [
         .target(name: "CoffeeBarCore", swiftSettings: [.swiftLanguageMode(.v6)]),
         .target(name: "CoffeeBarPower", dependencies: ["CoffeeBarCore"],
                 swiftSettings: [.swiftLanguageMode(.v6)]),
+        // The model, the panel and the glyphs live in a library rather than in
+        // the executable: SwiftPM treats an executable target's `main.swift` as
+        // top-level code, which a test target cannot import.
+        .target(name: "CoffeeBarUI", dependencies: ["CoffeeBarPower"],
+                swiftSettings: [.swiftLanguageMode(.v6)]),
         .executableTarget(name: "CoffeeBarProbe", dependencies: ["CoffeeBarPower"],
                           swiftSettings: [.swiftLanguageMode(.v6)]),
-        .executableTarget(name: "CoffeeBarMenuBarPOC", dependencies: ["CoffeeBarPower"],
+        .executableTarget(name: "CoffeeBarApp", dependencies: ["CoffeeBarUI"],
                           swiftSettings: [.swiftLanguageMode(.v6)]),
         .testTarget(name: "CoffeeBarCoreTests", dependencies: ["CoffeeBarCore"],
                     swiftSettings: [.swiftLanguageMode(.v6)]),
         .testTarget(name: "CoffeeBarPowerTests", dependencies: ["CoffeeBarPower"],
+                    swiftSettings: [.swiftLanguageMode(.v6)]),
+        .testTarget(name: "CoffeeBarUITests", dependencies: ["CoffeeBarUI"],
                     swiftSettings: [.swiftLanguageMode(.v6)]),
     ]
 )
