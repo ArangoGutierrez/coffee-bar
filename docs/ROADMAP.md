@@ -128,6 +128,31 @@ This is a design precondition, not a code review nit: it must be true before the
 helper reads its first journal, because the whole point of the helper is that it
 does something the user cannot.
 
+## Decide before the first tag — the release job pushes to `main`
+
+The release workflow commits the resolved formula checksum and does
+`git push origin HEAD:main`. **Branch protection on `main` is itself an M4
+deliverable**, and the day it lands it breaks every release.
+
+The two are in direct conflict and only one can be true. Options, in the order I'd
+consider them:
+
+1. **Formula lives in a separate tap repo** (`ArangoGutierrez/homebrew-coffee-bar`).
+   The release job pushes there instead, `main` stays protected, and the tap is the
+   conventional Homebrew layout anyway. Costs one more repo.
+2. **Release job opens a PR instead of pushing.** Keeps one repo and respects
+   protection, at the cost of a manual merge in every release.
+3. **Protection with an app/bot bypass** for the release identity. Works, but an
+   automation identity that can push to a protected `main` is a real supply-chain
+   surface for a project whose whole pitch is "no network egress, auditable helper".
+
+Related, and cheaper to fix: the workflow checksums GitHub's **generated source
+tarball**, which is not contractually byte-stable. A release-asset tarball uploaded by
+the job is the robust form.
+
+Also unresolved: the workflow is named `Release` but creates no GitHub Release. Left
+out deliberately as unrequested outward-facing scope.
+
 ## Open question for M7 — what "managed settings present" means
 
 Raised during M0 Task 9 (S8 recon) and deliberately **not** resolved there, because
