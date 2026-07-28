@@ -128,6 +128,39 @@ This is a design precondition, not a code review nit: it must be true before the
 helper reads its first journal, because the whole point of the helper is that it
 does something the user cannot.
 
+## Open question for M7 — what "managed settings present" means
+
+Raised during M0 Task 9 (S8 recon) and deliberately **not** resolved there, because
+resolving it in M0 would have enshrined one reading of a conflict in the spec.
+
+Handoff §15.4 mode 3 says *"managed settings present"* → `passive`. Its own
+justification is narrower: a generic `OTEL_EXPORTER_OTLP_ENDPOINT` in managed settings
+governs every signal and strips lower-precedence overrides, so mode 1 is unavailable
+**there**. Those are not the same rule:
+
+| Reading | A managed file with no OTEL keys | Consequence if wrong |
+|---|---|---|
+| **Existence** → passive | passive | Token Tap needlessly disabled for a fleet whose managed profile has nothing to do with telemetry |
+| **Content** → passive | ownIt / fanOut | coffee-bar writes telemetry config that managed settings silently override, and the user sees nothing |
+
+The shipped M0 probe implements the **content** reading, matching the plan's code. The
+Task 9 implementer's judgement — which I share — is that **existence** is the safer
+rule for an MDM-managed fleet, because the failure direction is "a feature is off and
+says so" rather than "a feature is on and silently broken".
+
+Not decided now because M0's job is to *report* what it found, not to set policy. The
+`TelemetryMode` enum is recon output. M7 owns the decision, and must make it before
+the Token Tap writes anything.
+
+Related gaps in the same probe, all deliberate M0 scope limits:
+- Only three sources are inspected. **Live `OTEL_*` environment variables are
+  invisible**, and §15.4's precedence story is largely about env vars. This is the
+  biggest gap and the obvious next increment.
+- Project-scope settings and `settings.local.json` are not consulted.
+- `~/.cursor/hooks.json` is not consulted.
+- Detection is text search, not parse: `OTEL_` anywhere in the JSON counts, including
+  in a comment or a deny rule. Conservative, but noisy.
+
 ## Design principle: no hidden durations
 
 **If the UI does not expose a time control, the behaviour is indefinite.**
