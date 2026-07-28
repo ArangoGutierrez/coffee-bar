@@ -11,6 +11,16 @@ Use GitHub private vulnerability reporting:
 
 **https://github.com/ArangoGutierrez/coffee-bar/security/advisories/new**
 
+That route is enabled and is the one to prefer: it keeps the report private and
+attaches it to this repository.
+
+If you cannot use it, email the maintainer directly:
+
+**arangogutierrez@gmail.com** — Carlos Eduardo Arango Gutierrez
+
+coffee-bar is a personal project. It is not an NVIDIA product, and a report sent
+to a work address will not reach the maintainer any faster.
+
 Do not open a public issue, a discussion, or a pull request for a security
 problem. A public report tells everyone at once, including the people you do not
 want to tell.
