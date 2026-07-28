@@ -58,11 +58,23 @@ private func inputs(sessions: [AgentSession] = [],
 }
 
 @Test func blockedStatesHoldOnlyWhenTheKnobIsSet() {
+    // Knob off: the two ATTENTION states do not hold.
     for state in [SessionState.awaitingPermission, .awaitingInput] {
         #expect(PowerBroker.decide(
-            inputs(sessions: [session(state)], blocked: false)).idleSleepAssertion == false)
+            inputs(sessions: [session(state)], blocked: false)).idleSleepAssertion == false,
+                "state \(state.rawValue) with the knob off decided true")
+    }
+
+    // Knob on: all FOUR active states hold. `.starting` and `.working` are
+    // listed because the knob ADDS the attention states to the base set — it
+    // must never replace it. Without them, a change that narrows the knob-on
+    // set to `[.awaitingPermission, .awaitingInput]` stays green here and in
+    // every other test, and a working session stops holding the machine awake
+    // the moment the user enables the knob: the inverse of its purpose.
+    for state in [SessionState.starting, .working, .awaitingPermission, .awaitingInput] {
         #expect(PowerBroker.decide(
-            inputs(sessions: [session(state)], blocked: true)).idleSleepAssertion == true)
+            inputs(sessions: [session(state)], blocked: true)).idleSleepAssertion == true,
+                "state \(state.rawValue) with the knob on decided false")
     }
 }
 
