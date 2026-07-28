@@ -24,6 +24,11 @@ public enum ProbeRun {
     /// they are reported `notYetRun` here rather than omitted: a missing row
     /// reads as "forgotten", a `notYetRun` row reads as "pending", and a
     /// `fail` row would be a lie about the hardware.
+    ///
+    /// S2 is `notYetRun` *and* blocked on more than a lid: `docs/probe-results.md`
+    /// records a measured result — the planned instrument does not work on this
+    /// hardware — and its detail says so. A row that named only the lid would
+    /// send its reader off to close one for nothing.
     public static func report(targetPID: pid_t?) -> ProbeReport {
         var results: [SpikeResult] = []
 
@@ -38,7 +43,9 @@ public enum ProbeRun {
             durationMS: 0, evidence: [:]))
         results.append(SpikeResult(
             id: .s2DisplayUnderClosedLid, verdict: .notYetRun,
-            detail: "measured during an armed run",
+            detail: "needs an armed run, and needs a new instrument first: "
+                  + "IODisplayWrangler publishes an empty IOPowerManagement on "
+                  + "Apple Silicon (see docs/probe-results.md, S2)",
             durationMS: 0, evidence: [:]))
 
         // `HostInfo.now()`, never a bare `Date()`: `OutputFormatter` encodes
