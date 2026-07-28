@@ -90,11 +90,46 @@ non-`PRIO_DARWIN_BG` value clears it. Only the *which* argument was ever broken.
 
 ---
 
+## S2 — display state under a closed lid — **INSTRUMENT INVALID ON THIS HARDWARE**
+
+**Question (handoff §10):** with `SleepDisabled = 1`, is the internal panel actually
+powered? §2.2 calls forcing the display off "the single most valuable thing the app
+does that a shell alias does not", so a false *negative* here is expensive.
+
+**Result: the plan's instrument cannot produce a signal on Apple Silicon.** Measured
+with a real IOKit call:
+
+| Service | Finding |
+|---|---|
+| `IODisplayWrangler` | **matches**, but publishes an *empty* `IOPowerManagement` — no `CurrentPowerState` key at all |
+| `IOMobileFramebufferAP` | does carry a power state, but `MaxPowerState` is **1**, not 4 |
+
+So `isInternalDisplayAwake()` returns `nil` on every sample here, and the plan's
+`>= 4` threshold does not transfer to the service that *does* report state — a
+copy-paste retarget would report the panel permanently asleep.
+
+**Why this was nearly invisible.** The probe deliberately returns `nil` for "cannot
+read" rather than `false`. A mutation replacing that `nil` with `false` was killed by
+`anUnreadableWranglerIsUnknownNotAsleep` — without it, S2 would have reported
+*"panel stayed asleep, PASS"* on every Apple Silicon Mac, having never read a power
+state at all. The most valuable feature would have shipped with a probe that always
+agreed with it.
+
+**Not retargeted.** Choosing the service and the threshold decides what S2 actually
+measures; that is a design decision, not a defect fix, and it belongs to whoever owns
+M5. Candidates to evaluate then: `IOMobileFramebufferAP` with a threshold derived from
+its own `MaxPowerState`, `CGDisplayIsActive`, or observing
+`NSWorkspace.screensDidSleepNotification` across the lid event as §8.3 already
+requires.
+
+v0.1 does not depend on this — lid-closed mode is M5.
+
 ## Not yet run
 
 - **S1** — `SleepDisabled` survives lid close. Requires root, a physical lid close and
   ~10 minutes. Deliberately deferred; v0.1 does not depend on it (see `ROADMAP.md`).
-- **S2** — internal display state under a closed lid. Same session as S1.
+- **S2** — see below: the *instrument* the plan specified does not work on this
+  hardware, so the lid-closed measurement cannot be taken as designed.
 - **S4** — Cursor CLI hooks. Runtime test, out of M0 scope.
 - **S6** — battery measurement harness. A measurement protocol, not a probe.
 - **S8** — telemetry collision. Config inspection; Task 9.
