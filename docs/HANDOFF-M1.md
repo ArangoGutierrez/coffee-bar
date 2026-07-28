@@ -46,52 +46,61 @@ Spec: `docs/superpowers/specs/2026-07-28-coffee-bar-m1-menubar-design.md`.
 
 | Task | State |
 |---|---|
-| 1 — core value types | Built, **reviewed**, 3 defects fixed, verified |
-| 2 — `PowerBroker` | Built. **NOT REVIEWED** |
-| 3 — `HoldController` | Not started |
-| 4 — `SystemPowerReader` | Built. **NOT REVIEWED** |
+| 1 — core value types | Built, reviewed, 3 defects fixed, verified |
+| 2 — `PowerBroker` | Built, reviewed, 2 defects fixed, verified |
+| 3 — `HoldController` | **Not started — start here** |
+| 4 — `SystemPowerReader` | Built, reviewed, 2 defects fixed, verified |
 | 5 — app target, POC removal | Not started |
 | 6 — bundle script | Not started |
 
-## START HERE — two unreviewed tasks
+Head is `cd35c9e`. **177 tests in 3 suites**, 0 warnings.
 
-Task 1 went through an adversarial critic and it found **three real defects, all
-in tests, all mutation-proven**. The most instructive: renaming
-`SessionState.done` left all four tests green while the test's own comment
-claimed it would fail.
+## What the three critic gates found
 
-**Tasks 2 and 4 have not had that gate.** Run it before building Task 3. Use the
-`adversarial-critic` agent at opus, one task at a time, and tell it to re-run
-every claim rather than trust the report. Reports are at
-`.worktrees/m1core/.superpowers/sdd/2026-07-28-coffee-bar-m1/` (untracked — read
-them before any `git worktree remove --force`).
+Every gate found real defects, and **all but one were in tests** rather than
+implementation — the same pattern M0 recorded 14+ times.
 
-Self-reported concerns worth attacking first:
+- **Task 1**: three defects. Renaming `SessionState.done` left all four tests
+  green while the test's own comment claimed it would fail.
+- **Task 2**: two. The blocked-states knob could be mutated to *replace* the
+  active set rather than extend it — dropping `.working` from the knob-on set
+  left the entire 172-test suite green. The builder had not reported this one.
+  Also, `PowerInputs`'s declared defaults were unexercised: changing the floor
+  from 20 to 90 left everything green.
+- **Task 4**: two, one of them in implementation.
+  `repeatedReadsAgreeOnWhetherABatteryExists` was theater — it survived the exact
+  reordering bug its own comment named, and the builder's stated mitigation for it
+  was factually wrong. And `read()` derived the power source from the wrong IOKit
+  call.
 
-- **Task 2**: the §6.1 no-display-assertion invariant holds at the decision layer
-  and at the IOKit layer, but nothing forces the app layer to route through
-  `DesiredPowerState`. A bypass would ship silently. Task 5 should close this.
-- **Task 2**: `PowerInputs` default arguments are never exercised; the test helper
-  always passes them explicitly. Task 5 will rely on the default floor of 20.
-- **Task 2**: multi-session inputs are untested — every test passes 0 or 1
-  session. Matters at M2, not now.
-- **Task 4**: `repeatedReadsAgreeOnWhetherABatteryExists` survived all four
-  mutants. It cannot fail on a single-power-source host. It was reported as a
-  stated gap rather than dressed up as a guard.
-- **Task 4**: `batteryPercent()` truncates where `read()` rounds, so the two can
-  disagree by one percent. Both now live on one type.
+## The UPS question is SETTLED
 
-## One decision needed before Task 5 ships the floor
+`read()` used to take `onAC` from the per-source `kIOPSPowerSourceStateKey` of
+whichever source it picked first, so a UPS could supply the battery percent and
+M1's floor would gate on it.
 
-`SystemPowerReader.read()` returns the **first** power source carrying a usable
-capacity pair. It does not index by position, so the IOKit ordering bug is
-absent. But with a UPS attached it can return the **UPS** charge as the battery
-percent, and M1's battery floor would then gate on the UPS.
+Fixed in `cd35c9e`. `source` now comes from `IOPSGetProvidingPowerSourceType` by
+way of M0's already-tested `onBattery(providingType:)`, and `percent` is taken
+only from a source whose `kIOPSTypeKey` is `kIOPSInternalBatteryType`. The
+decision was extracted into a pure function over a list of descriptions, so a
+UPS-first ordering is tested with synthetic input and **no UPS is needed**.
 
-M0 reasons the opposite way at `Sources/CoffeeBarPower/BaselineProbes.swift:101`:
-"UPS power is deliberately *not* 'on battery'". The two are inconsistent. Nobody
-could produce a repro without a UPS, so no deviation was made. **Settle it before
-the floor ships.**
+Note the memory rule: `IOPSGetProvidingPowerSourceType` is an unaudited CF `Get`,
+so its result is taken **unretained**. `docs/ENGINEERING-NOTES.md:100` records
+why. A fix brief on this plan wrongly specified `takeRetainedValue()` and the
+builder correctly refused it.
+
+## Two open gaps, neither blocking
+
+- **`read()`'s internal wiring is unguarded on an AC host.** The pure function is
+  fully covered by synthetic input, but nothing proves `read()` feeds it the real
+  providing type — a `read()` passing `nil` would report `.ac` always, and the
+  `pmset` cross-check reads `false == false` on a plugged-in machine. Closing it
+  needs one run on battery power.
+- **Multi-session inputs are untested.** Replacing `sessions.contains {…}` with
+  `.first`, `.last`, or `prefix(1)` all leave the suite green, because no test
+  passes two sessions. Harmless in M1, where `sessions` is always empty.
+  **Must land before M2 starts ingest.**
 
 ## The plan had four defects. Expect more.
 
