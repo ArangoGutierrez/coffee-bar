@@ -42,7 +42,11 @@ public final class ServingModel {
     /// exists at all: the "never hold the display awake" invariant is asserted
     /// on the decision object, so a change that starts asking for a display
     /// assertion has to set that field and goes red immediately.
-    public private(set) var desired: DesiredPowerState?
+    ///
+    /// Internal, not `public`. No production code reads it — the test target
+    /// gets at it through `@testable import CoffeeBarUI`, so widening the
+    /// module's public surface for a test would buy nothing.
+    private(set) var desired: DesiredPowerState?
 
     public init(holder: any AssertionHolding = AssertionHolder(),
                 reader: any PowerReadingProviding = SystemPowerReader()) {
@@ -89,6 +93,21 @@ public final class ServingModel {
     /// `SystemPowerReader.read()` is a non-blocking IOKit call. `.common` mode,
     /// not `.default`, so menu tracking does not stall the refresh. `[weak self]`
     /// so the run loop's reference to the timer cannot keep the model alive.
+    ///
+    /// OPEN QUESTION, for Task 6. `main.swift` calls this from `App.init()`.
+    /// `timer?.invalidate()` above covers a repeat call on the SAME instance
+    /// only. If SwiftUI ever builds a second `App`, that second `ServingModel`
+    /// installs a second `Timer` on `RunLoop.main`; SwiftUI keeps one `@State`
+    /// box, so the orphan model deallocates and its block then no-ops through
+    /// `[weak self]`. The cost is one leaked timer and one main-thread wake-up
+    /// every 30s.
+    ///
+    /// Nobody has observed a second `init()` — it is inferred, not measured, so
+    /// no fix ships here. Both candidate fixes cost more than the bug: moving
+    /// the call to the view reintroduces the ticker-dies-with-the-panel defect
+    /// this design exists to close, and a process-wide static guard adds hidden
+    /// global state. A `deinit` would need isolation weakened, which is
+    /// forbidden. Task 6 runs the app on real hardware and can measure it.
     public func startMonitoring(interval: TimeInterval = 30) {
         timer?.invalidate()
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in

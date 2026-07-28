@@ -167,6 +167,39 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     model.refresh()
 
     #expect(model.suppression == .batteryFloor(percent: 19, floor: 20))
+
+    // The line reports the reading that RELEASED the hold, not the newest one.
+    // Named bug this catches: publishing the current sample instead of the
+    // latch. The battery drains on to 12% while nothing is held, and the panel
+    // then reads "Released at 12%" — a release that never happened.
+    reader.set(source: .battery, percent: 12)
+    model.refresh()
+
+    #expect(model.suppression == .batteryFloor(percent: 19, floor: 20))
+    #expect(model.reading.percent == 12)
+}
+
+@MainActor
+@Test func theSuppressionLineSurvivesAtExactlyTheFloor() {
+    // The boundary, where the panel and the broker must agree. `PowerBroker`
+    // suppresses at `percent <= floor`, so 20% releases the hold. The filter in
+    // `ServingModel.reason` has to use the same comparison.
+    //
+    // Named bug this catches: `percent < floor` in that filter. The battery
+    // sits at exactly 20%, the switch refuses to stay on, and the panel drops
+    // the one sentence that says why. The user gets a refusal with no reason.
+    let reader = FakeReader(source: .battery, percent: 21)
+    let spy = SpyHolder()
+    let model = ServingModel(holder: spy, reader: reader)
+
+    model.serving = true
+    #expect(model.isServing == true)
+
+    reader.set(source: .battery, percent: 20)
+    model.refresh()
+
+    #expect(model.isServing == false)
+    #expect(model.suppression == .batteryFloor(percent: 20, floor: 20))
 }
 
 @MainActor
@@ -213,22 +246,37 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
 // MARK: - The product's central difference
 
 @MainActor
-@Test func theModelNeverRequestsADisplaySleepAssertion() throws {
-    // Design §6.1: letting the display sleep while the machine stays awake is
-    // what separates coffee-bar from `caffeinate -d`. The invariant is asserted
-    // on the decision the model acts on, so a future change that starts asking
-    // for the display assertion has to set this field and goes red here.
+@Test func theModelActsOnTheDecisionTheBrokerReturns() throws {
+    // The property this owns is a UI-layer one: what the model REPORTS having
+    // decided and what it actually DID must be the same thing. `isServing` is
+    // set from the holder's answer, `desired` from the broker's; nothing forces
+    // the two to agree except `refresh()` being wired correctly.
+    //
+    // Named bug this catches: a `refresh()` that reconciles the holder against
+    // something other than the state it publishes — a stale `desired`, or an
+    // `isServing` computed from the reading rather than the decision. The panel
+    // would then explain one state while the machine sat in another.
+    //
+    // `displaySleepAssertion == false` rides along as a cheap cross-check.
+    // Design §6.1 — letting the display sleep while the machine stays awake is
+    // what separates coffee-bar from `caffeinate -d`. That half cannot be
+    // killed from this layer: `DesiredPowerState` is built only in
+    // `Sources/CoffeeBarCore/PowerBroker.swift`, and
+    // `Tests/CoffeeBarCoreTests/PowerBroker_test.swift:29` guards it there
+    // across every input combination.
     let reader = FakeReader(source: .battery, percent: 50)
     let spy = SpyHolder()
     let model = ServingModel(holder: spy, reader: reader)
 
     model.serving = true
     let held = try #require(model.desired)
+    #expect(held.idleSleepAssertion == model.isServing)
     #expect(held.idleSleepAssertion == true)
     #expect(held.displaySleepAssertion == false)
 
     model.serving = false
     let stopped = try #require(model.desired)
+    #expect(stopped.idleSleepAssertion == model.isServing)
     #expect(stopped.idleSleepAssertion == false)
     #expect(stopped.displaySleepAssertion == false)
 
@@ -236,6 +284,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     reader.set(source: .battery, percent: 19)
     model.refresh()
     let suppressed = try #require(model.desired)
+    #expect(suppressed.idleSleepAssertion == model.isServing)
     #expect(suppressed.suppression == .batteryFloor(percent: 19, floor: 20))
     #expect(suppressed.idleSleepAssertion == false)
     #expect(suppressed.displaySleepAssertion == false)

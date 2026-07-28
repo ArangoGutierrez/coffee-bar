@@ -20,20 +20,36 @@ private var packageRoot: URL {
         .deletingLastPathComponent()    // the package root
 }
 
+private enum BoundaryScanError: Error {
+    /// The scan could not read a directory. Raised rather than returning an
+    /// empty list, because a guard that silently scans nothing always passes.
+    case unreadable(String)
+}
+
 /// Every `.swift` file in the app layer, sorted by name so the scan order is
 /// fixed rather than whatever the file system hands back.
+///
+/// The walk is recursive. `FileManager.contentsOfDirectory` reads one level,
+/// and SwiftPM compiles a subdirectory into the same target, so
+/// `Sources/CoffeeBarUI/Internal/Probe.swift` would ship inside the app layer
+/// while escaping every check below.
 private func appLayerSources() throws -> [URL] {
     let directories = [
         packageRoot.appending(path: "Sources/CoffeeBarUI"),
         packageRoot.appending(path: "Sources/CoffeeBarApp"),
     ]
-    return try directories
-        .flatMap {
-            try FileManager.default.contentsOfDirectory(at: $0,
+
+    var found: [URL] = []
+    for directory in directories {
+        guard let walk = FileManager.default.enumerator(at: directory,
                                                         includingPropertiesForKeys: nil)
+        else { throw BoundaryScanError.unreadable(directory.path) }
+
+        for case let file as URL in walk where file.pathExtension == "swift" {
+            found.append(file)
         }
-        .filter { $0.pathExtension == "swift" }
-        .sorted { $0.path < $1.path }
+    }
+    return found.sorted { $0.path < $1.path }
 }
 
 @Test func onlyServingModelReachesTheAssertionHolder() throws {
@@ -59,11 +75,27 @@ private func appLayerSources() throws -> [URL] {
     let files = try appLayerSources()
     #expect(files.count > 0, "the boundary guard scanned no files at \(packageRoot.path)")
 
+    // This is a DENYLIST. It bounds the escapes we know about; it cannot prove
+    // that no other route to a display assertion exists. `beginActivity` is
+    // here because a call to
+    // `ProcessInfo.processInfo.beginActivity(options: [.idleDisplaySleepDisabled], …)`
+    // raises a live `PreventUserIdleDisplaySleep` with no IOKit import and none
+    // of the original three strings. Add a name here whenever a new route is
+    // found; never read a pass as proof of absence.
+    let forbidden = [
+        "PreventUserIdleDisplaySleep",
+        "IOPMAssertion",            // broader than IOPMAssertionCreate
+        "import IOKit",
+        "beginActivity",
+        "idleDisplaySleepDisabled",
+        "caffeinate",
+    ]
+
     for file in files {
         let source = try String(contentsOf: file, encoding: .utf8)
-        for forbidden in ["PreventUserIdleDisplaySleep", "IOPMAssertionCreate", "import IOKit"] {
-            #expect(!source.contains(forbidden),
-                    "\(file.lastPathComponent) names \(forbidden); the app layer holds no assertion of its own")
+        for name in forbidden {
+            #expect(!source.contains(name),
+                    "\(file.lastPathComponent) names \(name); the app layer holds no assertion of its own")
         }
     }
 }
