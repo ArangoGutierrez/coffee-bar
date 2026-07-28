@@ -29,6 +29,63 @@ die() {
     exit 1
 }
 
+# Pids of processes that run a coffee-bar bundle, one "    pid <n>  <path>" line
+# each, empty when there are none.
+#
+# Two literal path patterns, never a substring of the product name. `pgrep -f
+# coffee-bar` matches `coffee-bar-poc` as well, and killing off that match once
+# took three unrelated processes with it:
+#
+#   1. anything running out of this build directory, whatever the bundle is
+#      named — the case that started this, a POC bundle whose source tree was
+#      already deleted;
+#   2. this app's own executable path under any bundle anywhere — a copy in
+#      /Applications, or a build from a second worktree.
+#
+# `ps -o comm=` prints the full executable path on macOS, so both patterns
+# anchor on a whole path, and `/MacOS/coffee-bar` cannot match
+# `/MacOS/coffee-bar-poc`. Process listing is denied in some sandboxes; an
+# unreadable process table means "none found", never a failed build.
+running_bundles() {
+    local pid comm
+    while read -r pid comm; do
+        case "${comm}" in
+            "${OUT_DIR}"/* | *"/${APP_NAME}.app/Contents/MacOS/${PRODUCT}")
+                printf '    pid %s  %s\n' "${pid}" "${comm}"
+                ;;
+        esac
+    done < <(ps -axo pid=,comm= 2>/dev/null || true)
+    return 0
+}
+
+# --- bundles this script does not own ----------------------------------------
+#
+# `rm -rf` below touches ${APP} and nothing else, so every other bundle in
+# build/ survives every rebuild. build/CoffeeBarPOC.app outlived the deletion of
+# its own source tree and sat in the menu bar beside the real app, drawn from
+# the very same glyph files, until someone clicked the wrong cup.
+#
+# Report, do not delete. build/ is also where a signed or downloaded bundle gets
+# parked for comparison, and a build script that removes bundles it never
+# created is its own kind of hazard.
+foreign_bundles=""
+for candidate in "${OUT_DIR}"/*.app; do
+    if [ -d "${candidate}" ] && [ "${candidate}" != "${APP}" ]; then
+        foreign_bundles="${foreign_bundles}$(printf '    rm -rf %q' "${candidate}")"$'\n'
+    fi
+done
+if [ -n "${foreign_bundles}" ]; then
+    {
+        echo "error: ${OUT_DIR} holds a bundle this script does not own."
+        echo
+        printf '%s' "${foreign_bundles}"
+        echo
+        echo "A second bundle puts a second, identical cup in the menu bar and takes the"
+        echo "clicks meant for this one. Run the command above, then build again."
+    } >&2
+    exit 1
+fi
+
 # --- version -----------------------------------------------------------------
 #
 # The git tag is the single source of version truth: .github/workflows/release.yml
@@ -58,6 +115,24 @@ swift build -c release --product "${PRODUCT}" --package-path "${REPO_ROOT}"
 BIN_DIR="$(swift build -c release --product "${PRODUCT}" --package-path "${REPO_ROOT}" --show-bin-path)"
 BIN="${BIN_DIR}/${PRODUCT}"
 [ -x "${BIN}" ] || die "release binary not found at ${BIN}"
+
+# --- older instance still running --------------------------------------------
+#
+# A new bundle means nothing while an older instance owns the menu bar: the two
+# icons are the same file, and `open` reactivates the running process instead of
+# starting the build that just finished. Warn, do not fail — a rebuild while the
+# app runs is the normal inner loop — and warn again at the end, where the
+# message cannot scroll away behind the compiler output.
+
+running="$(running_bundles)"
+if [ -n "${running}" ]; then
+    {
+        echo "warning: an older coffee-bar build is still running:"
+        # `$(…)` ate the trailing newline; %s\n puts back exactly one.
+        printf '%s\n' "${running}"
+        echo "Quit it from its menu-bar cup before you open the new bundle."
+    } >&2
+fi
 
 # --- bundle skeleton ---------------------------------------------------------
 
@@ -153,3 +228,16 @@ Then run the manual acceptance checklist:
 
     .superpowers/sdd/2026-07-28-coffee-bar-m1/task6-acceptance-checklist.md
 DONE
+
+# Read the process table again: the build takes minutes, and an instance can
+# start or stop inside that window.
+running="$(running_bundles)"
+if [ -n "${running}" ]; then
+    {
+        echo "warning: the menu bar still belongs to an older build:"
+        printf '%s\n' "${running}"
+        echo
+        echo "Quit that cup first, or kill the pid above. Until then the cup you click"
+        echo "is the old process, not the bundle this run just built."
+    } >&2
+fi
