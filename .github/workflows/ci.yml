@@ -1,3 +1,5 @@
+# Copyright 2026 Carlos Eduardo Arango Gutierrez
+# SPDX-License-Identifier: Apache-2.0
 name: CI
 
 on:
@@ -5,11 +7,27 @@ on:
     branches: [main]
   pull_request:
 
+# Nothing here writes anything back; read-only is all the build needs.
+permissions:
+  contents: read
+
+concurrency:
+  # Per branch/PR. A new push supersedes the run it obsoletes rather than
+  # queueing a second macOS runner behind it.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-test:
     runs-on: macos-15
+    # macOS runners bill at 10x; a hung build must not reach the 6-hour default.
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      # Pinned by commit SHA: a tag like @v4 is mutable and can be repointed
+      # at arbitrary code by anyone who can push to the action's repo.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Show toolchain
         run: swift --version

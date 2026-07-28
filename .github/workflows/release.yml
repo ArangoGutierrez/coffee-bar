@@ -1,0 +1,173 @@
+# Copyright 2026 Carlos Eduardo Arango Gutierrez
+# SPDX-License-Identifier: Apache-2.0
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+# Deny by default; each job opts in to the narrowest scope it needs. Only the
+# `formula` job gets a write token, and it never runs package code.
+permissions: {}
+
+concurrency:
+  # Scoped to the tag ref, which is immutable. The only run this can cancel is
+  # a duplicate of the same tag — never a different release.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Build and verify the tagged commit
+    runs-on: macos-15
+    # macOS runners bill at 10x. A hung Swift build must not run to the
+    # 6-hour default.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # This job compiles and runs third-party-reachable code. It has no
+          # reason to hold a push token.
+          persist-credentials: false
+
+      - name: Show toolchain
+        run: swift --version
+
+      - name: Build release binary
+        run: swift build -c release --product coffee-bar-probe
+
+      - name: Verify the probe emits a usable report
+        run: |
+          set -euo pipefail
+          .build/release/coffee-bar-probe --json > probe.json
+          # `jq -e` exits non-zero when the filter yields false or null, so
+          # each check below fails the step on its own.
+          jq -e '.schemaVersion == 1' probe.json > /dev/null
+          jq -e '[.spikes[].id]
+                 | contains(["baseline","S1","S2","S3","S5","S8"])' \
+                probe.json > /dev/null
+          jq -e '.host.osBuild | length > 0' probe.json > /dev/null
+          echo "probe report verified"
+
+  formula:
+    name: Pin the Homebrew formula to the released tag
+    needs: verify
+    # Not macOS: this job only rewrites two lines of Ruby, and a macOS runner
+    # for that costs 10x for no benefit.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The pin commit lands on `main`, not on the tag. Committing on top
+          # of the tag and pushing HEAD:main is a non-fast-forward the moment
+          # main has moved past the tag.
+          ref: main
+
+      - name: Compute the source tarball checksum
+        id: sha
+        run: |
+          set -euo pipefail
+
+          # The tag name is interpolated into a sed replacement below, so it
+          # must not be able to carry the `|` delimiter or a quote. Anchored
+          # regex, not a `case` glob: a glob's trailing `*` swallows the tail,
+          # so `v[0-9]*.[0-9]*.[0-9]*` happily accepts `v1.0.0|rm -rf /`.
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::unexpected tag format: ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+
+          URL="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
+          # The archive can lag the tag push by a few seconds.
+          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
+               "$URL" -o source.tar.gz
+
+          # No pipe: a pipeline's exit code is the last command's, and this
+          # value gates the whole release.
+          digest="$(shasum -a 256 source.tar.gz)"
+          digest="${digest%% *}"
+          # Length *and* alphabet: the digest is interpolated into a sed
+          # replacement whose delimiter is `|`, so a non-hex character there
+          # would be a substitution bug, not just a bad checksum.
+          case "${digest}" in
+            *[!0-9a-f]*)
+              echo "::error::shasum output is not lowercase hex: '${digest}'"
+              exit 1
+              ;;
+          esac
+          if [ "${#digest}" -ne 64 ]; then
+            echo "::error::shasum did not yield a 64-char digest: '${digest}'"
+            exit 1
+          fi
+          echo "sha256=${digest}" >> "$GITHUB_OUTPUT"
+          echo "source tarball sha256: ${digest}"
+
+      - name: Pin the formula
+        env:
+          # Passed as an environment variable rather than interpolated into
+          # the script body: `${{ }}` expansion happens before the shell sees
+          # the line, which is a script-injection sink.
+          SHA256: ${{ steps.sha.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+
+          # Rewrites the whole sha256 line, not just the placeholder. A
+          # placeholder-only substitution works exactly once: after the first
+          # release, main already carries a real digest and the second release
+          # would match nothing.
+          sed -i.bak \
+            -e "s|^  sha256 \".*\"$|  sha256 \"${SHA256}\"|" \
+            -e "s|/tags/v[^\"]*\.tar\.gz|/tags/${GITHUB_REF_NAME}.tar.gz|" \
+            Formula/coffee-bar.rb
+          rm -f Formula/coffee-bar.rb.bak
+
+          # A sed that matches nothing exits 0. Without these three checks the
+          # release ships a formula still carrying the placeholder, and every
+          # `brew install` fails on a checksum mismatch.
+          sha_hits="$(grep -c "^  sha256 \"${SHA256}\"$" Formula/coffee-bar.rb || true)"
+          url_hits="$(grep -c "/tags/${GITHUB_REF_NAME}.tar.gz" Formula/coffee-bar.rb || true)"
+          stale="$(grep -c "REPLACE_WITH_RELEASE_TARBALL_SHA256" Formula/coffee-bar.rb || true)"
+          echo "sha256 line matches: ${sha_hits}"
+          echo "tag url matches:     ${url_hits}"
+          echo "placeholder left:    ${stale}"
+
+          if [ "${sha_hits}" -ne 1 ]; then
+            echo "::error::sha256 substitution did not apply — formula is unpinned"
+            exit 1
+          fi
+          if [ "${url_hits}" -ne 1 ]; then
+            echo "::error::url substitution did not apply — formula points at the wrong tag"
+            exit 1
+          fi
+          if [ "${stale}" -ne 0 ]; then
+            echo "::error::placeholder checksum still present in the formula"
+            exit 1
+          fi
+
+          # Proves the substitution produced valid Ruby rather than a mangled
+          # line that happens to contain the digest.
+          ruby -c Formula/coffee-bar.rb
+
+      - name: Commit and push the pinned formula
+        run: |
+          set -euo pipefail
+
+          # Re-running a release whose pin already landed is not a failure.
+          # This runs after the checks above, so a no-op sed still fails there.
+          if git diff --quiet -- Formula/coffee-bar.rb; then
+            echo "formula already pinned to ${GITHUB_REF_NAME}; nothing to commit"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/coffee-bar.rb
+          git commit -m "chore(release): pin formula to ${GITHUB_REF_NAME}"
+          git push origin HEAD:main
