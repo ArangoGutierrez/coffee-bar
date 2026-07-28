@@ -15,6 +15,26 @@ does today. Nothing is released.
 The probe answers the hardware/OS capability questions the architecture
 branches on. See `docs/superpowers/specs/2026-07-27-coffee-bar-m0-probe-design.md`.
 
+## Run the menu-bar app
+
+    swift build
+    scripts/build-app.sh
+    open build/CoffeeBar.app
+
+**coffee-bar has no Dock icon and opens no window.** It is a menu-bar app, so
+after it starts, look for the cup at the right end of the menu bar, near the
+clock. Click the cup to open the panel. If your menu bar is full, macOS drops
+status items silently and the cup will not appear.
+
+The panel holds a Serving switch, a battery line, and Quit. Turning Serving on
+takes a `PreventUserIdleSystemSleep` assertion, so the machine stays awake. It
+never takes a display assertion, so your screen still sleeps on its normal
+schedule — that is the difference from `caffeinate -d`. Check both with:
+
+    pmset -g assertions | grep coffee-bar
+
+The bundle is unsigned. Signing and notarisation arrive with M4.
+
 ## Install
 
 Nothing is released yet: there is no tag, so there is nothing to
