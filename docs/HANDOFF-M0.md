@@ -2,7 +2,7 @@
 
 Project: **coffee-bar** — macOS menu-bar app binding the sleep assertion to agent state.
 Two-day session. **M0 (capability probe) is COMPLETE.** All 12 tasks built,
-reviewed, merged. 154 tests, zero warnings, acceptance green.
+reviewed, merged. 152 tests (3 suites), zero warnings, acceptance green.
 
 ## Context
 
@@ -62,7 +62,7 @@ a mutant forcing every measured spike to `.pass` is now killed by
 and compares. Before the fix that mutant left 122 tests green.
 
 1. **Verify the inherited state first** — run the block under "Verification"
-   below. Expect 154 tests, `probe rc=0`, `jq rc=0`.
+   below. Expect 152 tests in 3 suites, `probe rc=0`, `jq rc=0`.
 2. **`ArmCommand` and the privileged verbs are NOT built.** `arm` / `report` /
    `revert` / `watchdog` still exit 64 by design; only `run` is implemented.
    That work is M5, not M0 — v0.1 excludes lid-closed mode. When it happens,
@@ -86,6 +86,27 @@ and compares. Before the fix that mutant left 122 tests green.
    disjoint file sets, zero conflicts, while the lead committed to the parent
    throughout. Sequential dispatch on one checkout produced three separate
    near-misses.
+
+## Two residuals from the final merge — read before touching tests
+
+**A latent test race is mitigated, not closed.** `ProbeRun.report` acquires a
+process-global IOKit assertion whose name `assertionProbeAcquiresAndReleasesCleanly`
+(in `BaselineProbe_test.swift`) requires to be uniquely live. Measured: baseline 0
+failures/60 runs, an intermediate attempt 1/30, final 0/60 after adding
+`@Suite(.serialized)` to `ProbeRunTests`. That serialises one side only — the complete
+fix puts both parties in a single serialized suite, which spans a file the fixing agent
+did not own. **Adding another test that calls `ProbeRun.report` or `AssertionProbe` can
+reintroduce it.**
+
+**`docs/probe-results.md` had diverged** between `feat/m0-task10` and the parent; the
+parent's richer copy won the merge. Correct outcome, but by luck rather than design —
+if a future branch edits that file, diff it deliberately rather than trusting the merge.
+
+**And the merge lesson itself:** the final revision was merged in two steps because I
+first merged an intermediate commit. The second merge produced a *semantic* conflict —
+git combined both versions of `ProbeRun_test.swift` textually, reported success, emitted
+no conflict markers, and left a stale reference to a now-private method. It did not
+compile. A clean merge is not a correct merge; build and test after every one.
 
 ## Open decisions needing the user
 
