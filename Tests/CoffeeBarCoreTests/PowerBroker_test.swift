@@ -93,6 +93,74 @@ private func inputs(sessions: [AgentSession] = [],
     #expect(PowerBroker.decide(inputs(intent: .stop)).idleSleepAssertion == false)
 }
 
+// MARK: - More than one session (§5.1)
+
+// Every case below passes `intent: .stop`. `decide` ORs the toggle with the
+// session predicate, so a `.serve` intent would decide `true` whatever the
+// sessions say, and none of these tests would see the predicate at all.
+//
+// M1 never populates `sessions`, so no other test in this file passes more
+// than one. Without this section `inputs.sessions.contains` can be narrowed to
+// `.first`, `.last` or `prefix(1).contains` and the whole suite stays green —
+// until M2 starts feeding real sessions.
+
+@Test func anActiveSessionAnywhereInTheListHolds() {
+    // `.working` sits LAST. A predicate that reads only the first element
+    // decides false here.
+    #expect(PowerBroker.decide(
+        inputs(sessions: [session(.done), session(.working)],
+               intent: .stop)).idleSleepAssertion == true)
+}
+
+@Test func anActiveSessionFirstInTheListAlsoHolds() {
+    // `.working` sits FIRST. A predicate that reads only the last element
+    // decides false here.
+    #expect(PowerBroker.decide(
+        inputs(sessions: [session(.working), session(.done)],
+               intent: .stop)).idleSleepAssertion == true)
+}
+
+@Test func theOrderOfTheSessionsDoesNotChangeTheOutcome() {
+    // The two orders carry the same one active session, so no access fixed to
+    // a position can satisfy both. The second expectation pins the shared
+    // outcome to `true`: a predicate stuck at false agrees with itself.
+    let activeLast = PowerBroker.decide(
+        inputs(sessions: [session(.done), session(.working)], intent: .stop))
+    let activeFirst = PowerBroker.decide(
+        inputs(sessions: [session(.working), session(.done)], intent: .stop))
+    #expect(activeLast == activeFirst,
+            "order changed the decision: \(activeLast) then \(activeFirst)")
+    #expect(activeLast.idleSleepAssertion == true)
+}
+
+@Test func aListOfOnlyInactiveSessionsHoldsNothing() {
+    // Three sessions and not one of them active. A predicate stuck at `true`,
+    // or one that only answers "the list is not empty", decides true here.
+    #expect(PowerBroker.decide(
+        inputs(sessions: [session(.done), session(.failed), session(.stale)],
+               intent: .stop)).idleSleepAssertion == false)
+}
+
+@Test func aWorkingSessionHoldsBesideABlockedOneWithTheKnobOff() {
+    // The knob is off, so `.awaitingInput` contributes nothing and `.working`
+    // alone carries the hold. A knob-off active set that drops `.working`
+    // decides false here.
+    #expect(PowerBroker.decide(
+        inputs(sessions: [session(.awaitingInput), session(.working)],
+               intent: .stop, blocked: false)).idleSleepAssertion == true)
+}
+
+@Test func twoBlockedSessionsHoldOnlyOnceTheKnobIsSet() {
+    // The knob wiring, read across more than one session.
+    let blocked = [session(.awaitingInput), session(.awaitingPermission)]
+    #expect(PowerBroker.decide(
+        inputs(sessions: blocked, intent: .stop, blocked: false)
+    ).idleSleepAssertion == false, "two blocked sessions held with the knob off")
+    #expect(PowerBroker.decide(
+        inputs(sessions: blocked, intent: .stop, blocked: true)
+    ).idleSleepAssertion == true, "two blocked sessions did not hold with the knob on")
+}
+
 // MARK: - Battery floor (§8.1)
 
 @Test func batteryFloorSuppressesAtOrBelowTheFloor() {
