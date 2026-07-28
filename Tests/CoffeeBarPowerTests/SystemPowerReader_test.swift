@@ -98,9 +98,15 @@ private struct PmsetReport {
     // A battery does not appear and vanish between two calls. Disagreement
     // means the parse is reading a different power source each time — the
     // ordering bug that index-based access into an IOKit list produces.
+    //
+    // The whole reading is compared, not just whether `percent` is nil. The
+    // nil-ness comparison could not fail on any host: the bug it names —
+    // picking a different source on each call — changes the VALUE, and both
+    // values are non-nil. `PowerReading` is Equatable, so one `==` covers the
+    // percent and the source together.
     let first = SystemPowerReader().read()
     let second = SystemPowerReader().read()
-    #expect((first.percent == nil) == (second.percent == nil))
+    #expect(first == second)
 }
 
 @Test func readingIsCheapEnoughToPoll() {
