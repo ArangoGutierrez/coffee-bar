@@ -109,6 +109,55 @@ private func session(_ state: SessionState) -> AgentSession {
     var c = HoldController()
     c.userToggled(to: .serve)
     _ = c.evaluate(powerSource: .battery, batteryPercent: 12)
+    // Prove the precondition: without a stale reason to clear, the assertion
+    // below would hold for a controller that never sets `lastSuppression`.
+    #expect(c.lastSuppression != nil)
     c.userToggled(to: .serve)
     #expect(c.lastSuppression == nil)
+}
+
+@Test func togglingOffStopsTheHoldAndKeepsTheReason() {
+    // `.stop` is how the user switches serving off: Task 5's `ServingModel`
+    // setter calls `userToggled(to: newValue ? .serve : .stop)`. No other test
+    // in this file ever passes `.stop`, so two mutants live here undetected.
+    //
+    // Named bug 1: `userToggled` ignoring its argument and always arming
+    // (`self.intent = .serve`). The off switch is then dead — the user can
+    // start serving but can never stop.
+    // Named bug 2: `userToggled` clearing `lastSuppression` unconditionally
+    // rather than only on `.serve`. Flipping the switch off then wipes the
+    // panel's explanation of a release the user has not yet read.
+    var c = HoldController()
+    c.userToggled(to: .serve)
+    #expect(c.evaluate(powerSource: .ac, batteryPercent: 90).idleSleepAssertion == true)
+
+    // The off switch, from a genuinely armed controller on healthy power.
+    c.userToggled(to: .stop)
+    #expect(c.intent == .stop)
+    #expect(c.evaluate(powerSource: .ac, batteryPercent: 90).idleSleepAssertion == false)
+
+    // A reason the user has not read yet must survive the same off switch.
+    c.userToggled(to: .serve)
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 12)
+    #expect(c.lastSuppression == .batteryFloor(percent: 12, floor: 20))
+
+    c.userToggled(to: .stop)
+    #expect(c.lastSuppression == .batteryFloor(percent: 12, floor: 20))
+}
+
+@Test func evaluateForwardsAnExplicitBatteryFloor() {
+    // `batteryFloorPercent` is the third pass-through, and the one the earlier
+    // guard test left open. Named bug this catches: `evaluate` hard-coding
+    // `batteryFloorPercent: 20` into the `PowerInputs` it builds. 40% sits
+    // above the default floor and below the floor asked for here, so every
+    // other test in this file stays green while a user-configured floor is
+    // silently discarded and the machine keeps serving past it.
+    var c = HoldController()
+    c.userToggled(to: .serve)
+
+    let out = c.evaluate(powerSource: .battery, batteryPercent: 40,
+                         batteryFloorPercent: 50)
+    #expect(out.idleSleepAssertion == false)
+    #expect(out.suppression == .batteryFloor(percent: 40, floor: 50))
+    #expect(c.lastSuppression == .batteryFloor(percent: 40, floor: 50))
 }

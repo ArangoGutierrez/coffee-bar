@@ -24,7 +24,7 @@ public struct HoldController: Equatable, Sendable {
     /// already answered.
     public mutating func userToggled(to intent: UserIntent) {
         self.intent = intent
-        if intent == .serve { lastSuppression = nil }
+        if self.intent == .serve { lastSuppression = nil }
     }
 
     /// Decides, then latches. Returns what the caller should apply.
