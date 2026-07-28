@@ -22,7 +22,14 @@ public final class ServingModel {
     private let reader: any PowerReadingProviding
     private var controller = HoldController()
 
-    @ObservationIgnored private var timer: Timer?
+    /// The repeating refresh installed by `startMonitoring`.
+    ///
+    /// Internal `private(set)` for the same reason `desired` is: the one thing
+    /// worth asserting about this timer is that it is not still live after the
+    /// model goes away, and a test cannot see that through a `private` handle.
+    /// No production code outside this type reads it, so nothing here is
+    /// `public`.
+    @ObservationIgnored private(set) var timer: Timer?
 
     /// Whether an assertion is held right now. Reflects what actually happened,
     /// not what was asked for.
@@ -54,6 +61,9 @@ public final class ServingModel {
         self.reader = reader
         self.reading = reader.read()
     }
+
+    /// A model that goes away takes its ticker with it. See `startMonitoring`.
+    isolated deinit { timer?.invalidate() }
 
     /// Bound to the toggle. `isServing` reflects what actually happened, not
     /// what was asked for: a refused hold leaves the switch off.
@@ -94,20 +104,31 @@ public final class ServingModel {
     /// not `.default`, so menu tracking does not stall the refresh. `[weak self]`
     /// so the run loop's reference to the timer cannot keep the model alive.
     ///
-    /// OPEN QUESTION, for Task 6. `main.swift` calls this from `App.init()`.
-    /// `timer?.invalidate()` above covers a repeat call on the SAME instance
-    /// only. If SwiftUI ever builds a second `App`, that second `ServingModel`
-    /// installs a second `Timer` on `RunLoop.main`; SwiftUI keeps one `@State`
-    /// box, so the orphan model deallocates and its block then no-ops through
-    /// `[weak self]`. The cost is one leaked timer and one main-thread wake-up
-    /// every 30s.
+    /// `main.swift` calls this from `App.init()`. There are two ways a second
+    /// `Timer` could end up on `RunLoop.main`, and both are closed:
     ///
-    /// Nobody has observed a second `init()` — it is inferred, not measured, so
-    /// no fix ships here. Both candidate fixes cost more than the bug: moving
+    ///   - a repeat call on the SAME instance — `timer?.invalidate()` below;
+    ///   - a second `App` build. That second `ServingModel` installs its own
+    ///     timer, and SwiftUI keeps one `@State` box, so the orphan model
+    ///     deallocates — the `isolated deinit` above.
+    ///
+    /// `[weak self]` does not cover the second case on its own. It stops the
+    /// orphan's block from doing anything, but the run loop still holds the
+    /// timer, so a main-thread wake-up every 30s survives for the life of the
+    /// process. Only `invalidate()` takes it off the run loop.
+    ///
+    /// The `deinit` is `isolated`, which STRENGTHENS isolation rather than
+    /// weakening it: the body runs on the actor this type is isolated to. A
+    /// plain `deinit` does not compile here — "cannot access property 'timer'
+    /// with a non-Sendable type 'Timer?' from nonisolated deinit" — and the
+    /// answer to that is never `nonisolated(unsafe)` or `@unchecked Sendable`.
+    ///
+    /// Nobody has observed a second `App.init()`; it is inferred, not measured.
+    /// The `deinit` ships anyway because it is correct either way and costs
+    /// nothing. The two alternatives were rejected and stay rejected: moving
     /// the call to the view reintroduces the ticker-dies-with-the-panel defect
     /// this design exists to close, and a process-wide static guard adds hidden
-    /// global state. A `deinit` would need isolation weakened, which is
-    /// forbidden. Task 6 runs the app on real hardware and can measure it.
+    /// global state.
     public func startMonitoring(interval: TimeInterval = 30) {
         timer?.invalidate()
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in

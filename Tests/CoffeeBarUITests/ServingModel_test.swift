@@ -226,6 +226,39 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
 }
 
 @MainActor
+@Test func theSuppressionLineClearsOnePointAboveTheFloor() {
+    // The mirror of `theSuppressionLineSurvivesAtExactlyTheFloor`, at the first
+    // percentage the filter must let go of. `PowerBroker` suppresses at
+    // `percent <= floor`, so 21% is above the floor and the line must clear.
+    //
+    // Named bug this catches: `percent <= floor + 1` in the filter. The macOS
+    // battery reading is an estimate and does climb a point or two as the load
+    // falls, with no charger attached. The hold releases at 19%, the reading
+    // recovers to 21%, and the panel keeps showing "At 19% — coffee-bar does
+    // not hold at or below 20%" beside a battery line that reads 21%. That is
+    // the stale-reason defect this filter exists to prevent, from the side the
+    // 19% -> 40% test cannot see: 40% is twenty points clear of the floor, so a
+    // one-point error stays green there.
+    let reader = FakeReader(source: .battery, percent: 21)
+    let spy = SpyHolder()
+    let model = ServingModel(holder: spy, reader: reader)
+
+    model.serving = true
+    reader.set(source: .battery, percent: 19)
+    model.refresh()
+    // Precondition: without a line to clear, the assertion below would hold for
+    // a model that never publishes one at all.
+    #expect(model.suppression == .batteryFloor(percent: 19, floor: 20))
+
+    reader.set(source: .battery, percent: 21)
+    model.refresh()
+
+    #expect(model.suppression == nil)
+    #expect(model.reading.percent == 21)
+    #expect(model.isServing == false)
+}
+
+@MainActor
 @Test func theSuppressionLineClearsWhenTheBatteryRisesAboveTheFloor() {
     let reader = FakeReader(source: .battery, percent: 21)
     let spy = SpyHolder()
@@ -241,6 +274,36 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
 
     #expect(model.suppression == nil)
     #expect(model.isServing == false)
+}
+
+// MARK: - The ticker outlives nothing
+
+@MainActor
+@Test func theModelInvalidatesItsTimerWhenItGoesAway() throws {
+    // Named bug this catches: a model that deallocates and leaves its repeating
+    // `Timer` installed on `RunLoop.main`. `[weak self]` stops the block from
+    // doing anything, but it does not remove the timer — the run loop holds the
+    // last strong reference, so the wake-up survives every 30s for the life of
+    // the process. `main.swift` calls `startMonitoring()` from `App.init()`, so
+    // one extra `App` build is one permanent orphan.
+    //
+    // The test holds the timer itself, so the run loop's own reference cannot
+    // decide the outcome: after the model goes, `isValid` is the whole answer.
+    var captured: Timer?
+    do {
+        let model = ServingModel(holder: SpyHolder(),
+                                 reader: FakeReader(source: .ac, percent: 80))
+        // An hour, so the timer cannot fire during the test.
+        model.startMonitoring(interval: 3600)
+        captured = model.timer
+        // Precondition: without a live timer to invalidate, the assertion below
+        // would hold for a `startMonitoring` that installs nothing at all.
+        #expect(captured?.isValid == true)
+    }
+
+    let timer = try #require(captured, "startMonitoring installed no timer")
+    #expect(timer.isValid == false,
+            "the model deallocated and left a live timer on RunLoop.main")
 }
 
 // MARK: - The product's central difference
