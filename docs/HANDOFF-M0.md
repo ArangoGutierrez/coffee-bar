@@ -1,22 +1,26 @@
 # Session Handoff — 2026-07-28 09:30
 
 Project: **coffee-bar** — macOS menu-bar app binding the sleep assertion to agent state.
-Two-day session. M0 (capability probe) is ~95% done.
+Two-day session. **M0 (capability probe) is COMPLETE.** All 12 tasks built,
+reviewed, merged. 154 tests, zero warnings, acceptance green.
 
 ## Context
 
 - Repo: `/Users/eduardoa/src/github/ArangoGutierrez/coffee-bar`
-- Branch: `feat/m0-capability-probe` @ `bd0d492`
+- Branch: `feat/m0-capability-probe` @ (see `git log -1`) — all four branches merged
 - Nothing pushed. `origin` has no branches. Repo is public and empty.
 - Working tree clean except the untracked `Coffee-bar menu bar identity.zip` (leave it — assets are already vendored under `assets/art/`)
 - TDD phase: GREEN on the parent (140 tests, 0 warnings); one fix round in flight
 - Worktrees (intentional — do not delete until merged):
 
-| Worktree | Branch | Tip | State |
-|---|---|---|---|
-| `.worktrees/task10` | `feat/m0-task10` | `b55464a` | **fix in flight** (`w1fix-verdicts`) — NOT merged |
-| `.worktrees/task11p` | `feat/m0-task11-power` | `f21a454` | ✅ merged at `227bf8d` |
-| `.worktrees/task12` | `feat/m0-task12` | `6fbb1d2` | ✅ merged at `bd0d492` |
+| Worktree | Branch | State |
+|---|---|---|
+| `.worktrees/task10` | `feat/m0-task10` | ✅ merged |
+| `.worktrees/task11p` | `feat/m0-task11-power` | ✅ merged |
+| `.worktrees/task12` | `feat/m0-task12` | ✅ merged |
+
+All three are safe to remove: `git worktree remove .worktrees/<name>` then
+`git branch -d feat/m0-<name>`. Confirm each is merged first.
 
 ## READ THESE FIRST — they are the real handoff
 
@@ -50,15 +54,38 @@ Twelve tasks, all built. Ten fully closed with adversarial review + mutation-ver
 
 ## Next session should
 
-1. **Wait for / check `w1fix-verdicts`** on `feat/m0-task10`. It closes a **Critical**: forcing all measured spikes to `.pass` (or `baseline` to `.fail`) leaves all 122 tests green — *a probe that measures nothing and always agrees with itself passes every gate*. Verify its mutations independently; do not take the report on trust.
-2. **Merge `feat/m0-task10`**, then confirm `swift run coffee-bar-probe --json` returns rc=0 and the `jq` gate goes green on the parent.
-3. **Write the integration** — `ArmCommand` + `main.swift` verb wiring. I own this; it is the last M0 work. Four inputs, all the same species (*an operation fails, returns something plausible, reports success*):
-   - **C1 caller-side (CRITICAL)**: `arm` must NOT derive rollback state by re-reading a flag it may itself have set. On an already-armed machine it reads `true`, writes `priorValue: true`, "restores" to true, deletes the journal → sleep disabled forever, no supervisor.
-   - **Orphan plist**: installer now self-cleans; `arm`'s catch must not assume otherwise.
-   - **Encode failure**: `print((try? json) ?? "{}")` + `exit(0)` prints `{}` and claims success. Must exit non-zero, diagnostic to stderr.
-   - **New installer API**: `install()` takes no `binaryPath:` and throws `WatchdogInstallError`; `arm` must explain the path-validation refusal usefully.
-4. **Final whole-branch review**, then M0 complete.
-5. Then M1 — and use `team-execute` with worktrees, not sequential dispatch.
+**M0 is done — nothing is left to finish. Start M1.**
+
+The last M0 work (Task 10's verdict guards) is merged and independently verified:
+a mutant forcing every measured spike to `.pass` is now killed by
+`measuredRowsCarryWhatTheirOwnProbeProduced`, which invokes each probe directly
+and compares. Before the fix that mutant left 122 tests green.
+
+1. **Verify the inherited state first** — run the block under "Verification"
+   below. Expect 154 tests, `probe rc=0`, `jq rc=0`.
+2. **`ArmCommand` and the privileged verbs are NOT built.** `arm` / `report` /
+   `revert` / `watchdog` still exit 64 by design; only `run` is implemented.
+   That work is M5, not M0 — v0.1 excludes lid-closed mode. When it happens,
+   four inputs are already known, all the same species (*an operation fails,
+   returns something plausible, reports success*):
+   - **CRITICAL**: `arm` must NOT derive rollback state by re-reading a flag it
+     may itself have set. On an already-armed machine it reads `true`, writes
+     `priorValue: true`, "restores" to true, deletes the journal → sleep
+     disabled forever with no supervisor.
+   - Installer self-cleans a failed bootstrap now; `arm`'s catch must not
+     assume otherwise.
+   - `install()` takes no `binaryPath:` and throws `WatchdogInstallError`;
+     `arm` must explain the path-validation refusal usefully rather than dump
+     a raw error.
+   - `sudo .build/debug/coffee-bar-probe arm` is deliberately REFUSED — see
+     `docs/probe-results.md` for the working armed-session sequence.
+3. **Start M1** — the menu-bar app. Brainstorm → spec → plan, then build.
+   `AssertionHolder` and the POC already exist; `scripts/build-poc-app.sh`
+   proves no `.xcodeproj` is needed.
+4. **Use `team-execute` with real worktrees.** Validated here: three workers,
+   disjoint file sets, zero conflicts, while the lead committed to the parent
+   throughout. Sequential dispatch on one checkout produced three separate
+   near-misses.
 
 ## Open decisions needing the user
 
