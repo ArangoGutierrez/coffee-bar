@@ -289,12 +289,18 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     //
     // The test holds the timer itself, so the run loop's own reference cannot
     // decide the outcome: after the model goes, `isValid` is the whole answer.
+    // The contract is LAZY, not eager. This was an `isolated deinit`, which
+    // invalidated the moment the model died; CI proved that feature is
+    // experimental before Swift 6.3 and does not compile on the 6.1.2 runner.
+    // The timer block now invalidates the timer it is handed once `self` has
+    // gone, so the orphan survives at most one further tick. The interval is
+    // therefore SHORT and the run loop is pumped — an hour-long interval could
+    // never fire, and the test would fail for the wrong reason.
     var captured: Timer?
     do {
         let model = ServingModel(holder: SpyHolder(),
                                  reader: FakeReader(source: .ac, percent: 80))
-        // An hour, so the timer cannot fire during the test.
-        model.startMonitoring(interval: 3600)
+        model.startMonitoring(interval: 0.01)
         captured = model.timer
         // Precondition: without a live timer to invalidate, the assertion below
         // would hold for a `startMonitoring` that installs nothing at all.
@@ -302,6 +308,13 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     }
 
     let timer = try #require(captured, "startMonitoring installed no timer")
+
+    // Bounded, so a regression fails rather than hangs the suite.
+    let deadline = Date().addingTimeInterval(2.0)
+    while timer.isValid, Date() < deadline {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+    }
+
     #expect(timer.isValid == false,
             "the model deallocated and left a live timer on RunLoop.main")
 }

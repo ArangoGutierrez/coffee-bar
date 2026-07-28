@@ -62,9 +62,6 @@ public final class ServingModel {
         self.reading = reader.read()
     }
 
-    /// A model that goes away takes its ticker with it. See `startMonitoring`.
-    isolated deinit { timer?.invalidate() }
-
     /// Bound to the toggle. `isServing` reflects what actually happened, not
     /// what was asked for: a refused hold leaves the switch off.
     public var serving: Bool {
@@ -110,29 +107,42 @@ public final class ServingModel {
     ///   - a repeat call on the SAME instance — `timer?.invalidate()` below;
     ///   - a second `App` build. That second `ServingModel` installs its own
     ///     timer, and SwiftUI keeps one `@State` box, so the orphan model
-    ///     deallocates — the `isolated deinit` above.
+    ///     deallocates — the block below then invalidates its own timer.
     ///
     /// `[weak self]` does not cover the second case on its own. It stops the
     /// orphan's block from doing anything, but the run loop still holds the
     /// timer, so a main-thread wake-up every 30s survives for the life of the
     /// process. Only `invalidate()` takes it off the run loop.
     ///
-    /// The `deinit` is `isolated`, which STRENGTHENS isolation rather than
-    /// weakening it: the body runs on the actor this type is isolated to. A
-    /// plain `deinit` does not compile here — "cannot access property 'timer'
-    /// with a non-Sendable type 'Timer?' from nonisolated deinit" — and the
-    /// answer to that is never `nonisolated(unsafe)` or `@unchecked Sendable`.
+    /// This was an `isolated deinit` until CI disproved it. That feature is
+    /// EXPERIMENTAL before Swift 6.3: it compiles on a 6.3 developer machine and
+    /// fails on the 6.1.2 GitHub runner with "requires frontend flag
+    /// -enable-experimental-feature IsolatedDeinit". Verifying a language
+    /// feature against a single toolchain is not verifying it.
+    ///
+    /// So the block invalidates the timer it is HANDED, rather than a `deinit`
+    /// reaching for a stored property. No experimental feature, no weakened
+    /// isolation, and the orphan survives at most one further tick.
+    /// `nonisolated(unsafe)` and `@unchecked Sendable` stay rejected.
     ///
     /// Nobody has observed a second `App.init()`; it is inferred, not measured.
-    /// The `deinit` ships anyway because it is correct either way and costs
-    /// nothing. The two alternatives were rejected and stay rejected: moving
-    /// the call to the view reintroduces the ticker-dies-with-the-panel defect
-    /// this design exists to close, and a process-wide static guard adds hidden
-    /// global state.
+    /// This ships anyway because it is correct either way and costs nothing.
+    /// The two alternatives stay rejected: moving the call to the view
+    /// reintroduces the ticker-dies-with-the-panel defect this design exists to
+    /// close, and a process-wide static guard adds hidden global state.
     public func startMonitoring(interval: TimeInterval = 30) {
         timer?.invalidate()
-        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refresh() }
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] tick in
+            // `tick` stays OUT of the `assumeIsolated` closure: it is
+            // task-isolated, and capturing it in a main-actor closure is a
+            // sending violation under strict concurrency. Calling
+            // `invalidate()` here is safe because this block runs on the run
+            // loop the timer was added to, which is `RunLoop.main`.
+            guard let model = self else {
+                tick.invalidate()
+                return
+            }
+            MainActor.assumeIsolated { model.refresh() }
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
