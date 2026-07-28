@@ -2,7 +2,10 @@
 
 A macOS menu-bar app that binds the sleep assertion to agent session state.
 
-**Status:** M0 — capability probe. No UI yet.
+**Status:** M1. The menu-bar app exists and holds the assertion from a manual
+toggle, with a 20% battery floor. It does not read agent sessions yet — that
+ingest is M2 — so the line above states what coffee-bar is for, not what it
+does today. Nothing is released.
 
 ## M0: capability probe
 
@@ -22,16 +25,17 @@ Homebrew support arrives with M4. The formula moves to a dedicated tap repo,
 `ArangoGutierrez/homebrew-coffee-bar`, because `brew tap user/repo` resolves to
 `github.com/user/homebrew-repo` — a `Formula/` directory in this repo is not
 tappable by the conventional command. See `docs/ROADMAP.md`. The install will
-then be:
+then be — and neither command works today, because
+`ArangoGutierrez/homebrew-coffee-bar` does not exist yet:
 
     brew tap ArangoGutierrez/coffee-bar
     brew install coffee-bar
 
 The formula builds from source, so the CLI needs no notarisation. It installs
-the `coffee-bar-probe` capability probe and nothing else — the menu-bar app is
-M1, see `docs/ROADMAP.md`.
+the `coffee-bar-probe` capability probe and nothing else. It does not install
+the menu-bar app.
 
 ## Licence
 
-Apache-2.0. "Claude Code", "Codex" and "Cursor" are third-party marks used
-nominatively; coffee-bar is not affiliated with or endorsed by their owners.
+Apache-2.0. "Claude Code" is a third-party mark used nominatively; coffee-bar is
+not affiliated with or endorsed by its owner.

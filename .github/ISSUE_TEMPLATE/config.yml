@@ -1,0 +1,25 @@
+# Copyright 2026 Carlos Eduardo Arango Gutierrez
+# SPDX-License-Identifier: Apache-2.0
+
+# A blank issue carries none of the fields triage needs, and asking for them
+# afterwards costs a round trip per report. The two forms below collect them up
+# front, so the blank route is closed.
+blank_issues_enabled: false
+
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/ArangoGutierrez/coffee-bar/security/advisories/new
+    about: >-
+      Report it privately here, never as a public issue. See SECURITY.md.
+
+  - name: Check the roadmap first
+    url: https://github.com/ArangoGutierrez/coffee-bar/blob/main/docs/ROADMAP.md
+    about: >-
+      Lid-closed mode, Codex CLI and Cursor support, and token accounting are
+      already planned. The roadmap says which milestone each one belongs to.
+
+  - name: Read the non-goals
+    url: https://github.com/ArangoGutierrez/coffee-bar/blob/main/coffee-bar-HANDOFF.md
+    about: >-
+      Section 12 lists what coffee-bar will not do in 0.x, including reading
+      transcripts, network egress, and influencing agent behaviour.

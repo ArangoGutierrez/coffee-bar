@@ -1,0 +1,169 @@
+# Copyright 2026 Carlos Eduardo Arango Gutierrez
+# SPDX-License-Identifier: Apache-2.0
+
+name: Bug report
+description: Something does not behave the way the README or the docs say it does.
+title: "bug: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The four fields below are the ones triage always needs. Every one of
+        them that is missing costs a round trip before anyone can start.
+
+        Do not report a security vulnerability here. Use
+        [private reporting](https://github.com/ArangoGutierrez/coffee-bar/security/advisories/new)
+        instead. See `SECURITY.md`.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: >-
+        State what you expected and what you got. One idea per sentence.
+      placeholder: |
+        Expected: the menu-bar glyph switches to the serving cup while an agent
+        is working.
+        Got: the glyph stays idle, and the Mac slept after 5 minutes.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Number the steps. Start each one with its verb.
+      placeholder: |
+        1. Launch CoffeeBar.app.
+        2. Start a Claude Code session in a terminal.
+        3. Wait 5 minutes.
+    validations:
+      required: true
+
+  - type: input
+    id: hardware-model
+    attributes:
+      label: Hardware model
+      description: |
+        Run this in a terminal:
+
+        ```
+        sysctl -n hw.model
+        ```
+
+        `coffee-bar-probe` prints the same value on its `host` line, so the
+        probe output below covers this field too if you paste it.
+      placeholder: "Mac16,7"
+    validations:
+      required: true
+
+  - type: input
+    id: macos-build
+    attributes:
+      label: macOS version and build
+      description: |
+        Run this in a terminal and paste the version and the build:
+
+        ```
+        sw_vers
+        ```
+
+        The build matters, not only the version. A power-management change can
+        ship inside one point release.
+      placeholder: "26.5.2 (build 25F84)"
+    validations:
+      required: true
+
+  - type: input
+    id: coffee-bar-version
+    attributes:
+      label: coffee-bar version
+      description: |
+        The menu-bar app carries its version in its bundle. Read it with:
+
+        ```
+        /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" \
+          /Applications/CoffeeBar.app/Contents/Info.plist
+        ```
+
+        If you built from source and did not install into `/Applications`,
+        point the same command at `build/CoffeeBar.app/Contents/Info.plist`.
+
+        `coffee-bar-probe` has no version flag. If the bug is in the probe,
+        report the commit you built instead:
+
+        ```
+        git rev-parse --short HEAD
+        ```
+
+        No release is tagged yet, so every build from source reports
+        `0.0.0-dev`. That string alone does not identify a build — add the
+        commit after it.
+      placeholder: "0.0.0-dev (commit b886ea2)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: agent-tool
+    attributes:
+      label: Which agent tool
+      description: >-
+        v0.1 reads Claude Code sessions only. The other two adapters are v0.2
+        and do not exist yet, so pick one of them only if you are reporting
+        against an unreleased branch that has them.
+      options:
+        - Claude Code
+        - Codex CLI (planned for v0.2, no adapter yet)
+        - Cursor (planned for v0.2, no adapter yet)
+        - Not related to an agent tool
+    validations:
+      required: true
+
+  - type: textarea
+    id: probe-output
+    attributes:
+      label: Capability probe output
+      description: |
+        Build the repo and run the probe, then paste all of it:
+
+        ```
+        swift build
+        swift run coffee-bar-probe
+        ```
+
+        The probe reports the host stamp and the outcome of every unprivileged
+        spike, which tells triage whether the machine can do the thing you
+        expected at all.
+      render: shell
+
+  - type: textarea
+    id: assertions
+    attributes:
+      label: Wake assertions at the time of the bug
+      description: |
+        For a bug about sleep, waking, or the display, run this while the bug
+        is happening and paste the output:
+
+        ```
+        pmset -g assertions
+        ```
+
+        coffee-bar's own assertions are named `coffee-bar is serving` (the app)
+        and `coffee-bar probe baseline` (the probe), so this shows whether it
+        was holding one.
+      render: shell
+
+  - type: checkboxes
+    id: hygiene
+    attributes:
+      label: Before you submit
+      options:
+        - label: >-
+            I checked `docs/ROADMAP.md`. This is a bug in behaviour that
+            shipped, not a milestone that has not landed yet.
+          required: true
+        - label: >-
+            This report contains no source code, no transcript text, and no
+            secrets from my machine.
+          required: true

@@ -1,0 +1,65 @@
+# Copyright 2026 Carlos Eduardo Arango Gutierrez
+# SPDX-License-Identifier: Apache-2.0
+
+name: Feature request
+description: Ask for a capability coffee-bar does not have.
+title: "feat: "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Two documents answer most requests before they are written.
+
+        `docs/ROADMAP.md` says which milestone a planned capability belongs to.
+        Lid-closed mode is M5. Codex CLI and Cursor adapters are M3, which the
+        v0.1 cut moved to v0.2. Token accounting is M7.
+
+        Section 12 of `coffee-bar-HANDOFF.md` lists what coffee-bar will not do
+        in 0.x at all: read agent transcripts, send anything over the network,
+        influence agent behaviour, answer prompts for you, or run on Windows or
+        Linux. A request against that list is closed, not scheduled.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >-
+        Describe what you cannot do today. Do not describe the solution here.
+      placeholder: >-
+        My Mac sleeps during a long agent run when I close the lid, so the run
+        dies halfway.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you want it to do
+      description: >-
+        State the behaviour, not the implementation. One idea per sentence.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: >-
+        Name the tool or the workaround and say why it is not enough. For a
+        power feature, that is usually `caffeinate`, KeepingYouAwake, or
+        Amphetamine.
+
+  - type: checkboxes
+    id: hygiene
+    attributes:
+      label: Before you submit
+      options:
+        - label: >-
+            I read `docs/ROADMAP.md` and this is not already a planned
+            milestone.
+          required: true
+        - label: >-
+            I read section 12 of `coffee-bar-HANDOFF.md` and this is not on the
+            non-goals list.
+          required: true
