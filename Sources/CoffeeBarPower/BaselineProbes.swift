@@ -49,13 +49,20 @@ private extension String {
     }
 }
 
-public protocol PowerReading: Sendable {
+/// The probe-side view of the host: thermal state plus raw power facts.
+///
+/// Renamed from `PowerReading` in M1. `PowerReading` is now the *value* type
+/// that `SystemPowerReader.read()` returns — see `SystemPowerReader.swift` —
+/// and a protocol and a struct cannot share one name in one module. This
+/// protocol describes a reader rather than a reading, so it is the one that
+/// gives up the name.
+public protocol HostPowerReading: Sendable {
     func thermalLevel() -> ThermalLevel
     func batteryPercent() -> Int?
     func isOnBattery() -> Bool
 }
 
-public struct SystemPowerReader: PowerReading {
+public struct SystemPowerReader: HostPowerReading {
     public init() {}
 
     /// Pure mapping, extracted so every documented state is testable without
