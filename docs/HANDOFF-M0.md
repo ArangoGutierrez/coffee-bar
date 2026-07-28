@@ -10,7 +10,7 @@ reviewed, merged. 152 tests (3 suites), zero warnings, acceptance green.
 - Branch: `feat/m0-capability-probe` @ (see `git log -1`) — all four branches merged
 - Nothing pushed. `origin` has no branches. Repo is public and empty.
 - Working tree clean except the untracked `Coffee-bar menu bar identity.zip` (leave it — assets are already vendored under `assets/art/`)
-- TDD phase: GREEN on the parent (140 tests, 0 warnings); one fix round in flight
+- State: GREEN on the parent — 152 tests in 3 suites, 0 warnings, all branches merged. Nothing in flight.
 - Worktrees (intentional — do not delete until merged):
 
 | Worktree | Branch | State |
@@ -33,9 +33,9 @@ Trust these over any recollection. After compaction, trust them plus `git log`.
 
 ## Where M0 stands
 
-Twelve tasks, all built. Ten fully closed with adversarial review + mutation-verified fixes.
+Twelve tasks, all built, all closed with adversarial review + mutation-verified fixes.
 
-- **Deliverable works**: `swift run coffee-bar-probe --json` → rc=0, `jq` spike-id gate green — *on `feat/m0-task10`*, which is not yet merged. On the parent it still exits 64 (expected: the `run` verb lives on that branch).
+- **Deliverable works on the parent**: `swift run coffee-bar-probe --json` → rc=0, `jq` spike-id gate → rc=0. Report: `baseline`/S3/S5/S8 `pass` with measured values; S1/S2 `notYetRun`, and S2's row states the instrument problem, not just "needs a lid close".
 - **Spike answers** (committed to `docs/probe-results.md`):
   - **S3 ANSWERED, favourably** — `ri_billed_energy` readable for same-uid processes, no entitlement. De-risks §15 Token Tap.
   - **S5 partly** — self verified; foreign-pid readback fails *even for Apple's own `taskpolicy`*, so the instrument fails, not necessarily the demotion.
@@ -57,9 +57,13 @@ Twelve tasks, all built. Ten fully closed with adversarial review + mutation-ver
 **M0 is done — nothing is left to finish. Start M1.**
 
 The last M0 work (Task 10's verdict guards) is merged and independently verified:
-a mutant forcing every measured spike to `.pass` is now killed by
-`measuredRowsCarryWhatTheirOwnProbeProduced`, which invokes each probe directly
-and compares. Before the fix that mutant left 122 tests green.
+a mutant forcing every measured spike to `.pass` is killed by
+`runReportsEverySpikeWithTheVerdictItsProbeProduced`, which invokes each probe
+directly and compares. A second mutant making `RunCommand` pass `nil` instead of
+`getpid()` is killed by `theShippedBinaryMeasuresTheProcessItRunsIn`, which drives
+the real binary as a child process — `RunCommand` lives in an executable target no
+test can import, so nothing in-process could catch it. Before these, both mutants
+left 122 tests green.
 
 1. **Verify the inherited state first** — run the block under "Verification"
    below. Expect 152 tests in 3 suites, `probe rc=0`, `jq rc=0`.
