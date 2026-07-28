@@ -187,6 +187,44 @@ that duplicates the parser's own logic.
 Handoff §12 forbids reading transcript contents. The hook payload carries
 `transcript_path`, and M2 must **not** open it.
 
+### 7.1 That is not enough — measured 2026-07-28
+
+Capturing real payloads disproved the boundary as originally written. **The
+`Stop` payload carries `last_assistant_message`**, which held 2747 characters of
+assistant reply text in the first sample. That is conversation content delivered
+**directly in the payload**, not behind `transcript_path`.
+
+A rule that says only "never open `transcript_path`" therefore permits exactly
+what handoff §12 forbids, through a field nobody looked for.
+
+Requirements:
+
+- `HookEvent` must not decode `last_assistant_message` into any stored property.
+- No ingest path may persist it, log it, or render it.
+- **Required test:** a guard that fails if `last_assistant_message` appears in
+  any stored property, log line, or panel string. Assert on the fixture that
+  actually contains it — `Tests/Fixtures/claude-hooks/stop.json` — not on a
+  hand-built sample.
+
+### 7.2 Redacting captured fixtures
+
+The fixtures in `Tests/Fixtures/claude-hooks/` are real payloads, scrubbed. This
+repository is public. Two leak classes were found by the scrubber refusing to
+write, and both generalise:
+
+1. **The same secret in a second encoding.** Claude Code slugifies the project
+   path into the transcript filename, turning `/` into `-`. One string carried
+   the home directory twice: `/Users/<name>/…` and `-Users-<name>-…`. A literal
+   replace fixed the first and walked past the second.
+2. **The same value in a second field.** `session_id` was scrubbed as a field
+   while the identical UUID survived as the transcript *filename*. Field-level
+   scrubbing is theatre when the value also lives elsewhere.
+
+So the scrubber substitutes by pattern across every string, not by field name,
+and **refuses to write** when a post-scrub scan still finds a marker. Any leak
+scan must also assert it read a non-zero number of files: a scan over an empty
+directory reports zero matches and looks like success.
+
 `lastMessage` is capped at 140 characters per §5.1. It is attacker-influenced
 text that the panel renders, so treat it as untrusted: truncate, and do not
 interpret it as markup.

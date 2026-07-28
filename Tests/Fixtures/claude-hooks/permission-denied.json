@@ -1,0 +1,19 @@
+{
+  "agent_type": "chief-operator",
+  "cwd": "/Users/USER/src/github/ArangoGutierrez/coffee-bar",
+  "effort": {
+    "level": "xhigh"
+  },
+  "hook_event_name": "PermissionDenied",
+  "permission_mode": "auto",
+  "prompt_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "reason": "[Sensitive-Source Provenance] This writes files derived from `.claude/capture.jsonl` \u2014 a live Claude Code session capture holding session ids, cwd paths, tool inputs/responses and assistant message text \u2014 into the working tree of a public repo (`Tests/Fixtures/claude-hooks/`), and the redaction pass does not clear the class; the user's general \"go work on the next task\" and their approval of installing the capture hook do not name this source and this public-repo destination, which is what would clear it (and the plan itself requires user approval before these fixtures land in a public repo).",
+  "session_id": "11111111-2222-3333-4444-555555555555",
+  "tool_input": {
+    "command": "REDACTED",
+    "description": "REDACTED"
+  },
+  "tool_name": "Bash",
+  "tool_use_id": "toolu_FIXTUREFIXTUREFIXTURE01",
+  "transcript_path": "/Users/USER/.claude/projects/-Users-USER-src-github-ArangoGutierrez-coffee-bar/11111111-2222-3333-4444-555555555555.jsonl"
+}
