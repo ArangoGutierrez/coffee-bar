@@ -129,6 +129,37 @@ private func inputs(sessions: [AgentSession] = [],
     #expect(PowerBroker.decide(inputs(intent: .serve)).suppression == nil)
 }
 
+// MARK: - The declared defaults (§4.2)
+
+@Test func powerInputsAppliesItsDocumentedDefaults() {
+    // Constructed WITHOUT holdAwakeWhileBlocked and batteryFloorPercent. The
+    // `inputs` helper above always passes both, so every other test in this
+    // file is blind to what the declared defaults actually are: changing the
+    // floor to 90, or the knob to true, leaves them all green. Design spec
+    // §4.2 fixes the floor at 20 and the knob at off, and Task 5 reads both,
+    // so the defaults are a contract and need a test that can see them.
+
+    // Floor defaults to 20, so 21% on battery is above it and still holds.
+    #expect(PowerBroker.decide(
+        PowerInputs(powerSource: .battery, batteryPercent: 21, userIntent: .serve)
+    ).idleSleepAssertion == true, "21% on battery must clear the default floor")
+
+    // 20% is AT the default floor, so §8.1 suppresses. The reason carries the
+    // floor it used, which pins the default to the literal 20 rather than to
+    // "whatever the implementation chose".
+    let atFloor = PowerBroker.decide(
+        PowerInputs(powerSource: .battery, batteryPercent: 20, userIntent: .serve))
+    #expect(atFloor.idleSleepAssertion == false)
+    #expect(atFloor.suppression == .batteryFloor(percent: 20, floor: 20))
+
+    // The blocked knob defaults to off, so an attention state does not hold.
+    #expect(PowerBroker.decide(
+        PowerInputs(sessions: [session(.awaitingPermission)], powerSource: .ac,
+                    batteryPercent: 80, userIntent: .stop)
+    ).idleSleepAssertion == false,
+            "the blocked knob must default to off")
+}
+
 @Test func noSuppressionIsReportedWhenNoHoldWasRequested() {
     // Low battery while idle is not a suppressed hold — nothing was asked for.
     #expect(PowerBroker.decide(
