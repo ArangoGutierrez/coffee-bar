@@ -48,12 +48,27 @@ Spec: `docs/superpowers/specs/2026-07-28-coffee-bar-m1-menubar-design.md`.
 |---|---|
 | 1 — core value types | Built, reviewed, 3 defects fixed, verified |
 | 2 — `PowerBroker` | Built, reviewed, 2 defects fixed, verified |
-| 3 — `HoldController` | **Not started — start here** |
+| 3 — `HoldController` | Built, reviewed, 3 defects fixed, verified |
 | 4 — `SystemPowerReader` | Built, reviewed, 2 defects fixed, verified |
-| 5 — app target, POC removal | Not started |
+| 5 — app target, POC removal | **Not started — start here** |
 | 6 — bundle script | Not started |
 
-Head is `cd35c9e`. **177 tests in 3 suites**, 0 warnings.
+Head is `31aa82a`, pushed to `origin`. **188 tests in 3 suites**, 0 warnings.
+
+## Task 5 carries three inherited requirements
+
+Do not let these fall on the floor — each came out of a gate on an earlier task.
+
+1. **The app must route through `DesiredPowerState` and must never call
+   `AssertionHolder` directly.** The §6.1 no-display-assertion invariant is
+   guarded at the decision layer and at the IOKit layer, but nothing stops an app
+   layer that bypasses both. Add that guard as Task 5 acceptance.
+2. **`ServingModel` must decide when the panel stops showing a suppression
+   reason.** `userToggled(to: .stop)` deliberately does NOT clear
+   `lastSuppression`, and a test now pins that. Left alone, the panel keeps
+   explaining a release the user has already read.
+3. **The plan's Task 5 code has three import fixes already applied** —
+   `Observation`, `AppKit`, `Combine`. Do not "clean them up".
 
 ## What the three critic gates found
 
