@@ -6,3 +6,4 @@ build/
 DerivedData/
 .DS_Store
 docs/probe-results.local.md
+.worktrees/
