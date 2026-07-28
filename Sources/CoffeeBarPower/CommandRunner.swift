@@ -116,7 +116,7 @@ public struct SystemCommandRunner: CommandRunning {
         let group = DispatchGroup()
         // Each reader gets its own copy of the pipe's read end, and BOTH are
         // taken before either reader starts: a failure here then leaves
-        // nothing already parked on a queue to reason about. `errno` is
+        // nothing already parked on a thread to reason about. `errno` is
         // captured per call because a later successful call is permitted to
         // overwrite it.
         let outFD = dup(out.fileHandleForReading.fileDescriptor)
@@ -147,7 +147,7 @@ public struct SystemCommandRunner: CommandRunning {
             // Terminate what can be terminated, then abandon the read rather
             // than block on it — waiting is precisely the hang being bounded,
             // and the grandchild will not be reached by this signal anyway.
-            // The drain queues stay parked on their own dup'd descriptors
+            // The drain threads stay parked on their own dup'd descriptors
             // until whoever holds the write end lets go.
             if process.isRunning { process.terminate() }
             throw CommandError.timedOut(after: bound)
@@ -175,9 +175,25 @@ public struct SystemCommandRunner: CommandRunning {
         return clamped.isFinite ? clamped : defaultTimeout
     }
 
-    /// Reads one descriptor to EOF on a background queue, then closes it. The
+    /// Reads one descriptor to EOF on a thread of its own, then closes it. The
     /// descriptor is passed as an `Int32` rather than a `FileHandle` because
     /// the pipe's handle is not `Sendable` under the v6 language mode.
+    ///
+    /// A dedicated thread, NOT `DispatchQueue.global()`. That pool is bounded
+    /// and shared by the whole process, and `run` blocks its caller until both
+    /// readers finish — so a caller that already holds pool threads deadlocks
+    /// against itself, and `run` reports `timedOut` for a child that exited in
+    /// milliseconds. Measured with the pool held: `timedOut(after: 10.0)` at
+    /// 10.002 s against `echo hello`, versus 0.526 s with the pool free.
+    ///
+    /// It is the caller's own concurrency that saturates the pool, so this is
+    /// not exotic. Swift Testing runs test bodies on a pool sized from the core
+    /// count: on a 3-core CI runner six process-spawning tests froze the entire
+    /// 209-test run for 30 s, while the same suite passed in 5 s on a 14-core
+    /// machine. M5's watchdog and the menu-bar app are the same shape.
+    ///
+    /// `enter()` runs on the CALLING thread, before the reader exists. Doing it
+    /// inside the closure would let `wait` return before the reader started.
     ///
     /// Ownership is the point: the caller hands over a `dup` of the pipe's
     /// read end, never the pipe's own. On the timeout path `run` returns while
@@ -188,7 +204,9 @@ public struct SystemCommandRunner: CommandRunning {
     /// parked read would steal bytes from an unrelated file.
     private static func drain(_ descriptor: Int32, into sink: OutputSink,
                               isStdout: Bool, group: DispatchGroup) {
-        DispatchQueue.global().async(group: group) {
+        group.enter()
+        Thread.detachNewThread {
+            defer { group.leave() }
             let handle = FileHandle(fileDescriptor: descriptor,
                                     closeOnDealloc: false)
             sink.append(handle.readDataToEndOfFile(), isStdout: isStdout)

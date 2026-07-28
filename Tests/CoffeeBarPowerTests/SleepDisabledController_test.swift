@@ -179,6 +179,77 @@ private struct RecordingRunner: CommandRunning, @unchecked Sendable {
     #expect(result.stderr.count > 1_000_000)
 }
 
+@Test func realRunnerRunsItsReadersWithoutAFreeSharedPoolWorker() throws {
+    // `run()` blocks its caller until BOTH pipe readers finish. While the
+    // readers lived on `DispatchQueue.global()`, that made the call depend on
+    // two free workers from a pool that is bounded and shared by the whole
+    // process — so a caller holding pool threads deadlocked against itself and
+    // `run()` reported `timedOut` for a child that had already exited.
+    //
+    // This is what turned CI red while the suite stayed green here. Swift
+    // Testing runs test bodies on a pool sized from the core count; a GitHub
+    // macos-15 runner has 3 cores and this machine has 14, so the runner
+    // saturated where the laptop never came close. Measured on the shipped
+    // runner with the pool held: `run()` against `echo hello` threw
+    // timedOut(after: 10.0) at 10.002 s, against 0.526 s with the pool free.
+    //
+    // Not cosmetic beyond the suite: M5's privileged watchdog calls `run()` in
+    // a loop for days and the menu-bar app calls it from its own task pool.
+    //
+    // The saturation point is DISCOVERED rather than assumed, because it
+    // tracks the core count: occupiers are added until one fails to reach a
+    // thread, which is the exact condition under test on any host.
+    let dir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("cb-pool-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let shim = dir.appendingPathComponent("quiet")
+    try Data("#!/bin/sh\necho hello\nexit 0\n".utf8).write(to: shim)
+    try FileManager.default.setAttributes(
+        [.posixPermissions: 0o755], ofItemAtPath: shim.path)
+
+    // 256 is chosen to sit far above the pool's hard ceiling on any host —
+    // measured at 70 on this 14-core machine, and lower on a 3-core runner —
+    // so the queue is guaranteed to have work left over once the pool stops
+    // handing out workers.
+    let occupiers = 256
+    let release = DispatchSemaphore(value: 0)
+    // Released on every path, including a thrown `run()`, so a failure here
+    // cannot leave the pool held for the rest of the suite. Blocks that never
+    // reached a thread take their signal whenever they do start, so the count
+    // balances either way.
+    defer { for _ in 0..<occupiers { release.signal() } }
+    for _ in 0..<occupiers {
+        DispatchQueue.global().async { release.wait() }
+    }
+
+    // Saturation is CONFIRMED, not assumed. An earlier version of this test
+    // stopped at the first occupier that was slow to start; that read a
+    // transient stall as saturation, so the pool still had room to grow and
+    // the test passed against the unfixed runner inside the full suite. It
+    // discriminated only under `--filter`, which is no guard at all.
+    //
+    // A probe block that cannot reach a thread within a second, three times
+    // running, means the pool is handing out nothing. The window is generous
+    // against a slow ramp: the kernel adds workers on the order of 200 ms
+    // apart as the held ones block.
+    var consecutiveStalls = 0
+    while consecutiveStalls < 3 {
+        let probeRan = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async { probeRan.signal() }
+        if probeRan.wait(timeout: .now() + 1) == .timedOut {
+            consecutiveStalls += 1
+        } else {
+            consecutiveStalls = 0
+        }
+    }
+
+    // The discriminating assertion. The child writes 6 bytes and exits, so the
+    // only thing 2 s can fail to cover is a reader that never got a thread.
+    let result = try SystemCommandRunner().run(shim.path, [], timeout: 2)
+    #expect(result.exitCode == 0)
+    #expect(result.stdout == "hello\n")
+}
+
 @Test func realRunnerTimesOutRatherThanWaitingOnALeakedGrandchild() throws {
     // Waiting for EOF on the pipes waits on whoever HOLDS them, which is not
     // necessarily the child: a child that exits immediately can leave a
