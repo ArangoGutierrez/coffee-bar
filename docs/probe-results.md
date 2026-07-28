@@ -124,6 +124,36 @@ requires.
 
 v0.1 does not depend on this — lid-closed mode is M5.
 
+## How to run the armed S1/S2 session — the obvious command is now refused
+
+The handoff's natural manual test is `sudo .build/debug/coffee-bar-probe arm`. **That is
+now rejected, deliberately**, and the rejection is correct.
+
+`install()` validates that every component of the daemon's program path is root-owned
+and not group/other-writable before it becomes a `RunAtLoad`+`KeepAlive` **root**
+daemon. A binary under `$HOME/.build/` fails that check: `swift build` rewrites it, and
+any process running as you can replace it. Installing a root daemon pointed at a
+user-writable file is root persistence handed to any local code.
+
+So the armed session requires the binary to live somewhere root owns:
+
+```sh
+swift build -c release
+sudo install -o root -g wheel -m 755 .build/release/coffee-bar-probe /usr/local/bin/
+sudo /usr/local/bin/coffee-bar-probe arm --ttl 900
+# close the lid, wait ~10 minutes, reopen
+/usr/local/bin/coffee-bar-probe report
+```
+
+Check `/usr/local/bin` ownership first — it is `root:wheel 0755` on this host
+(measured), but Homebrew installations often make it admin-writable, which fails the
+same check for the same good reason.
+
+**Before that session:** the watchdog must be proven to revert on TTL expiry, on
+SIGKILL, and at boot with a dirty journal. Those are testable at a desk with the flag
+set for seconds. Arming for ten minutes behind a closed lid is the last step, not the
+first.
+
 ## Not yet run
 
 - **S1** — `SleepDisabled` survives lid close. Requires root, a physical lid close and
