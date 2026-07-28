@@ -1,6 +1,9 @@
 # coffee-bar roadmap
 
-Supersedes the milestone table in `coffee-bar-HANDOFF.md` §9. Revised 2026-07-27.
+Supersedes the milestone table in `coffee-bar-HANDOFF.md` §9. Revised 2026-07-28.
+
+Three decisions that this file previously left open are now closed. Each one is
+marked **DECIDED 2026-07-28** in its own section below.
 
 ## Why this differs from the handoff
 
@@ -20,13 +23,15 @@ is even viable on current macOS.
 | **M0** | Capability probe CLI — answers S1, S2, S3, S5, S8 | gate only |
 | **M1** | Menu-bar app, assertion only. Holds `PreventUserIdleSystemSleep`, **does not** hold the display assertion (§6.1) | v0.1 |
 | **M2** | Claude Code adapter + SessionHub. HTTP ingest, session state machine, wake bound to agent state | v0.1 |
-| **M3** | Codex + Cursor adapters + `coffeebar-hook` shim | v0.1 |
+| **M3** | Codex + Cursor adapters + `coffeebar-hook` shim | v0.2 |
 | **M4** | Open-source repo hygiene — see M4 scope below | **v0.1 — cut here** |
 | **M5** | Privileged helper + lid-closed mode (`SleepDisabled`, XPC, journal watchdog) | v0.2 |
 | **M6** | Power triage + telemetry (protected/demotable sets, restore-on-exit) | v0.2 |
 | **M7** | Token Tap — local OTLP token accounting (handoff §15) | v0.3 |
 
 ## v0.1 definition of done
+
+**DECIDED 2026-07-28 — v0.1 is M1 + M2 + M4.** M3 moves to v0.2.
 
 A user can `brew install` it, launch it, and have their Mac stay awake exactly while an
 agent is working — with the screen off — and see which sessions need attention. No
@@ -36,12 +41,28 @@ Concretely:
 
 - Holds and releases `PreventUserIdleSystemSleep` bound to live agent session state
 - Display sleeps normally while the system stays awake (the differentiator, §6.1)
-- Attention queue for Claude Code, Codex and Cursor sessions
+- Attention queue for **Claude Code** sessions. Codex and Cursor arrive in v0.2
 - Releases the assertion when every agent is blocked on the human (§5.1, `holdAwakeWhileBlocked` default false)
 - Installs via Homebrew; CI green; Apache-2.0 clean; no network egress
 
+### Why the cut moved
+
+M1 alone was the recorded fast fallback. It does not work. M1 holds an assertion;
+the agent signal arrives with M2. Without an adapter the app cannot bind the
+assertion to agent state, so the README cannot make the central claim. The honesty
+constraint below forbids making it anyway, and CodexBar already occupies the
+menu-bar-for-agent-tools space. M1 alone would ship a `caffeinate` with a nicer icon
+into an occupied field.
+
+M2 covers Claude Code, the largest identifiable agent cohort. M3's two adapters are
+additive against a SessionHub that already exists by then, so deferring them costs
+v0.2 little and removes two spec-and-plan cycles from the path to first release.
+
+The recommendation panel returned HOLD on this decision. The user confirmed it.
+
 ## What v0.1 deliberately excludes
 
+- Codex and Cursor adapters, and the `coffeebar-hook` shim (M3)
 - Lid-closed operation and everything requiring root (M5)
 - Process demotion / power triage (M6)
 - Token accounting (M7)
@@ -70,9 +91,14 @@ The release-readiness milestone. v0.1 is cut on its completion.
 Two different retrieval paths, one document.
 
 **SEO** — the terms a person types: `macos menu bar app`, `keep mac awake`,
-`caffeinate alternative`, `KeepingYouAwake alternative`, `Claude Code`, `Codex CLI`,
-`Cursor`, `agent monitoring`, `prevent sleep macOS`. These belong in the description,
+`caffeinate alternative`, `KeepingYouAwake alternative`, `Claude Code`,
+`agent monitoring`, `prevent sleep macOS`. These belong in the description,
 the first paragraph, the topics, and real headings — not a keyword dump.
+
+`Codex CLI` and `Cursor` are **v0.2 terms, not v0.1 terms.** The v0.1 cut moved M3 to
+v0.2, so ranking for them before the adapters exist would claim support the app does
+not have — which the honesty constraint below forbids. Add them to the description and
+topics when M3 lands, not before.
 
 **GEO** (generative-engine optimisation) — being accurately citable when an assistant is
 asked "what keeps my Mac awake while my coding agent runs?". That rewards different
@@ -128,56 +154,128 @@ This is a design precondition, not a code review nit: it must be true before the
 helper reads its first journal, because the whole point of the helper is that it
 does something the user cannot.
 
-## Decide before the first tag — the release job pushes to `main`
+## The release job and `main` — DECIDED 2026-07-28
 
-The release workflow commits the resolved formula checksum and does
-`git push origin HEAD:main`. **Branch protection on `main` is itself an M4
-deliverable**, and the day it lands it breaks every release.
+**Decision: the formula moves to a separate tap repo, `ArangoGutierrez/homebrew-coffee-bar`.
+The release job stops writing to any branch. A human pins the formula per release.**
 
-The two are in direct conflict and only one can be true. Options, in the order I'd
-consider them:
+### The conflict this resolves
 
-1. **Formula lives in a separate tap repo** (`ArangoGutierrez/homebrew-coffee-bar`).
-   The release job pushes there instead, `main` stays protected, and the tap is the
-   conventional Homebrew layout anyway. Costs one more repo.
-2. **Release job opens a PR instead of pushing.** Keeps one repo and respects
-   protection, at the cost of a manual merge in every release.
-3. **Protection with an app/bot bypass** for the release identity. Works, but an
-   automation identity that can push to a protected `main` is a real supply-chain
-   surface for a project whose whole pitch is "no network egress, auditable helper".
+`.github/workflows/release.yml` line 173 runs `git push origin HEAD:main` from the
+`formula` job, which holds `contents: write`. **Branch protection on `main` is itself
+an M4 deliverable.** The day it lands it breaks every release.
 
-Related, and cheaper to fix: the workflow checksums GitHub's **generated source
-tarball**, which is not contractually byte-stable. A release-asset tarball uploaded by
-the job is the robust form.
+### The measured fact that decided the layout
 
-Also unresolved: the workflow is named `Release` but creates no GitHub Release. Left
-out deliberately as unrequested outward-facing scope.
+`brew tap --help` states that the one-argument form resolves `user/repo` to
+**`github.com/user/homebrew-repo`**. All eight taps installed on the development host
+carry that prefix (`anchore/homebrew-grype`, `docker/homebrew-tap`,
+`goreleaser/homebrew-tap`, `nvidia/homebrew-holodeck`, and four more).
 
-## Open question for M7 — what "managed settings present" means
+So a `Formula/` directory inside `ArangoGutierrez/coffee-bar` is **not tappable by the
+conventional command**. `README.md` already documents the two-argument workaround. The
+tap repo is therefore not only the branch-protection fix — it is the only layout in
+which the v0.1 install story reads the way users expect.
 
-Raised during M0 Task 9 (S8 recon) and deliberately **not** resolved there, because
-resolving it in M0 would have enshrined one reading of a conflict in the spec.
+A second constraint ruled out automating the push: `GITHUB_TOKEN` is scoped to its own
+repository, so a cross-repo write needs a stored PAT or GitHub App. That credential
+controls what `brew install coffee-bar` fetches. On a project whose pitch is an
+auditable helper with no network egress, that is a real supply-chain surface, and about
+three releases are planned.
 
-Handoff §15.4 mode 3 says *"managed settings present"* → `passive`. Its own
-justification is narrower: a generic `OTEL_EXPORTER_OTLP_ENDPOINT` in managed settings
-governs every signal and strips lower-precedence overrides, so mode 1 is unavailable
-**there**. Those are not the same rule:
+### The residual risk, named because it was argued
+
+The recommendation panel returned **HARD-DISSENT** on this decision and preferred
+keeping one repo with the release job opening a PR. Its objection is sound and is not
+dismissed: hand-editing the formula replaces an automated chain — hex-alphabet check,
+64-character length check, `grep -c` substitution counts, and `ruby -c` — with human
+transcription of a URL and a 64-character digest.
+
+The user overrode the dissent, accepting the tap layout. The objection binds the
+implementation instead:
+
+1. Port the existing checks from `release.yml` into a script in the tap repo, run by
+   the tap's own CI on every pull request. The checks must fail the PR, not merely
+   report.
+2. Never hand-type the digest. The release job prints it, and the human copies it.
+3. The tap's CI must run `brew audit --strict` and install the formula before merge, so
+   a wrong digest fails there rather than in a user's terminal.
+
+Without item 1 the panel's objection stands unanswered.
+
+### M4 execution checklist
+
+- [ ] Create `ArangoGutierrez/homebrew-coffee-bar` (outward-facing — needs explicit approval)
+- [ ] Move `Formula/coffee-bar.rb` there; delete `Formula/` from this repo
+- [ ] Strip the `formula` job from `release.yml`; keep the `verify` job
+- [ ] Port the substitution checks into the tap's CI, per the three items above
+- [ ] Update `README.md` to the one-argument `brew tap ArangoGutierrez/coffee-bar`
+- [ ] Enable branch protection on `main`, required check `build-test` (`ci.yml`)
+
+### Two related residuals, still open
+
+The workflow checksums GitHub's **generated source tarball**, which is not contractually
+byte-stable. A release-asset tarball uploaded by the job is the robust form. This moves
+with the formula and is not fixed by the decision above.
+
+The workflow is named `Release` but creates no GitHub Release. Left out deliberately as
+unrequested outward-facing scope.
+
+## What "managed settings present" means — DECIDED 2026-07-28
+
+**Decision: existence → `passive`. Any managed-settings file disables the Token Tap,
+whether or not it carries OTEL keys.**
+
+Raised during M0 Task 9 (S8 recon) and deliberately not resolved there. Handoff §15.4
+mode 3 says *"managed settings present"* → `passive`. Its own justification is narrower:
+a generic `OTEL_EXPORTER_OTLP_ENDPOINT` in managed settings governs every signal and
+strips lower-precedence overrides, so mode 1 is unavailable **there**. Those are not the
+same rule:
 
 | Reading | A managed file with no OTEL keys | Consequence if wrong |
 |---|---|---|
 | **Existence** → passive | passive | Token Tap needlessly disabled for a fleet whose managed profile has nothing to do with telemetry |
 | **Content** → passive | ownIt / fanOut | coffee-bar writes telemetry config that managed settings silently override, and the user sees nothing |
 
-The shipped M0 probe implements the **content** reading, matching the plan's code. The
-Task 9 implementer's judgement — which I share — is that **existence** is the safer
-rule for an MDM-managed fleet, because the failure direction is "a feature is off and
-says so" rather than "a feature is on and silently broken".
+The decision picks the failure direction: **a feature that is off and says so** beats a
+feature that is on and silently broken. An MDM-managed fleet is exactly where the user
+has least ability to diagnose the silent case.
 
-Not decided now because M0's job is to *report* what it found, not to set policy. The
-`TelemetryMode` enum is recon output. M7 owns the decision, and must make it before
-the Token Tap writes anything.
+### Measured, so the basis is on the record
 
-Related gaps in the same probe, all deliberate M0 scope limits:
+Taken on the development host, 2026-07-28:
+
+| Input | Value |
+|---|---|
+| `/Library/Application Support/ClaudeCode/managed-settings.json` | absent |
+| `~/.claude/settings.json` mentions `OTEL_` | 0 |
+| `~/.codex/config.toml` has `[otel]` | 0 |
+
+Both readings return `ownIt` here. **This host cannot discriminate them**, which
+confirms the recorded S8 answer and establishes that no local measurement favours
+either rule. The choice is policy, and no future measurement on this machine will
+settle it.
+
+The recommendation panel returned **HARD-DISSENT**, preferring deferral on the grounds
+that the existence rule is broader than the spec's own justification requires. That is
+accurate, and it is the deliberate content of the decision rather than an oversight.
+The user overrode the dissent. The counterweight the dissent did not price: this
+question had already been carried forward unresolved by three documents, and M7 would
+have inherited it with no more evidence than exists today.
+
+### What changes, and what does not
+
+**No code changes now.** `TelemetryRecon.detectMode()` keeps the content reading. M0's
+job is to report, and the probe already emits `managedSettingsPresent` and
+`userSettingsHasOTEL` as separate evidence keys, so both signals survive in every
+report. M7 applies the rule at its own call site.
+
+**Binding on M7:** treat `managedSettingsPresent == true` as `passive`, regardless of
+`userSettingsHasOTEL`. Tell the user the Tap is off and why. Do not cache the result —
+an MDM-managed machine can acquire managed settings at any time.
+
+Related gaps in the same probe, all deliberate M0 scope limits and none of them closed
+by this decision:
 - Only three sources are inspected. **Live `OTEL_*` environment variables are
   invisible**, and §15.4's precedence story is largely about env vars. This is the
   biggest gap and the obvious next increment.

@@ -18,11 +18,13 @@ Nothing is released yet: there is no tag, so there is nothing to
 `brew install` today. Build from source as above. That needs macOS 14 or
 later and a Swift 6 toolchain (Xcode 16 or later).
 
-`Formula/coffee-bar.rb` in this repo is the Homebrew tap. It becomes usable at
-the first tagged release, when `.github/workflows/release.yml` pins it to that
-tag's source tarball:
+Homebrew support arrives with M4. The formula moves to a dedicated tap repo,
+`ArangoGutierrez/homebrew-coffee-bar`, because `brew tap user/repo` resolves to
+`github.com/user/homebrew-repo` — a `Formula/` directory in this repo is not
+tappable by the conventional command. See `docs/ROADMAP.md`. The install will
+then be:
 
-    brew tap ArangoGutierrez/coffee-bar https://github.com/ArangoGutierrez/coffee-bar
+    brew tap ArangoGutierrez/coffee-bar
     brew install coffee-bar
 
 The formula builds from source, so the CLI needs no notarisation. It installs

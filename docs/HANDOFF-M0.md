@@ -45,7 +45,7 @@ Twelve tasks, all built, all closed with adversarial review + mutation-verified 
 
 ## Decisions made (from the ledger, not transcript-mined)
 
-- **v0.1 re-scoped**: M0+M1+M2+M3+M4. Lid-closed moved to M5; new M4 = OSS repo/CI/Homebrew. v0.1 requires no root, no kernel flags, no App Store.
+- **v0.1 re-scoped** (2026-07-27): lid-closed moved to M5; new M4 = OSS repo/CI/Homebrew. v0.1 requires no root, no kernel flags, no App Store. **Superseded 2026-07-28** — v0.1 is now M1+M2+M4, and M3 ships in v0.2. See `docs/ROADMAP.md`.
 - **No hidden durations** — if the UI exposes no time control, behaviour is indefinite. The M5 8h TTL is a safety interlock on a global flag, not a convenience timer.
 - **Probe holds only `PreventUserIdleSystemSleep`**, never the display assertion (§6.1). Guarded in *both* components after a review found one guard covered only one.
 - **M5 is NOT "install-mechanism-only"** — corrected. `SMAppService` takes a bundled plist by name, so `install(binaryPath:)` disappears. Hoisted to `WatchdogSupervising` so M5 is a second conformer.
@@ -112,11 +112,25 @@ git combined both versions of `ProbeRun_test.swift` textually, reported success,
 no conflict markers, and left a stale reference to a now-private method. It did not
 compile. A clean merge is not a correct merge; build and test after every one.
 
-## Open decisions needing the user
+## Open decisions — ALL THREE CLOSED 2026-07-28
 
-- **Release job pushes to `main`** while branch protection is an M4 deliverable. Ranked options in `ROADMAP.md`; a separate tap repo is my recommendation.
-- **M7**: what "managed settings present" means — existence vs OTEL-content. Both readings and their failure directions are recorded.
-- **v0.1 timing**: not achievable in a day. M1–M4 need their own spec+plan cycles. M1-alone as v0.1 is the defensible cut if speed matters.
+Resolved with the user in session `1ff83480`. Full reasoning, evidence and the
+execution checklists live in `docs/ROADMAP.md`. Summary:
+
+- **Release job and `main`** → the formula moves to a separate tap repo,
+  `ArangoGutierrez/homebrew-coffee-bar`. The release job stops writing to any branch;
+  a human pins the formula per release. Decided on a measured fact: `brew tap
+  user/repo` resolves to `github.com/user/homebrew-repo`, so a `Formula/` directory
+  in this repo is not tappable by the conventional command. The panel HARD-DISSENTed
+  over losing the automated checksum verification; the user overrode it, and the
+  objection binds M4 — the tap's CI must carry those checks.
+- **M7 "managed settings present"** → **existence** implies `passive`. No code change
+  now; the M0 probe keeps the content reading and already reports both signals
+  separately. The rule binds M7 at its call site. The panel HARD-DISSENTed for
+  deferral; the user overrode it.
+- **v0.1 cut** → **M1 + M2 + M4**. M3 (Codex and Cursor adapters) moves to v0.2. M1
+  alone cannot bind the assertion to agent state, so it cannot support the README's
+  central claim. The panel returned HOLD.
 
 ## Verification before claiming done
 
