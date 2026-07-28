@@ -3,6 +3,8 @@
 
 import Testing
 import Foundation
+import IOKit.ps
+import IOKit.pwr_mgt
 import CoffeeBarCore
 @testable import CoffeeBarPower
 
@@ -107,6 +109,91 @@ private struct PmsetReport {
     let first = SystemPowerReader().read()
     let second = SystemPowerReader().read()
     #expect(first == second)
+}
+
+// MARK: - The pure reading decision
+
+// A UPS is not testable on a developer's desk and not present on a CI runner,
+// so the choice between a UPS and an internal battery is decided on synthetic
+// input. Same reason `level(from:)` and `onBattery(providingType:)` are pure in
+// BaselineProbes.swift: machine topology is not a test.
+
+private func upsDescription(percent: Int,
+                            state: String = kIOPSACPowerValue) -> [String: Any] {
+    [kIOPSTypeKey: kIOPSUPSType,
+     kIOPSCurrentCapacityKey: percent,
+     kIOPSMaxCapacityKey: 100,
+     kIOPSPowerSourceStateKey: state]
+}
+
+private func internalBatteryDescription(percent: Int,
+                                        state: String = kIOPSBatteryPowerValue) -> [String: Any] {
+    [kIOPSTypeKey: kIOPSInternalBatteryType,
+     kIOPSCurrentCapacityKey: percent,
+     kIOPSMaxCapacityKey: 100,
+     kIOPSPowerSourceStateKey: state]
+}
+
+@Test func aUPSNeverSuppliesTheBatteryPercentage() {
+    // The UPS is listed FIRST. Taking the first source that parses reports the
+    // UPS charge as this machine's battery percentage, so §8.1's battery floor
+    // would gate on the UPS instead of on the battery that is actually
+    // draining. The percent must come from the internal battery only.
+    let reading = SystemPowerReader.reading(
+        from: [upsDescription(percent: 55), internalBatteryDescription(percent: 42)],
+        providingType: kIOPSBatteryPowerValue)
+
+    #expect(reading.percent == 42, "the UPS charge of 55 must not be reported")
+    #expect(reading.source == .battery)
+}
+
+@Test func aUPSAloneReportsNoBatteryPercentage() {
+    // A desktop with a UPS attached has no internal battery. Reporting the UPS
+    // charge here would make §8.1 suppress a hold on a machine that cannot run
+    // its own battery down.
+    let reading = SystemPowerReader.reading(from: [upsDescription(percent: 55)],
+                                            providingType: kIOPSACPowerValue)
+
+    #expect(reading.percent == nil)
+    #expect(reading.source == .ac)
+}
+
+@Test func theReadingSourceFollowsTheProvidingPowerSourceType() {
+    // `IOPSGetProvidingPowerSourceType` is the single authoritative answer, and
+    // it is what M0's `isOnBattery()` already uses. Expected values are
+    // literals, not re-derived from `onBattery(providingType:)`, so this fails
+    // for a reading that decides the source by any other mechanism.
+    //
+    // UPS power and an unreadable type are both `.ac`: BaselineProbes.swift:101
+    // documents that a UPS is an external supply, not "on battery".
+    let cases: [(String?, PowerSource)] = [
+        (kIOPSACPowerValue, .ac),
+        (kIOPSBatteryPowerValue, .battery),
+        (kIOPMUPSPowerKey, .ac),
+        (nil, .ac),
+    ]
+    for (providingType, expected) in cases {
+        let reading = SystemPowerReader.reading(
+            from: [internalBatteryDescription(percent: 50)],
+            providingType: providingType)
+        #expect(reading.source == expected,
+                "providingType \(providingType ?? "nil") gave \(reading.source)")
+        #expect(reading.percent == 50, "the percent must not depend on the source")
+    }
+}
+
+@Test func aPerSourceStateKeyNeverOverridesTheProvidingType() {
+    // The pre-fix `read()` read `kIOPSPowerSourceStateKey` off whichever source
+    // it picked first. That is the second, disagreeing mechanism this type used
+    // to answer "is this machine on battery". Here the battery's own state key
+    // says Battery Power while the authoritative call says AC: the authority
+    // wins, and `read()` and `isOnBattery()` cannot disagree.
+    let reading = SystemPowerReader.reading(
+        from: [internalBatteryDescription(percent: 30, state: kIOPSBatteryPowerValue)],
+        providingType: kIOPSACPowerValue)
+
+    #expect(reading.source == .ac)
+    #expect(reading.percent == 30)
 }
 
 @Test func readingIsCheapEnoughToPoll() {
