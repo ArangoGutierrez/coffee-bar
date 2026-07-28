@@ -250,7 +250,55 @@ explicit approval, and it must be reverted afterwards.
 
 ---
 
-## 11. Acceptance
+## 11. Assertion self-description — measured against `caffeinate`
+
+Found on 2026-07-28 while verifying M1 on real hardware, by comparing our live
+assertion with Apple's tool side by side.
+
+`caffeinate` is not a different mechanism. It links `IOKit.framework` and calls
+`IOPMAssertionCreateWithDescription` and `IOPMAssertionSetProperty`. Verified:
+
+```
+$ otool -L /usr/bin/caffeinate
+    /System/Library/Frameworks/IOKit.framework/Versions/A/IOKit
+$ nm -u /usr/bin/caffeinate | grep IOPMAssertion
+    _IOPMAssertionCreateWithDescription
+    _IOPMAssertionSetProperty
+```
+
+`AssertionHolder` uses the simpler `IOPMAssertionCreateWithName`. The visible
+difference, from one `pmset -g assertions` run with both live:
+
+```
+pid 75894(caffeinate): PreventUserIdleSystemSleep named: "caffeinate command-line tool"
+	Details: caffeinate asserting for 300 secs
+	Localized=THE CAFFEINATE TOOL IS PREVENTING SLEEP.
+pid 73820(coffee-bar): PreventUserIdleSystemSleep named: "coffee-bar is serving"
+```
+
+We win on attribution: our name says which product is responsible, and
+`caffeinate`'s does not. **We lose on self-description.** It carries `Details`
+and a localized sentence; we carry neither.
+
+That is backwards for a product whose pitch is transparency about what keeps a
+Mac awake. M2 should move `AssertionHolder` to
+`IOPMAssertionCreateWithDescription` and populate:
+
+- `kIOPMAssertionDetailsKey` — which agent session is responsible, once ingest
+  exists. That information does not exist until M2, which is why this lands here
+  rather than in M1.
+- `kIOPMAssertionLocalizedDescriptionKey` — a human sentence.
+
+**Constraints.** `AssertionHolder_test.swift` already asserts the live type set
+is exactly `["PreventUserIdleSystemSleep"]` by reading
+`IOPMCopyAssertionsByProcess`. That guard must keep passing unchanged: a richer
+description must not add an assertion type. Add a test that reads the new keys
+back out of live IOKit state, not off the holder's own bookkeeping — the
+existing suite's discipline.
+
+---
+
+## 12. Acceptance
 
 - A real Claude Code session drives the menu-bar glyph without the user touching
   the toggle.
