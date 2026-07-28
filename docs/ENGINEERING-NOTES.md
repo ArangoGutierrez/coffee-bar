@@ -105,6 +105,41 @@ test-covered; it is a code-review invariant.
 
 ---
 
+## M5 is NOT "install mechanism only" — a claim I got wrong three times
+
+I wrote, in this file and in two commit messages, that M5 swaps only the *installation*
+mechanism (plain plist + `launchctl bootstrap` → `SMAppService`) while the supervised
+logic carries over unchanged. A Principal Engineer review showed that is false.
+
+`SMAppService.daemon(plistName:)` registers a **static, code-signed plist shipped inside
+the app bundle, referenced by name**. There is no path argument, no generated XML, and
+no `launchctl` subprocess. So `plistContents(binaryPath:)`, `install(binaryPath:)` and
+the `CommandRunning` injection are not implementation details that survive the
+migration — they are precisely the public surface that **disappears**. Migrating means
+changing every call site, not swapping one type.
+
+Worse, every parameter that M5 deletes is also where M0's root-privilege exposure
+lives: XML injection through `binaryPath`, absent validation that the daemon's program
+is root-owned, and a caller-supplied `plistURL`. The API makes the dangerous thing easy
+and the safe thing optional.
+
+The fix, applied in M0 rather than deferred: hoist to
+
+```swift
+protocol WatchdogSupervising {
+    func install() throws
+    func uninstall() throws
+}
+```
+
+with the binary path resolved **and validated inside** the implementation. M5 then
+becomes a second conformer with no caller churn, and the injection surface never
+existed to begin with.
+
+Lesson worth keeping separately from the fix: "the migration is mechanism-only" was an
+assumption I recorded as a fact and then cited twice more as though it had been
+checked. It had not — nobody had read what `SMAppService` actually takes as input.
+
 ## M5 security precondition
 
 The journal is an **instruction to a root process**. It currently lands `0644` in a
