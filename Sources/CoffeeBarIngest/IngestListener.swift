@@ -413,6 +413,13 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
     private func finish(_ connection: NWConnection, state: ConnectionState) {
         guard state.claimRelease() else { return }
         state.timeout?.cancel()
+        // Cancelling is NOT releasing. The work item's block captures `state`
+        // strongly, and `state` owns the item, so leaving this set keeps
+        // `state -> timeout -> block -> state` alive as an island nothing can
+        // reach and nothing ever frees. `state.framer` holds the whole raw POST,
+        // so every served request would pin its bytes for the life of the
+        // process. Measured before this line existed: 0 of 2200 states freed.
+        state.timeout = nil
         lock.lock()
         // Clamped because `stop()` zeroes the counter while connections may
         // still be draining.
