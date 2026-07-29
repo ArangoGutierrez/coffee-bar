@@ -63,6 +63,32 @@ private func post(_ json: String, to socketPath: String) throws -> Int32 {
     return process.terminationStatus
 }
 
+/// Posts a body that is too large to pass through `argv`.
+///
+/// `ARG_MAX` is 1 MiB on macOS (`getconf ARG_MAX`) and bounds the arguments and
+/// the environment TOGETHER, so a body near the 1 MiB request cap cannot ride on
+/// the command line the way `post(_:to:)` sends one. The payload goes to a file
+/// instead.
+///
+/// `--data-binary` rather than `--data`: `--data` strips newlines, and a test
+/// about exact framing must send exactly the bytes on disk.
+@discardableResult
+private func post(contentsOfFile path: String, to socketPath: String) throws -> Int32 {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+    process.arguments = ["--silent", "--show-error", "--fail",
+                         "--unix-socket", socketPath,
+                         "-X", "POST",
+                         "-H", "Content-Type: application/json",
+                         "--data-binary", "@\(path)",
+                         "http://localhost/ingest"]
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    try process.run()
+    process.waitUntilExit()
+    return process.terminationStatus
+}
+
 /// A raw `AF_UNIX` client, for the two things `curl` cannot express: a half-open
 /// connection that sends an incomplete header and then waits, and a direct look
 /// at whether the server has closed its end.
@@ -554,6 +580,97 @@ private func waitUntilNothingAnswers(at path: String) {
     #expect(collected.all.map(\.sessionID) == ["s0", "s1", "s2"])
     pump(until: { listener.activeConnectionCount == 0 })
     #expect(listener.activeConnectionCount == 0)
+}
+
+// MARK: - The buffered payload is released (audit finding B3)
+
+@Test func everyServedRequestReleasesTheStateHoldingItsRawBytes() throws {
+    // Named bug this catches: `finish()` cancels the idle timer and leaves
+    // `state.timeout` still pointing at the work item. That item's block
+    // captures `state` STRONGLY, so `state -> timeout -> block -> state` is an
+    // island nothing can reach and nothing ever frees. `cancel()` does not
+    // release a work item's captures, so cancelling alone does not break it.
+    //
+    // Why it is a PRIVACY defect and not merely untidy: every `ConnectionState`
+    // owns a framer, and the framer keeps the whole raw POST in a stored
+    // property. A state object that outlives its connection therefore pins the
+    // assistant reply text and the conversation-transcript path in memory for
+    // the life of the process. Design §7 forbids that outright. The audit
+    // measured 0 of 2200 states freed and 6,405,780 bytes retained.
+    //
+    // THE SETTLE WINDOW MUST EXCEED THE IDLE TIMEOUT, or this test proves
+    // NOTHING. A pending `asyncAfter` holds its work item until the deadline in
+    // the FIXED code too, so an observation taken before the deadline sees a
+    // live state in BOTH arms. This exact confound produced a wrong result
+    // during the audit: a 100 s deadline reported the fixed tree as leaking.
+    // The injected timeout here is 1 s and the window below is 8 s.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let collected = Collected()
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path,
+                                            idleTimeout: 1)
+    defer { listener.stop() }
+    try listener.start { event in collected.record(event, onMain: Thread.isMainThread) }
+    pump(until: { listener.isReady })
+
+    let posts = 5
+    for index in 0..<posts {
+        let json = #"{"hook_event_name":"Stop","session_id":"s\#(index)","transcript_path":"/tmp/t.jsonl","last_assistant_message":"reply text that must not stay resident"}"#
+        #expect(try post(json, to: sandbox.path) == 0, "post \(index) was refused")
+    }
+    pump(until: { collected.all.count == posts })
+    #expect(collected.all.count == posts)
+
+    // Without this the assertion below passes trivially whenever the posts did
+    // not reach the listener at all: nothing built, so nothing alive.
+    #expect(listener.connectionCensus.createdCount == posts,
+            "the listener built \(listener.connectionCensus.createdCount) states for \(posts) posts; the leak assertion would be vacuous")
+
+    pump(until: { listener.connectionCensus.liveCount == 0 }, seconds: 8)
+    #expect(listener.connectionCensus.liveCount == 0,
+            "\(listener.connectionCensus.liveCount) of \(posts) ConnectionState objects were never freed; each still holds the raw POST bytes")
+}
+
+// MARK: - Reassembly across receives
+
+@Test func aBodyLargerThanTheReceiveChunkIsReassembled() throws {
+    // `receiveChunkBytes` (64 KiB) is deliberately NOT `maximumBytes` (1 MiB),
+    // and until now nothing exercised the gap between them. Named bug this
+    // catches: a receive loop that treats ONE delivery as ONE request. A body
+    // over the chunk size would then never frame — it would sit on `needMore`
+    // until the idle timeout closed it — and the traffic lost is exactly the
+    // traffic the cap was raised to admit: a reply carrying a large code block.
+    //
+    // The body is 256 KiB, four times the receive chunk and a quarter of the
+    // request cap, so it can neither arrive in one receive nor be refused.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let collected = Collected()
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+    try listener.start { event in collected.record(event, onMain: Thread.isMainThread) }
+    pump(until: { listener.isReady })
+
+    let filler = String(repeating: "x", count: 262_144)
+    let json = #"{"hook_event_name":"Stop","session_id":"reassembled","last_assistant_message":"\#(filler)"}"#
+    // Pinned to the two literals this test sits between. A future edit that
+    // moves either bound past the body size makes the test vacuous silently.
+    #expect(json.utf8.count > 65_536,
+            "the body is \(json.utf8.count) bytes and never crosses the 64 KiB receive chunk")
+    #expect(json.utf8.count < 1_048_576,
+            "the body is \(json.utf8.count) bytes and exceeds the 1 MiB request cap")
+
+    let payload = sandbox.directory.appending(path: "large.json").path
+    try json.write(toFile: payload, atomically: true, encoding: .utf8)
+
+    #expect(try post(contentsOfFile: payload, to: sandbox.path) == 0,
+            "a request spanning several receives was refused")
+    pump(until: { !collected.all.isEmpty })
+
+    let event = try #require(collected.all.first)
+    #expect(event.sessionID == "reassembled")
+    #expect(collected.all.count == 1,
+            "a request spanning several receives was delivered \(collected.all.count) times")
 }
 
 // MARK: - The declared surface

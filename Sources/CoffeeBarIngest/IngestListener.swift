@@ -91,6 +91,12 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
     private var activeConnections = 0
     private var ready = false
 
+    /// Lifetime census for the per-connection state. See `ConnectionCensus`.
+    ///
+    /// Internal, so a test can prove those objects are RELEASED. Nothing on the
+    /// serving path reads it.
+    let connectionCensus = ConnectionCensus()
+
     public init(socketPath: String = UnixSocketIngestListener.defaultSocketPath,
                 idleTimeout: TimeInterval = UnixSocketIngestListener.defaultIdleTimeout,
                 maximumConnections: Int = UnixSocketIngestListener.defaultMaximumConnections) {
@@ -293,6 +299,51 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
 
     // MARK: - Serving one connection
 
+    /// Counts the `ConnectionState` objects made and freed.
+    ///
+    /// It exists so a test can prove they are FREED. `ConnectionState` owns a
+    /// framer, and the framer keeps the entire raw POST — headers and body — in
+    /// a stored property. One state object that outlives its connection
+    /// therefore pins that request's bytes, the assistant reply text among them,
+    /// for the life of the process. Design §7 forbids reading conversation
+    /// content at all, so retaining it is the same defect at rest.
+    ///
+    /// Per listener rather than process-wide, deliberately. `swift-testing` runs
+    /// tests in parallel, so a global counter would be moved by every other test
+    /// that serves a connection, and no test could own its own reading.
+    ///
+    /// `made` carries as much weight as `live`: an assertion that nothing is
+    /// alive passes on its own whenever nothing was ever built, so a test needs
+    /// both numbers to say anything.
+    final class ConnectionCensus: @unchecked Sendable {
+        private let lock = NSLock()
+        private var made = 0
+        private var live = 0
+
+        fileprivate func noteMade() {
+            lock.lock(); defer { lock.unlock() }
+            made += 1
+            live += 1
+        }
+
+        fileprivate func noteFreed() {
+            lock.lock(); defer { lock.unlock() }
+            live -= 1
+        }
+
+        /// How many per-connection state objects exist right now.
+        var liveCount: Int {
+            lock.lock(); defer { lock.unlock() }
+            return live
+        }
+
+        /// How many have been made since this listener was created.
+        var createdCount: Int {
+            lock.lock(); defer { lock.unlock() }
+            return made
+        }
+    }
+
     /// Per-connection state.
     ///
     /// Every field is touched only on `DispatchQueue.main` — the listener, each
@@ -303,6 +354,14 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
         var framer = HTTPRequestFramer()
         var timeout: DispatchWorkItem?
         private var released = false
+        private let census: ConnectionCensus
+
+        init(census: ConnectionCensus) {
+            self.census = census
+            census.noteMade()
+        }
+
+        deinit { census.noteFreed() }
 
         /// True exactly once. The idle timer and the final frame race each
         /// other, and the connection slot must come back exactly one time.
@@ -336,7 +395,7 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
             return
         }
 
-        let state = ConnectionState()
+        let state = ConnectionState(census: connectionCensus)
         // A peer that opens a connection and then says nothing produces no
         // complete frame, no `isComplete` and no error, so nothing else in the
         // receive loop would ever end it.
