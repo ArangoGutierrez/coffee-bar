@@ -1,3 +1,6 @@
+// Copyright 2026 Carlos Eduardo Arango Gutierrez
+// SPDX-License-Identifier: Apache-2.0
+
 import Testing
 @testable import CoffeeBarCore
 
