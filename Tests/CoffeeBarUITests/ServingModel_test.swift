@@ -805,3 +805,124 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     #expect(advisory.lowercased().contains("not receiving") == false,
             "claims events are not arriving, which a file read cannot establish: \(advisory)")
 }
+
+// MARK: - A refused On click says so, and says where the control landed
+
+// M1 design §5.4 rules out asserting on rendered AppKit text, so the wording
+// lives on the model and is asserted here. `PanelView` renders it verbatim. A
+// sentence composed in the view would be a sentence no check reads, which is
+// how this defect stayed invisible: `suppressionLine` used to be built there.
+
+@MainActor
+@Test func aRefusedOnClickSaysItWasRefusedAndWhereTheControlLanded() {
+    // Situation A. The user stood on Auto, clicked On, and the floor refused.
+    // The app moved their control for them.
+    //
+    // Named bug this catches: rendering the battery sentence alone. The picker
+    // snaps back to Auto and no sentence says the app moved it, so a user who
+    // clicked On reads a line about the battery and believes On is honoured.
+    let reader = FakeReader(source: .battery, percent: 19)
+    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+
+    model.intent = .serve
+
+    #expect(model.intent == .auto, "the I4 fix must still return the control to the standing position")
+    #expect(model.suppressionAdvisory == """
+        At 19% — coffee-bar does not hold at or below 20%. Your On click was \
+        refused, so the control is back on Auto.
+        """)
+}
+
+@MainActor
+@Test func aSuppressedAutoHoldNeverClaimsAClickWasRefused() {
+    // Situation B. The user clicked NOTHING. A working session asks for the
+    // hold, the floor refuses it, and the control has not moved.
+    //
+    // Named bug this catches: situation B borrowing situation A's sentence. The
+    // panel tells a user who touched nothing that their click was refused, and
+    // points at a control that is exactly where they left it.
+    let reader = FakeReader(source: .battery, percent: 19)
+    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+
+    model.ingest(HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
+
+    #expect(model.intent == .auto, "no click happened")
+    #expect(model.suppression == .batteryFloor(percent: 19, floor: 20),
+            "precondition: without a live suppression there is no sentence to get wrong")
+    #expect(model.suppressionAdvisory == "At 19% — coffee-bar does not hold at or below 20%.")
+}
+
+@MainActor
+@Test func theRefusalSentenceGoesWhenTheBatteryRecovers() {
+    // The refusal claim must not outlive the condition. It goes exactly when the
+    // orange line goes.
+    //
+    // Named bug this catches: latching the refusal outside the filter in
+    // `reason(_:stillTrueOf:)`. The battery recovers, the floor stops refusing
+    // anything, and the panel goes on telling the user their click was refused.
+    let reader = FakeReader(source: .battery, percent: 19)
+    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+
+    model.intent = .serve
+    #expect(model.suppressionAdvisory?.contains("was refused") == true,
+            "precondition: the refusal reached the panel at all")
+
+    reader.set(source: .battery, percent: 25)
+    model.refresh()
+
+    #expect(model.suppressionAdvisory == nil)
+    // The STATE behind the sentence, not the sentence alone. Two mechanisms
+    // drop the line — the filter in `refresh()` and the `suppression` guard in
+    // `suppressionAdvisory` — so asserting the string only is green with either
+    // one broken, and a refusal latched past its condition sits there waiting
+    // for the first reader that does not guard. Measured: deleting the filter
+    // leaves the string assertion above passing.
+    #expect(model.refusedServeReturnedTo == nil)
+}
+
+@MainActor
+@Test func aSecondRefusedOnClickStillReportsTheRefusal() {
+    // The user tries again. The floor has not moved, so the answer is the same
+    // — and it has to be SAID again.
+    //
+    // Named bug this catches: a one-shot flag that is consumed on the first
+    // read, or one that `userToggled(to: .serve)` clears and nothing re-arms.
+    // The second refusal is then silent, which is the failure this whole task
+    // exists to remove.
+    let reader = FakeReader(source: .battery, percent: 19)
+    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+
+    model.intent = .serve
+    #expect(model.suppressionAdvisory?.contains("was refused") == true,
+            "precondition: the first refusal reached the panel")
+
+    model.intent = .serve
+
+    #expect(model.intent == .auto)
+    #expect(model.suppressionAdvisory == """
+        At 19% — coffee-bar does not hold at or below 20%. Your On click was \
+        refused, so the control is back on Auto.
+        """)
+}
+
+@MainActor
+@Test func aRefusedOnClickFromOffNamesOffNotAuto() {
+    // The standing position is not always Auto. A user who vetoed serving
+    // outright, then clicked On, lands back on the veto — and the sentence has
+    // to name the position they actually landed on.
+    //
+    // Named bug this catches: hard-coding "Auto" in the sentence. The control
+    // reads Off and the panel says Auto, so the one line that exists to explain
+    // the move describes a move that did not happen.
+    let reader = FakeReader(source: .battery, percent: 15)
+    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+
+    model.intent = .stop
+    model.intent = .serve
+
+    #expect(model.intent == .stop)
+    #expect(model.suppressionAdvisory == """
+        At 15% — coffee-bar does not hold at or below 20%. Your On click was \
+        refused, so the control is back on Off.
+        """)
+}

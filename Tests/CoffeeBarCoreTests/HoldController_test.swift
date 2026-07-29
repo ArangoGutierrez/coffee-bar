@@ -360,3 +360,66 @@ private func session(_ state: SessionState) -> AgentSession {
                        sessions: [session(.working)]).idleSleepAssertion == false,
             "a click that failed undid the user's off switch")
 }
+
+// MARK: - A refused On click is distinguishable from a quiet suppression
+
+@Test func aRefusedOnClickRecordsWhereTheControlLanded() {
+    // The panel has to tell "the app moved my control" apart from "the floor is
+    // refusing a hold I never asked for". `lastSuppression` is recorded for
+    // BOTH, so by itself it cannot carry that difference.
+    //
+    // Named bug this catches: cancelling the `.serve` and recording nothing.
+    // The control snaps back to Auto with no state saying it moved, so the panel
+    // shows a refused click and an untouched control the same way.
+    var c = HoldController()
+    #expect(c.cancelledServeReturnedTo == nil, "a fresh controller has refused nothing")
+
+    c.userToggled(to: .serve)
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 19)
+
+    #expect(c.intent == .auto)
+    #expect(c.cancelledServeReturnedTo == .auto)
+}
+
+@Test func aSuppressionThatCancelsNoClickClearsAStaleCancel() {
+    // The record is written in lockstep with `lastSuppression`, so a NEW
+    // suppression that cancels nothing has to wipe the old cancel.
+    //
+    // Named bug this catches: writing the record on the `.serve` branch only and
+    // never clearing it. One refused click then replays onto every later
+    // suppression under `.auto`, so a user who touched nothing is told their
+    // click was refused.
+    var c = HoldController()
+    c.userToggled(to: .serve)
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 19)
+    #expect(c.cancelledServeReturnedTo == .auto, "precondition: a cancel is on record")
+
+    // No click. A working session asks for the hold under `.auto`, and the same
+    // floor refuses it.
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 19,
+                   sessions: [session(.working)])
+
+    #expect(c.lastSuppression == .batteryFloor(percent: 19, floor: 20),
+            "precondition: that evaluate really did suppress")
+    #expect(c.cancelledServeReturnedTo == nil)
+}
+
+@Test func movingTheControlByHandClearsTheRefusalRecord() {
+    // `lastSuppression` survives an Off click on purpose, and
+    // `togglingOffStopsTheHoldAndKeepsTheReason` pins that. The cancel record
+    // must NOT survive it, because it names a position the user has just left.
+    //
+    // Named bug this catches: clearing the record only on `.serve`, copying what
+    // `lastSuppression` does. The user is refused from Auto, clicks Off, and the
+    // panel says the control is back on Auto while the control reads Off.
+    var c = HoldController()
+    c.userToggled(to: .serve)
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 12)
+    #expect(c.cancelledServeReturnedTo == .auto, "precondition: a cancel is on record")
+
+    c.userToggled(to: .stop)
+
+    #expect(c.cancelledServeReturnedTo == nil)
+    #expect(c.lastSuppression == .batteryFloor(percent: 12, floor: 20),
+            "the reason the user has not read yet must still survive an Off click")
+}
