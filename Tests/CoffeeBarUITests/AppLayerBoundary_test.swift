@@ -10,20 +10,45 @@ import Testing
 //
 // Every content check below reads only the files the scan reaches. That makes
 // the SCANNED SET the load-bearing part: a file the walk never visits is a
-// file no check can see, and a green suite then means nothing. Three proven
-// ways to get a file compiled into the app while the walk misses it:
+// file no check can see, and a green suite then means nothing.
 //
-//   1. a symlinked DIRECTORY inside `Sources/CoffeeBarUI` — SwiftPM compiles
-//      through it, `FileManager.enumerator` refuses to descend into it;
-//   2. a second app-layer target that `CoffeeBarApp` depends on — the walk
-//      reads two fixed directories and knows nothing of the build graph;
-//   3. the app target's directory moving under a `path:` override — the walk
-//      then enumerates a directory that does not exist.
+// So the scanned set is taken from `swift package describe --type json` — the
+// list of files SwiftPM ACTUALLY COMPILES, from the manifest SwiftPM ACTUALLY
+// RESOLVED. It is not read out of `Package.swift` as text, and it is not
+// produced by walking a hard-coded directory. Four proven ways to get a file
+// compiled into the app while a text-and-directory guard misses it:
 //
-// None of the three is a denylist problem: adding names cannot fix a file that
-// is never read. So the structure itself is asserted — the exact file set, and
-// the app layer's exact place in the build graph — and the denylist stays only
-// as a second line of defence.
+//   1. a symlinked DIRECTORY inside the target — SwiftPM compiles through it,
+//      `FileManager.enumerator` refuses to descend into it;
+//   2. a second app-layer target that `CoffeeBarApp` depends on — a walk over
+//      fixed directories knows nothing of the build graph;
+//   3. a `path:` override moving the target's directory — the walk then
+//      enumerates a directory that does not exist;
+//   4. a `path:` override with the OLD directory left behind as a DECOY. This
+//      is the one that defeats a `fileExists(atPath:isDirectory:)` pre-check:
+//      that call proves a directory EXISTS, never that it is the one being
+//      built. The guard scans the decoy, the compiler reads the real
+//      directory, and a live `PreventUserIdleDisplaySleep` ships under a green
+//      suite. Proven: `strings .build/debug/coffee-bar` found the assertion
+//      while all four checks here passed.
+//
+// Asking SwiftPM closes all four at once, because the question stops being
+// "what does the manifest say" and becomes "what did you compile".
+//
+// It also closes escape 4's nastiest variant, where the override lives in
+// `Package@swift-6.swift` and `Package.swift` stays BYTE-IDENTICAL: SwiftPM
+// prefers a version-specific manifest, so a text reader reads one manifest
+// while the build uses another. `swift package describe` reports the manifest
+// it resolved, on whichever toolchain is running. A `Package@swift-6.1.swift`
+// is selected only by the 6.1.x CI toolchain and not by a 6.3 developer
+// machine — the same toolchain split that already shipped the `isolated
+// deinit` defect here — so `swiftPMResolvesExactlyOneManifest` refuses the
+// whole construct on every toolchain as well.
+//
+// None of this is a denylist problem: adding names cannot fix a file that is
+// never read. So the structure itself is asserted — the exact compiled file
+// set, and the app layer's exact place in the build graph — and the denylist
+// stays only as a second line of defence.
 
 /// The package root, resolved from `#filePath`.
 ///
@@ -37,19 +62,22 @@ private var packageRoot: URL {
         .deletingLastPathComponent()    // the package root
 }
 
-/// The two directories that make up the app layer.
-private let appLayerDirectories = [
-    "Sources/CoffeeBarUI",
-    "Sources/CoffeeBarApp",
+/// The two targets that make up the app layer.
+///
+/// Target NAMES, not directories. Where each one lives on disk is SwiftPM's
+/// answer to give, and asking it is what closes the `path:` override escapes.
+private let appLayerTargets = [
+    "CoffeeBarApp",
+    "CoffeeBarUI",
 ]
 
-/// Every entry the app layer is allowed to contain, package-root relative and
+/// Every file the app layer is allowed to compile, package-root relative and
 /// sorted.
 ///
 /// A literal, deliberately. Any file that is added, renamed, moved or linked in
-/// fails `theAppLayerHoldsExactlyTheFilesThisGuardScans` until a human updates
-/// this list. That friction is the point: updating it is the moment somebody
-/// reads the new file against design §6.1.
+/// fails `theAppLayerCompilesExactlyTheFilesThisGuardScans` until a human
+/// updates this list. That friction is the point: updating it is the moment
+/// somebody reads the new file against design §6.1.
 private let expectedAppLayerEntries = [
     "Sources/CoffeeBarApp/main.swift",
     "Sources/CoffeeBarUI/MenuBarGlyphs.swift",
@@ -57,74 +85,181 @@ private let expectedAppLayerEntries = [
     "Sources/CoffeeBarUI/ServingModel.swift",
 ]
 
-private enum BoundaryScanError: Error, CustomStringConvertible {
-    /// An app-layer directory is missing, or is not a directory.
-    ///
-    /// Checked with `fileExists(atPath:isDirectory:)` before the walk, because
-    /// `FileManager.enumerator(at:)` returns a NON-nil enumerator for a missing
-    /// directory and simply yields nothing. Trusting the enumerator alone made
-    /// this case dead code: the app target's directory could move under a
-    /// `path:` override in `Package.swift` and every check here stayed green
-    /// while `main.swift` went unread.
-    case unreadable(String)
+/// How many `.swift` files a correct scan reaches. The content checks assert
+/// this so that neither can pass by reading nothing.
+private let expectedSourceCount = expectedAppLayerEntries.filter { $0.hasSuffix(".swift") }.count
 
-    /// `Package.swift` did not contain what the manifest check looks for.
+private enum BoundaryScanError: Error, CustomStringConvertible {
+    /// `swift package describe` could not be run, or did not answer.
     ///
-    /// Raised rather than returning an empty dependency list, which would let a
-    /// reformatted or renamed target pass the build-graph assertion silently.
-    case unparsableManifest(String)
+    /// Always fatal, never a silent empty result. A guard that cannot find out
+    /// what was compiled must fail; one that shrugs and scans nothing passes
+    /// everything.
+    case describeFailed(String)
+
+    /// The resolved package declares no target by that name.
+    case unknownTarget(String)
+
+    /// A target resolved, but SwiftPM compiles nothing for it.
+    case compilesNothing(String)
 
     var description: String {
         switch self {
-        case .unreadable(let path):
-            return "app-layer directory missing or not a directory: \(path)"
-        case .unparsableManifest(let detail):
-            return "Package.swift: \(detail)"
+        case .describeFailed(let detail):
+            return "swift package describe: \(detail)"
+        case .unknownTarget(let name):
+            return "the resolved package declares no target named \"\(name)\""
+        case .compilesNothing(let name):
+            return "target \"\(name)\" compiles no sources at all"
         }
     }
 }
 
-/// Every entry under the app layer's directories, package-root relative and
-/// sorted.
+/// One target, exactly as SwiftPM resolved it.
+private struct ResolvedTarget: Sendable {
+    /// Package-root relative, whatever `path:` the manifest declared.
+    let path: String
+    /// `path`-relative, and only the files that reach the compiler.
+    let sources: [String]
+    let dependencies: [String]
+}
+
+/// The shape of `swift package describe --type json` that this file reads.
+private struct ManifestDescription: Decodable {
+    struct Target: Decodable {
+        let name: String
+        let path: String
+        let sources: [String]
+        let dependencies: [String]
+
+        private enum CodingKeys: String, CodingKey {
+            case name, path, sources
+            case dependencies = "target_dependencies"
+        }
+
+        init(from decoder: any Decoder) throws {
+            let fields = try decoder.container(keyedBy: CodingKeys.self)
+            name = try fields.decode(String.self, forKey: .name)
+            path = try fields.decode(String.self, forKey: .path)
+            sources = try fields.decode([String].self, forKey: .sources)
+            // Absent, not empty, for a target that depends on nothing.
+            dependencies = try fields.decodeIfPresent([String].self, forKey: .dependencies) ?? []
+        }
+    }
+
+    let targets: [Target]
+}
+
+/// Every target SwiftPM resolved, keyed by name — or the failure to ask.
 ///
-/// Entries, not only `.swift` files, and not only regular files. A symlinked
-/// directory is yielded by the enumerator as an entry of its own even though
-/// the walk will not descend into it, so listing entries is what turns that
-/// escape into a failure.
+/// A global `let`, so SwiftPM is spawned ONCE however many checks read it.
+/// Swift initialises a global lazily and exactly once, which is the whole
+/// reason this is not a function: four checks calling `describe` separately
+/// would quadruple the cost for one unchanging answer.
 ///
-/// Hidden entries are skipped because SwiftPM skips them too: a
-/// `Sources/CoffeeBarUI/.hidden/HiddenProbe.swift` produces no object file and
-/// never appears on the compiler command line, so it cannot reach the app. This
-/// also keeps a stray `.DS_Store` from turning the guard red for no reason.
-private func appLayerEntries() throws -> [String] {
-    // Paths are made relative by stripping this prefix, never by joining the
-    // directory to `lastPathComponent`: that would flatten a nested file down
-    // to a name already on the expected list, and the content checks would then
-    // read the wrong file. An entry that somehow falls outside the package root
-    // keeps its absolute path, matches nothing on the list, and fails.
+/// It holds a `Result` rather than throwing because a global initialiser
+/// cannot throw. Every check calls `.get()`, so a failure to ask still fails
+/// the check.
+private let resolvedTargets: Result<[String: ResolvedTarget], BoundaryScanError> = {
+    do { return .success(try describePackage()) }
+    catch let error as BoundaryScanError { return .failure(error) }
+    catch { return .failure(.describeFailed("\(error)")) }
+}()
+
+/// Asks SwiftPM what it compiles.
+///
+/// Runs with a SCRATCH PATH of its own and a manifest cache inside it. This
+/// runs from inside `swift test`, which holds the package's own `.build`; a
+/// second SwiftPM sharing that directory would contend for the same lock.
+private func describePackage() throws -> [String: ResolvedTarget] {
+    let files = FileManager.default
+    let scratch = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appending(path: "coffee-bar-boundary-\(UUID().uuidString)")
+    let errorLog = scratch.appending(path: "describe.err")
+
+    do {
+        try files.createDirectory(at: scratch, withIntermediateDirectories: true)
+    } catch {
+        throw BoundaryScanError.describeFailed("no scratch directory: \(error)")
+    }
+    defer { try? files.removeItem(at: scratch) }
+
+    guard files.createFile(atPath: errorLog.path, contents: nil),
+          let errorHandle = try? FileHandle(forWritingTo: errorLog)
+    else { throw BoundaryScanError.describeFailed("could not open \(errorLog.path)") }
+    defer { try? errorHandle.close() }
+
+    let output = Pipe()
+    let swiftPM = Process()
+    swiftPM.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    swiftPM.arguments = [
+        "swift", "package",
+        "--package-path", packageRoot.path,
+        "--scratch-path", scratch.path,
+        "--manifest-cache", "local",
+        "describe", "--type", "json",
+    ]
+    swiftPM.standardOutput = output
+    // A FILE, not a second pipe. Draining one pipe while the other fills is
+    // how a two-pipe child wedges, and this check has no business owning that
+    // problem — `CoffeeBarPower.ProbeRun` already does.
+    swiftPM.standardError = errorHandle
+
+    do {
+        try swiftPM.run()
+    } catch {
+        throw BoundaryScanError.describeFailed("could not run it: \(error)")
+    }
+
+    // Read to EOF, THEN wait. The description is a few kilobytes, well inside
+    // the pipe buffer, and stderr goes to a file, so neither end can wedge.
+    let json = output.fileHandleForReading.readDataToEndOfFile()
+    swiftPM.waitUntilExit()
+
+    guard swiftPM.terminationStatus == 0 else {
+        let complaint = (try? String(contentsOf: errorLog, encoding: .utf8)) ?? "(no stderr)"
+        throw BoundaryScanError.describeFailed(
+            "exited \(swiftPM.terminationStatus): \(complaint)")
+    }
+
+    let described: ManifestDescription
+    do {
+        described = try JSONDecoder().decode(ManifestDescription.self, from: json)
+    } catch {
+        throw BoundaryScanError.describeFailed("could not decode the description: \(error)")
+    }
+
+    // A description listing nothing would satisfy every check below by
+    // reaching no file at all.
+    guard described.targets.isEmpty == false else {
+        throw BoundaryScanError.describeFailed("it listed no targets at all")
+    }
+
     let rootPrefix = packageRoot.path + "/"
+    return Dictionary(uniqueKeysWithValues: described.targets.map { target in
+        // SwiftPM reports a package-root relative path today. Normalise anyway,
+        // so an absolute one would not silently miss `expectedAppLayerEntries`.
+        let relative = target.path.hasPrefix(rootPrefix)
+            ? String(target.path.dropFirst(rootPrefix.count))
+            : target.path
+        return (target.name, ResolvedTarget(path: relative,
+                                            sources: target.sources,
+                                            dependencies: target.dependencies))
+    })
+}
+
+/// Every file the app layer's targets compile, package-root relative and
+/// sorted.
+private func appLayerEntries() throws -> [String] {
+    let targets = try resolvedTargets.get()
     var found: [String] = []
 
-    for relativeDirectory in appLayerDirectories {
-        let directory = packageRoot.appending(path: relativeDirectory)
-
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: directory.path,
-                                             isDirectory: &isDirectory),
-              isDirectory.boolValue
-        else { throw BoundaryScanError.unreadable(directory.path) }
-
-        guard let walk = FileManager.default.enumerator(at: directory,
-                                                        includingPropertiesForKeys: nil,
-                                                        options: [.skipsHiddenFiles])
-        else { throw BoundaryScanError.unreadable(directory.path) }
-
-        for case let entry as URL in walk {
-            let path = entry.path
-            found.append(path.hasPrefix(rootPrefix)
-                         ? String(path.dropFirst(rootPrefix.count))
-                         : path)
+    for name in appLayerTargets {
+        guard let target = targets[name] else { throw BoundaryScanError.unknownTarget(name) }
+        guard target.sources.isEmpty == false else {
+            throw BoundaryScanError.compilesNothing(name)
         }
+        found.append(contentsOf: target.sources.map { "\(target.path)/\($0)" })
     }
 
     return found.sorted()
@@ -137,80 +272,92 @@ private func appLayerSources() throws -> [URL] {
         .map { packageRoot.appending(path: $0) }
 }
 
-/// How many `.swift` files a correct scan reaches. The two content checks
-/// assert this so that neither can pass by reading nothing.
-private let expectedSourceCount = expectedAppLayerEntries.filter { $0.hasSuffix(".swift") }.count
-
-/// The `dependencies:` list one target declares in `Package.swift`.
-///
-/// Read from the manifest text rather than from `swift package dump-package`:
-/// spawning SwiftPM from inside `swift test` contends for the same `.build`
-/// lock. The parse throws whenever it cannot find what it looks for, so a
-/// renamed or reformatted target fails loudly instead of yielding an empty list
-/// that would satisfy nothing and pass everything.
-private func manifestDependencies(ofTarget target: String) throws -> [String] {
-    let manifest = try String(contentsOf: packageRoot.appending(path: "Package.swift"),
-                              encoding: .utf8)
-
-    guard let name = manifest.range(of: "name: \"\(target)\"") else {
-        throw BoundaryScanError.unparsableManifest("no target declares name: \"\(target)\"")
-    }
-
-    // Bound the search to this one declaration. The next `name: "` starts the
-    // next target, and an unbounded search would report a later target's list
-    // for a target that declares no dependencies at all.
-    var declaration = manifest[name.upperBound...]
-    if let next = declaration.range(of: "name: \"") {
-        declaration = declaration[..<next.lowerBound]
-    }
-
-    guard let label = declaration.range(of: "dependencies:"),
-          let open = declaration[label.upperBound...].firstIndex(of: "["),
-          let close = declaration[open...].firstIndex(of: "]")
-    else {
-        throw BoundaryScanError.unparsableManifest("no dependencies list for \"\(target)\"")
-    }
-
-    return declaration[declaration.index(after: open)..<close]
-        .split(separator: ",")
-        .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: " \n\t\"")) }
-        .filter { !$0.isEmpty }
+/// The `dependencies:` SwiftPM resolved for one target.
+private func resolvedDependencies(ofTarget name: String) throws -> [String] {
+    let targets = try resolvedTargets.get()
+    guard let target = targets[name] else { throw BoundaryScanError.unknownTarget(name) }
+    return target.dependencies
 }
 
 // MARK: - The scanned set itself
 
-@Test func theAppLayerHoldsExactlyTheFilesThisGuardScans() throws {
+@Test func theAppLayerCompilesExactlyTheFilesThisGuardScans() throws {
     // Named bug this catches: any app-layer file the other checks never read.
     // Proven escapes, each of which compiled into the shipped `coffee-bar`
-    // binary while the old guard stayed green — a symlinked directory
-    // (`LinkProbe.swift.o` was built), and a moved app directory under a
-    // `path:` override, which left `main.swift` unscanned.
+    // binary while a text-and-directory guard stayed green — a symlinked
+    // directory (`LinkProbe.swift.o` was built); a moved app directory under a
+    // `path:` override, which left `main.swift` unscanned; and the same
+    // override with the old directory kept as a DECOY, which left the guard
+    // reading three innocent files while the compiler read three others.
     let found = try appLayerEntries()
     let expected = expectedAppLayerEntries
 
+    // A scan that reached nothing would satisfy every content check below.
+    #expect(found.isEmpty == false,
+            "the boundary guard scanned nothing at \(packageRoot.path)")
+
     #expect(found == expected, """
-        the app layer's file set changed.
+        the app layer's compiled file set changed.
           unexpected: \(found.filter { !expected.contains($0) })
           missing:    \(expected.filter { !found.contains($0) })
-        Every check in this file reads only the files it scans. Update \
+        Every check in this file reads only the files SwiftPM compiles. Update \
         `expectedAppLayerEntries` deliberately, after reading the new file \
         against design §6.1.
         """)
 }
 
 @Test func theAppLayerIsExactlyTwoTargetsDeepInTheBuildGraph() throws {
-    // The file set above covers two fixed directories, so it cannot see a
-    // THIRD app-layer target. Named bug this catches: a
-    // `Sources/CoffeeBarPanelKit` that `CoffeeBarApp` depends on. It compiled
-    // (`Escape.swift.o`), linked into `coffee-bar`, named `IOPMAssertion`, and
-    // both old checks passed — the walk simply never looked there.
+    // The file set above covers two named targets, so it cannot see a THIRD
+    // app-layer target. Named bug this catches: a `Sources/CoffeeBarPanelKit`
+    // that `CoffeeBarApp` depends on. It compiled (`Escape.swift.o`), linked
+    // into `coffee-bar`, named `IOPMAssertion`, and both old checks passed —
+    // the scan simply never looked there.
     //
     // `CoffeeBarUI` is asserted as well as `CoffeeBarApp`: a new target hung off
     // the model rather than off the executable ships in the app just the same.
-    #expect(try manifestDependencies(ofTarget: "CoffeeBarApp") == ["CoffeeBarUI"],
+    //
+    // Read from the RESOLVED graph, not from the manifest text. A text parser
+    // reads the `dependencies:` list of whichever manifest file it opens, and
+    // cannot know that SwiftPM opened a different one.
+    #expect(try resolvedDependencies(ofTarget: "CoffeeBarApp") == ["CoffeeBarUI"],
             "CoffeeBarApp gained a dependency; a new app-layer target is unscanned")
-    #expect(try manifestDependencies(ofTarget: "CoffeeBarUI") == ["CoffeeBarPower"],
+    #expect(try resolvedDependencies(ofTarget: "CoffeeBarUI") == ["CoffeeBarPower"],
             "CoffeeBarUI gained a dependency; a new app-layer target is unscanned")
+}
+
+@Test func swiftPMResolvesExactlyOneManifest() throws {
+    // Named bug this catches: a `Package@swift-6.swift` that redirects the app
+    // layer while `Package.swift` stays byte-identical. SwiftPM prefers
+    // `Package@swift-<major>[.<minor>[.<patch>]].swift` over `Package.swift`,
+    // so the two files disagree and only one of them is built.
+    //
+    // The checks above already read the manifest SwiftPM resolved, so they
+    // catch this ON THE TOOLCHAIN THAT SELECTS IT. That is not enough on its
+    // own: a `Package@swift-6.1.swift` is selected by the 6.1.2 CI runner and
+    // ignored by a 6.3 developer machine, so the developer sees green for a
+    // build nobody local performs. This check refuses the construct itself and
+    // therefore fails on every toolchain, whichever one would select it.
+    //
+    // The package has one manifest and needs one. Should it ever need a
+    // version-specific manifest, this check is the deliberate stop where
+    // somebody re-reads BOTH manifests against design §6.1.
+    let root = try FileManager.default.contentsOfDirectory(atPath: packageRoot.path)
+
+    // A listing that reached nothing would pass the filter below trivially.
+    #expect(root.contains("Package.swift"),
+            "no Package.swift at \(packageRoot.path); this guard listed the wrong directory")
+
+    let versioned = root
+        .filter { $0.hasPrefix("Package@swift-") && $0.hasSuffix(".swift") }
+        .sorted()
+
+    #expect(versioned.isEmpty, """
+        the package root holds a version-specific manifest: \(versioned).
+        SwiftPM prefers it over Package.swift on the toolchains it matches, so \
+        the manifest a reader opens is not the manifest that gets built. Remove \
+        it, or update this guard deliberately after reading every manifest \
+        against design §6.1.
+        """)
 }
 
 // MARK: - What the scanned files may say
@@ -243,7 +390,7 @@ private func manifestDependencies(ofTarget target: String) throws -> [String] {
     // This is a DENYLIST, and it is the SECOND line of defence, not the first.
     // It bounds the escapes we know about against an unbounded API surface; it
     // cannot prove that no other route to a display assertion exists. Only the
-    // two structural checks above bound what it never gets to read.
+    // structural checks above bound what it never gets to read.
     //
     // `beginActivity` and `performActivity` are both here because either raises
     // a live `PreventUserIdleDisplaySleep` with no IOKit import and none of the
