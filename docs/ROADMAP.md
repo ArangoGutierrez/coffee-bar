@@ -207,7 +207,7 @@ Without item 1 the panel's objection stands unanswered.
 
 - [ ] Create `ArangoGutierrez/homebrew-coffee-bar` (outward-facing — needs explicit approval)
 - [ ] Move `Formula/coffee-bar.rb` there; delete `Formula/` from this repo
-- [ ] Strip the `formula` job from `release.yml`; keep the `verify` job
+- [x] Strip the `formula` job from `release.yml`; keep the `verify` job
 - [ ] Port the substitution checks into the tap's CI, per the three items above
 - [ ] Update `README.md` to the one-argument `brew tap ArangoGutierrez/coffee-bar`
 - [ ] Enable branch protection on `main`, required check `build-test` (`ci.yml`)
