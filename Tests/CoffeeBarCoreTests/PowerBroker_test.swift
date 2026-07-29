@@ -161,6 +161,39 @@ private func inputs(sessions: [AgentSession] = [],
     ).idleSleepAssertion == true, "two blocked sessions did not hold with the knob on")
 }
 
+// MARK: - Both operands of the OR at once (§5.1)
+
+@Test func theToggleAndTheSessionsAreORedNotRanked() {
+    // Nothing else in this file reads BOTH operands of the OR on one call.
+    // Every `.serve` case above passes an empty session list, and every
+    // multi-session case passes `.stop`, so the two halves are only ever
+    // exercised apart. `displaySleepAssertionIsNeverRequested` does combine
+    // them, but it reads `displaySleepAssertion` and never the hold.
+    //
+    // Named bug this catches: `sessions.isEmpty ? (userIntent == .serve) :
+    // sessionsWantAwake` — the OR silently becoming "the sessions outrank the
+    // user". Once M2 populates `sessions`, a user who flips Serve on gets
+    // nothing for as long as any session sits in a non-active state: the
+    // machine sleeps mid-task and the toggle looks broken. §5.1 defers this
+    // very line to M2, so it WILL be edited, and it needs a guard on it first.
+
+    // The toggle alone, with a session present that wants nothing.
+    #expect(PowerBroker.decide(
+        inputs(sessions: [session(.done)], intent: .serve)).idleSleepAssertion == true,
+            "Serve stopped holding once an inactive session existed")
+
+    // The mirror: the sessions alone, with the toggle off.
+    #expect(PowerBroker.decide(
+        inputs(sessions: [session(.working)], intent: .stop)).idleSleepAssertion == true,
+            "an active session stopped holding once the toggle was off")
+
+    // Neither operand: still nothing. Without this an `always true` decision
+    // satisfies both expectations above.
+    #expect(PowerBroker.decide(
+        inputs(sessions: [session(.done)], intent: .stop)).idleSleepAssertion == false,
+            "an inactive session held with the toggle off")
+}
+
 // MARK: - Battery floor (§8.1)
 
 @Test func batteryFloorSuppressesAtOrBelowTheFloor() {
