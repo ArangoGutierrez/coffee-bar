@@ -509,7 +509,23 @@ private func waitUntilNothingAnswers(at path: String) {
     defer { extra.close() }
     extra.transmit("POST /ingest HTTP/1.1\r\nHost: localhost\r\n")
 
-    pump(until: { extra.peerClosed })
+    // `peerClosed` is a CLIENT-side observation of a close that has to cross
+    // Network.framework's async cancellation and then the socket. On this
+    // 14-core machine it lands in milliseconds; on the 3-core GitHub runner,
+    // under the full suite in parallel, it exceeded the 5s default and made
+    // this the only flaky test in the suite — 3 of 5 consecutive CI runs.
+    //
+    // Raising the budget alone would be guessing. The PRIMARY assertion is now
+    // the server's own counter, which needs no propagation at all: the cap's
+    // contract is that a third connection is never ADMITTED, and that is
+    // decided inside the listener. The client-side close keeps its own check
+    // with a budget generous enough for a loaded runner, so a cap that stops
+    // closing the refused connection still fails.
+    pump(until: { listener.activeConnectionCount > 2 }, seconds: 1)
+    #expect(listener.activeConnectionCount == 2,
+            "a connection over the cap was ADMITTED: count reached \(listener.activeConnectionCount)")
+
+    pump(until: { extra.peerClosed }, seconds: 30)
     #expect(extra.peerClosed, "a connection over the cap was served anyway")
     #expect(parked.allSatisfy { !$0.peerClosed },
             "the cap closed a connection that was under it")
