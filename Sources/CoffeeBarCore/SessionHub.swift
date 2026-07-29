@@ -1,0 +1,152 @@
+// Copyright 2026 Carlos Eduardo Arango Gutierrez
+// SPDX-License-Identifier: Apache-2.0
+
+import Foundation
+
+/// Turns Claude Code hook events into `AgentSession` values.
+///
+/// A caseless enum of static functions, the shape `PowerBroker` uses: no I/O,
+/// no clock, no stored state. `apply` is a pure function of
+/// `(sessions, event, now)`, so every transition in design §3.1 tests from a
+/// recorded payload with no socket and no Mac in the loop. `now` is a parameter
+/// for that reason — a `Date()` read in here would make the result depend on
+/// when it ran.
+///
+/// **Every transition below is driven by a payload in
+/// `Tests/Fixtures/claude-hooks/`.** Design §9: writing the state machine first
+/// and inventing payloads to match it is the failure mode this project has
+/// already paid for.
+///
+/// `PreCompact` is the one `HookEventKind` with no recorded payload, and it maps
+/// to no state — the corpus carries six of the seven kinds.
+///
+/// **There is no transition into `.failed`.** Design §3.2: no observed event
+/// reports a failure, so a session that simply stops is retired by the stale
+/// timeout in `StalePolicy`, not by a transition invented here.
+public enum SessionHub {
+
+    /// Design §7 caps the rendered message. It is attacker-influenced text.
+    public static let messageCap = 140
+
+    /// Applies one event and returns the new session list.
+    ///
+    /// Unknown events return the input unchanged, so a Claude Code release that
+    /// adds an event cannot mint a phantom session that holds the machine awake.
+    public static func apply(_ event: HookEvent,
+                             to sessions: [AgentSession],
+                             now: Date) -> [AgentSession] {
+        guard let kind = event.kind, let newState = state(for: kind) else {
+            return sessions
+        }
+
+        // Matched on (tool, sessionID) and never on position: two tools may use
+        // the same session id and must not merge. M2 ingests Claude Code hooks
+        // only, so the tool is pinned here rather than read off the payload.
+        guard let index = sessions.firstIndex(where: {
+            $0.tool == .claudeCode && $0.sessionID == event.sessionID
+        }) else {
+            return sessions + [make(event, kind: kind, state: newState, now: now)]
+        }
+
+        var updated = sessions
+        updated[index] = advance(sessions[index], with: event, kind: kind,
+                                 to: newState, now: now)
+        return updated
+    }
+
+    /// Design §3.1. `preCompact` maps to nothing: it is housekeeping, and it
+    /// deliberately does not even refresh `lastEventAt`. A compaction longer
+    /// than the stale timeout therefore releases the assertion, which is the
+    /// safe direction to be wrong in.
+    ///
+    /// `sessionEnd` maps to `.done` because the 2026-07-28 capture recorded one.
+    /// Its payload carries `reason: "other"`, the only terminator value seen so
+    /// far, so no branch here reads it: an end is an end until a payload shows
+    /// otherwise.
+    private static func state(for kind: HookEventKind) -> SessionState? {
+        switch kind {
+        case .sessionStart: return .starting
+        case .preToolUse, .postToolUse: return .working
+        case .permissionDenied: return .awaitingPermission
+        case .stop: return .awaitingInput
+        case .sessionEnd: return .done
+        case .preCompact: return nil
+        }
+    }
+
+    private static func make(_ event: HookEvent,
+                             kind: HookEventKind,
+                             state: SessionState,
+                             now: Date) -> AgentSession {
+        let cwd = event.cwd.map { URL(fileURLWithPath: $0) }
+        return AgentSession(
+            tool: .claudeCode,
+            sessionID: event.sessionID,
+            cwd: cwd,
+            repoName: cwd?.lastPathComponent,
+            pid: nil,
+            state: state,
+            stateEnteredAt: now,
+            lastEventAt: now,
+            lastMessage: message(from: event, kind: kind),
+            attentionSince: SessionState.attentionStates.contains(state) ? now : nil,
+            turnCount: state == .awaitingInput ? 1 : 0)
+    }
+
+    private static func advance(_ session: AgentSession,
+                                with event: HookEvent,
+                                kind: HookEventKind,
+                                to state: SessionState,
+                                now: Date) -> AgentSession {
+        let changed = session.state != state
+        // Every recorded payload carries `cwd`, but the decoder allows it to be
+        // absent, and an event without one must not blank the repository name
+        // out of the attention list.
+        let cwd = event.cwd.map { URL(fileURLWithPath: $0) } ?? session.cwd
+
+        let attentionSince: Date?
+        if SessionState.attentionStates.contains(state) {
+            // Preserved across a re-entry into the SAME attention state, so the
+            // "waiting since" the panel orders by is when the wait began, not
+            // when the newest event landed.
+            attentionSince = changed ? now : session.attentionSince
+        } else {
+            attentionSince = nil
+        }
+
+        return AgentSession(
+            tool: session.tool,
+            sessionID: session.sessionID,
+            cwd: cwd,
+            repoName: cwd?.lastPathComponent ?? session.repoName,
+            pid: session.pid,
+            state: state,
+            stateEnteredAt: changed ? now : session.stateEnteredAt,
+            lastEventAt: now,
+            lastMessage: message(from: event, kind: kind) ?? session.lastMessage,
+            attentionSince: attentionSince,
+            turnCount: session.turnCount + (state == .awaitingInput && changed ? 1 : 0))
+    }
+
+    /// The text the panel renders under a blocked session, capped.
+    ///
+    /// Read from `PermissionDenied` alone. Two recorded events carry `reason`
+    /// and they mean unrelated things: on `PermissionDenied` it explains why the
+    /// human is now the bottleneck, and on `SessionEnd` it is a terminator code,
+    /// recorded as the bare word "other". Rendering the second would overwrite
+    /// the first exactly when the user looks to see what happened.
+    private static func message(from event: HookEvent, kind: HookEventKind) -> String? {
+        guard kind == .permissionDenied, let reason = event.reason else { return nil }
+        return String(reason.prefix(messageCap))
+    }
+}
+
+extension SessionState {
+    /// The two states where the agent is blocked on the human.
+    ///
+    /// Not a second copy of a rule `PowerBroker` already owns: a test asserts
+    /// this set equals the difference between the broker's two active sets, so
+    /// the two definitions cannot drift apart silently.
+    public static let attentionStates: Set<SessionState> = [.awaitingPermission,
+                                                            .awaitingInput]
+}

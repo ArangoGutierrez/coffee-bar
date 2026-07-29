@@ -9,10 +9,11 @@ import Foundation
 /// the case names, so renaming a case cannot silently stop matching what
 /// Claude Code sends.
 ///
-/// `sessionStart` and `sessionEnd` are declared but not yet observed: the
-/// 2026-07-28 capture never crossed a session boundary. Design §3.2 records
-/// that gap. Write no transition against either until a real payload lands in
-/// `Tests/Fixtures/claude-hooks/`.
+/// Six of the seven have a recorded payload in `Tests/Fixtures/claude-hooks/`,
+/// including `sessionStart` and `sessionEnd`: a later capture crossed a real
+/// session boundary and closed the gap design §3.2 recorded. `preCompact` is
+/// the one with no payload behind it. Write no transition against an event
+/// until a real payload lands in that directory.
 public enum HookEventKind: String, Sendable, CaseIterable {
     case sessionStart = "SessionStart"
     case preToolUse = "PreToolUse"
@@ -51,8 +52,10 @@ public struct HookEvent: Codable, Equatable, Sendable {
 
     /// `startup`, `resume`, `clear` or `compact`, on `SessionStart` only.
     ///
-    /// Never yet observed — see `HookEventKind`. Declared so that adding the
-    /// event later adds a producer rather than reshaping this type.
+    /// The recorded payload carries `startup`; the other three values come from
+    /// design §3 and none has been observed. `SessionHub` therefore reads the
+    /// event, not this field: no transition branches on a value with no
+    /// evidence behind it.
     public let source: String?
 
     public let toolName: String?
