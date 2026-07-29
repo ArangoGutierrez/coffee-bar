@@ -163,8 +163,9 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // Named bug 1: a setter that stores the value on the MODEL instead of
     // forwarding it to `HoldController`. The controller then decides against a
     // stale intent forever. The latch proves the forwarding: a `.serve` that
-    // the floor refuses drops the CONTROLLER's intent to `.stop`, so a model
-    // holding its own copy still reports `.serve` at the end.
+    // the floor refuses drops the CONTROLLER's intent back to the standing
+    // position — `.auto` here — so a model holding its own copy still reports
+    // `.serve` at the end.
     //
     // Named bug 2: a setter that forwards but never calls `refresh()`. The
     // control moves, IOKit is never told, and nothing happens until the
@@ -187,7 +188,7 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     reader.set(source: .battery, percent: 19)
     model.refresh()
     #expect(model.isServing == false)
-    #expect(model.intent == .stop,
+    #expect(model.intent == .auto,
             "the model reported its own copy of the intent, not the controller's")
 }
 

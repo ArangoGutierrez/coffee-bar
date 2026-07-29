@@ -53,7 +53,15 @@ private func session(_ state: SessionState) -> AgentSession {
 
     let recovered = c.evaluate(powerSource: .battery, batteryPercent: 21)
     #expect(recovered.idleSleepAssertion == false)
-    #expect(c.intent == .stop)
+
+    // The controller falls back to the STANDING position the user was on before
+    // the one-off request, which is the `.auto` default here. It reads `.auto`
+    // rather than `.stop` from this task on — see
+    // `aRefusedServeFallsBackToTheStandingPositionNotToOff`. The assertion above
+    // is the one that holds the line either way: with no sessions, `.auto`
+    // holds nothing, so a `true` there could only come from a `.serve` that
+    // re-armed itself.
+    #expect(c.intent == .auto)
 }
 
 @Test func theLatchDoesNotFireUnderAuto() {
@@ -112,7 +120,10 @@ private func session(_ state: SessionState) -> AgentSession {
     var c = HoldController()
     c.userToggled(to: .serve)
     _ = c.evaluate(powerSource: .battery, batteryPercent: 10)
-    #expect(c.intent == .stop)
+    // The refusal cancels the one-off request and leaves the standing position,
+    // which is the `.auto` default here. What matters below is that the hold is
+    // gone until the user asks again.
+    #expect(c.intent == .auto)
 
     c.userToggled(to: .serve)
     #expect(c.evaluate(powerSource: .ac, batteryPercent: 90).idleSleepAssertion == true)
@@ -124,7 +135,9 @@ private func session(_ state: SessionState) -> AgentSession {
     let out = c.evaluate(powerSource: .battery, batteryPercent: 5)
     #expect(out.idleSleepAssertion == false)
     #expect(out.suppression == .batteryFloor(percent: 5, floor: 20))
-    #expect(c.intent == .stop)
+    // Refused, and the control returns to the standing position rather than to
+    // the absolute veto. `.auto` is the default this controller started on.
+    #expect(c.intent == .auto)
 }
 
 @Test func theSuppressionReasonSurvivesForTheUIToRead() {
@@ -220,4 +233,130 @@ private func session(_ state: SessionState) -> AgentSession {
     #expect(out.idleSleepAssertion == false)
     #expect(out.suppression == .batteryFloor(percent: 40, floor: 50))
     #expect(c.lastSuppression == .batteryFloor(percent: 40, floor: 50))
+}
+
+// MARK: - Where a refused `.serve` lands
+
+@Test func aRefusedServeFallsBackToTheStandingPositionNotToOff() {
+    // Audit finding I4, as the five steps it reports.
+    //
+    // The doc comment on `evaluate` justifies CANCELLING the one-off request. It
+    // does not justify the position the cancel lands on. `.stop` is a third
+    // position, an absolute veto, and the user never picked it — so a request
+    // that FAILED leaves them holding strictly less than before they touched the
+    // control.
+    var c = HoldController()                       // 1. the shipping default.
+    let working = [session(.working)]
+
+    // 2-3. The battery is under the floor. The user clicks On, and the floor
+    // refuses the hold.
+    c.userToggled(to: .serve)
+    let refused = c.evaluate(powerSource: .battery, batteryPercent: 15,
+                             sessions: working)
+    #expect(refused.idleSleepAssertion == false)
+    #expect(refused.suppression == .batteryFloor(percent: 15, floor: 20))
+
+    // The one-off request is gone, and the standing position is back.
+    #expect(c.intent == .auto,
+            "a refused .serve moved the user to a position they never picked")
+
+    // 4-5. The battery recovers to 100% on AC and the agent is still working.
+    let recovered = c.evaluate(powerSource: .ac, batteryPercent: 100,
+                               sessions: working)
+    #expect(recovered.idleSleepAssertion == true,
+            "the Mac sleeps under a working agent because one refused click vetoed .auto")
+}
+
+@Test func askingForAHoldNeverLeavesLessHeldThanAskingForNothing() {
+    // The comparison this finding turns on, and the one that rests on no
+    // judgement about what a user expects to see. Two controllers meet the SAME
+    // world. One user clicks On below the floor; the other never touches the
+    // control. Clicking On asks for MORE holding, so the machine must never end
+    // up holding LESS than it would have held for the user who did nothing.
+    //
+    // Named bug this catches: `intent = .stop` on a refused `.serve`. The
+    // clicker ends on the absolute veto, so the Mac sleeps under a working agent
+    // — the single failure this product exists to prevent — while the user who
+    // left the control alone keeps serving.
+    let working = [session(.working)]
+
+    var clicked = HoldController()
+    clicked.userToggled(to: .serve)
+    #expect(clicked.evaluate(powerSource: .battery, batteryPercent: 15,
+                             sessions: working).idleSleepAssertion == false)
+
+    var untouched = HoldController()
+    #expect(untouched.evaluate(powerSource: .battery, batteryPercent: 15,
+                               sessions: working).idleSleepAssertion == false)
+
+    // The same recovery reaches both.
+    let afterClick = clicked.evaluate(powerSource: .ac, batteryPercent: 100,
+                                      sessions: working)
+    let afterNothing = untouched.evaluate(powerSource: .ac, batteryPercent: 100,
+                                          sessions: working)
+
+    // The control, against a literal. Without it both sides could be `false`
+    // and the comparison below would hold for a controller that never holds.
+    #expect(afterNothing.idleSleepAssertion == true)
+    #expect(afterClick.idleSleepAssertion == afterNothing.idleSleepAssertion,
+            "clicking On and being refused held less than never clicking at all")
+}
+
+@Test func aRefusedServeNeverComesBackAsAnUnconditionalHold() {
+    // The invariant the doc comment defends, kept. `.serve` holds whatever the
+    // sessions are doing, and THAT property must never return by itself: the
+    // user asked once, watched it fail, and re-arming is a behaviour they cannot
+    // see coming.
+    //
+    // The session list is EMPTY on purpose. `.auto` holds nothing with an empty
+    // list, so a hold at the end can only come from a `.serve` that re-armed
+    // itself. Named bug this catches: falling back to `.serve` — the fallback
+    // that a naive "restore whatever the intent was" produces.
+    var c = HoldController()
+    c.userToggled(to: .serve)
+    #expect(c.evaluate(powerSource: .battery, batteryPercent: 15).suppression != nil)
+
+    let recovered = c.evaluate(powerSource: .ac, batteryPercent: 100)
+    #expect(recovered.idleSleepAssertion == false,
+            "a refused .serve re-armed itself once the battery recovered")
+    #expect(c.intent != .serve)
+}
+
+@Test func aSecondOnClickCannotMakeServeItsOwnFallback() {
+    // The hole a "remember the previous intent" fallback opens. The user clicks
+    // On twice with no refusal between the clicks, so the remembered position is
+    // `.serve` itself. The floor then refuses, the fallback restores `.serve`,
+    // and the latch never fires at all.
+    //
+    // Named bug this catches: recording the outgoing intent on EVERY toggle
+    // instead of recording the standing positions only. With no sessions, the
+    // hold below can only come from a `.serve` that survived its own refusal.
+    var c = HoldController()
+    c.userToggled(to: .serve)
+    c.userToggled(to: .serve)
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 15)
+
+    #expect(c.intent == .auto)
+    #expect(c.evaluate(powerSource: .ac, batteryPercent: 100).idleSleepAssertion == false,
+            "a repeated On click made .serve its own fallback and re-armed the hold")
+}
+
+@Test func aRefusedServeFromOffReturnsToOff() {
+    // The standing position is not always `.auto`. A user who has vetoed serving
+    // outright, then clicks On and is refused, must land back on the veto.
+    //
+    // Named bug this catches: falling back to `.auto` unconditionally. The off
+    // switch then survives exactly one refused click, and the next working agent
+    // pins the machine awake for a user who switched the product off.
+    // coffee-bar overrides the machine's own sleep policy, so that is the trust
+    // failure `UserIntent.stop` exists to prevent.
+    var c = HoldController()
+    c.userToggled(to: .stop)
+    c.userToggled(to: .serve)
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 15)
+
+    #expect(c.intent == .stop)
+    #expect(c.evaluate(powerSource: .ac, batteryPercent: 100,
+                       sessions: [session(.working)]).idleSleepAssertion == false,
+            "a click that failed undid the user's off switch")
 }
