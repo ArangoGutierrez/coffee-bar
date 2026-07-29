@@ -203,6 +203,49 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
 }
 
 @MainActor
+@Test func theSuppressionLineSurvivesARecoveryToExactlyTheFloor() {
+    // The filter compares the NEWEST reading against the FLOOR. Every other
+    // filter test here latches at 19 with floor 20, or at 20 with floor 20, so
+    // the latched percent and the floor are either equal or one apart and no
+    // reading ever lands between them. That leaves the region
+    // `latched < reading <= floor` — here the single value 20 after a release
+    // at 19 — untested, and it is the only region where the two operands
+    // disagree.
+    //
+    // Named bug this catches: `percent <= latched` in place of
+    // `percent <= floor`. The hold releases at 19%, the battery recovers a
+    // point to 20%, and the line vanishes — but 20% is still at the floor, so
+    // the switch goes on refusing. The user gets a refusal with no reason,
+    // which is the same defect `theSuppressionLineSurvivesAtExactlyTheFloor`
+    // catches from the side where the reading crosses the floor directly.
+    let reader = FakeReader(source: .battery, percent: 21)
+    let spy = SpyHolder()
+    let model = ServingModel(holder: spy, reader: reader)
+
+    model.serving = true
+    #expect(model.isServing == true)
+
+    reader.set(source: .battery, percent: 19)
+    model.refresh()
+    // Precondition: the latch is BELOW the floor, so the two operands differ
+    // for the reading below. Without it this test repeats the equal-operand
+    // fixtures it exists to complement.
+    #expect(model.suppression == .batteryFloor(percent: 19, floor: 20))
+    #expect(model.isServing == false)
+
+    reader.set(source: .battery, percent: 20)
+    model.refresh()
+
+    // Still at or below the floor, so the reason is still true and still shown.
+    // It names the reading that RELEASED the hold, not the newest one.
+    #expect(model.suppression == .batteryFloor(percent: 19, floor: 20))
+    #expect(model.reading.percent == 20)
+    // And the switch still refuses, which is what makes a missing line a bug
+    // rather than a cosmetic difference.
+    #expect(model.isServing == false)
+}
+
+@MainActor
 @Test func theSuppressionLineClearsOnACPower() {
     // The line explains a condition that is still true. Once the machine is
     // back on AC it is no longer true, so the line goes. The latch does not:
