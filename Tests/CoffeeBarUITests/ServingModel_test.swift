@@ -71,6 +71,20 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     }
 }
 
+/// A hook-health reader pointed at a committed fixture.
+///
+/// EVERY `ServingModel` built in this file is handed one. `refresh()` reads the
+/// settings file, and the shipping default is the user's real
+/// `~/.claude/settings.json` — so a test that took the default would read the
+/// machine's own configuration and report a different `hookHealth` on every
+/// developer's laptop.
+private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
+    HookHealthReader(settingsURL: URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()    // …/Tests/CoffeeBarUITests
+        .deletingLastPathComponent()    // …/Tests
+        .appending(path: "Fixtures/claude-settings/\(name)"))
+}
+
 // MARK: - The control carries the intent, not the hold state
 
 @MainActor
@@ -84,7 +98,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     // `.stop` are DIFFERENT intents that produce the SAME `isServing` here, so
     // no getter derived from `isServing` can satisfy both.
     let reader = FakeReader(source: .ac, percent: 80)
-    let model = ServingModel(holder: SpyHolder(), reader: reader)
+    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
 
     // The shipped default, before the user has touched anything. `.auto` holds
     // nothing while no session is running — M2 ingest is what will feed them —
@@ -109,7 +123,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     // positions have been used, because that is the sequence the Bool could
     // not express.
     let reader = FakeReader(source: .ac, percent: 80)
-    let model = ServingModel(holder: SpyHolder(), reader: reader)
+    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
 
     model.intent = .serve
     #expect(model.intent == .serve)
@@ -137,7 +151,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     // disagrees with the machine.
     let reader = FakeReader(source: .ac, percent: 80)
     let spy = SpyHolder()
-    let model = ServingModel(holder: spy, reader: reader)
+    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth())
 
     // Precondition: nothing acquired before the set, so the count below cannot
     // come from anywhere else.
@@ -162,7 +176,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
 @Test func togglingServingOnAcquiresTheAssertion() {
     let reader = FakeReader(source: .ac, percent: 80)
     let spy = SpyHolder()
-    let model = ServingModel(holder: spy, reader: reader)
+    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth())
 
     // Precondition: nothing is held before the user asks for anything.
     #expect(model.isServing == false)
@@ -178,7 +192,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
 @Test func togglingServingOffReleasesTheAssertion() {
     let reader = FakeReader(source: .ac, percent: 80)
     let spy = SpyHolder()
-    let model = ServingModel(holder: spy, reader: reader)
+    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth())
 
     model.intent = .serve
     #expect(model.isServing == true)
@@ -200,7 +214,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     // assertion — exactly the failure a user cannot see and cannot undo.
     let reader = FakeReader(source: .battery, percent: 21)
     let spy = SpyHolder()
-    let model = ServingModel(holder: spy, reader: reader)
+    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth())
 
     model.intent = .serve
     #expect(model.isServing == true)
@@ -222,7 +236,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     // battery recovers.
     let reader = FakeReader(source: .battery, percent: 21)
     let spy = SpyHolder()
-    let model = ServingModel(holder: spy, reader: reader)
+    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth())
 
     model.intent = .serve
     #expect(spy.acquireCount == 1)
@@ -245,7 +259,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     // Design §5.4: the reason is asserted on the enum, never on rendered text.
     let reader = FakeReader(source: .battery, percent: 21)
     let spy = SpyHolder()
-    let model = ServingModel(holder: spy, reader: reader)
+    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth())
 
     model.intent = .serve
     reader.set(source: .battery, percent: 19)
@@ -275,7 +289,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     // the one sentence that says why. The user gets a refusal with no reason.
     let reader = FakeReader(source: .battery, percent: 21)
     let spy = SpyHolder()
-    let model = ServingModel(holder: spy, reader: reader)
+    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth())
 
     model.intent = .serve
     #expect(model.isServing == true)
@@ -305,7 +319,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     // catches from the side where the reading crosses the floor directly.
     let reader = FakeReader(source: .battery, percent: 21)
     let spy = SpyHolder()
-    let model = ServingModel(holder: spy, reader: reader)
+    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth())
 
     model.intent = .serve
     #expect(model.isServing == true)
@@ -337,7 +351,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     // `isServing` stays false until the user toggles again.
     let reader = FakeReader(source: .battery, percent: 21)
     let spy = SpyHolder()
-    let model = ServingModel(holder: spy, reader: reader)
+    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth())
 
     model.intent = .serve
     reader.set(source: .battery, percent: 19)
@@ -369,7 +383,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     // one-point error stays green there.
     let reader = FakeReader(source: .battery, percent: 21)
     let spy = SpyHolder()
-    let model = ServingModel(holder: spy, reader: reader)
+    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth())
 
     model.intent = .serve
     reader.set(source: .battery, percent: 19)
@@ -390,7 +404,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
 @Test func theSuppressionLineClearsWhenTheBatteryRisesAboveTheFloor() {
     let reader = FakeReader(source: .battery, percent: 21)
     let spy = SpyHolder()
-    let model = ServingModel(holder: spy, reader: reader)
+    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth())
 
     model.intent = .serve
     reader.set(source: .battery, percent: 19)
@@ -427,7 +441,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     // value to the holder is the tick.
     let reader = FakeReader(source: .battery, percent: 21)
     let spy = SpyHolder()
-    let model = ServingModel(holder: spy, reader: reader)
+    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth())
 
     model.intent = .serve
     // Preconditions: the hold is live and nothing has been released, so the
@@ -483,7 +497,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     var captured: Timer?
     do {
         let model = ServingModel(holder: SpyHolder(),
-                                 reader: FakeReader(source: .ac, percent: 80))
+                                 reader: FakeReader(source: .ac, percent: 80), health: fixtureHealth())
         model.startMonitoring(interval: 0.01)
         captured = model.timer
         // Precondition: without a live timer to invalidate, the assertion below
@@ -522,7 +536,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     // does, not about what a tick does, so neither timer should fire while it
     // runs — a short interval would let the run loop decide the outcome.
     let model = ServingModel(holder: SpyHolder(),
-                             reader: FakeReader(source: .ac, percent: 80))
+                             reader: FakeReader(source: .ac, percent: 80), health: fixtureHealth())
 
     model.startMonitoring(interval: 60)
     let first = try #require(model.timer, "startMonitoring installed no timer")
@@ -568,7 +582,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     // across every input combination.
     let reader = FakeReader(source: .battery, percent: 50)
     let spy = SpyHolder()
-    let model = ServingModel(holder: spy, reader: reader)
+    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth())
 
     model.intent = .serve
     let held = try #require(model.desired)
@@ -590,4 +604,72 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     #expect(suppressed.suppression == .batteryFloor(percent: 19, floor: 20))
     #expect(suppressed.idleSleepAssertion == false)
     #expect(suppressed.displaySleepAssertion == false)
+}
+
+// MARK: - The hook health the panel reports
+//
+// LIMIT, and it is deliberate: this reads `~/.claude/settings.json` and NOTHING
+// ELSE. `.wired` means the entries are in the file. It does NOT mean an event
+// has ever arrived, and it cannot see PE finding B2 — a second app instance
+// that unlinks the live socket leaves the file untouched, so the status stays
+// `.wired` while ingest is dead. Whatever renders this must say what it
+// measured, not that ingest works.
+
+@MainActor
+@Test func theModelPublishesTheHookHealthItReads() {
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth("missing-stop.json"))
+
+    // Before the first refresh nothing has been read. `PanelView.onAppear`
+    // calls `refresh()`, so this value never reaches the screen.
+    #expect(model.hookHealth == .unreadable)
+
+    model.refresh()
+    #expect(model.hookHealth == .missing(["Stop"]))
+}
+
+@MainActor
+@Test func theModelReportsUnreadableWhenTheSettingsFileIsAbsent() {
+    // A user who has never run Claude Code. The model must publish a verdict
+    // rather than fail to build.
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth("definitely-not-here.json"))
+
+    model.refresh()
+    #expect(model.hookHealth == .unreadable)
+}
+
+@MainActor
+@Test func theModelRereadsTheSettingsFileOnEveryRefresh() throws {
+    // Named bug this catches: reading the settings file ONCE, in `init`. The
+    // user's whole recovery path is "paste the snippet back", and the app runs
+    // for days — a status frozen at launch would still say the hooks are
+    // missing after they had been restored, which is the same silent-failure
+    // dishonesty design §6 exists to remove, pointing the other way.
+    let files = FileManager.default
+    let scratch = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appending(path: "coffee-bar-health-\(UUID().uuidString)")
+    try files.createDirectory(at: scratch, withIntermediateDirectories: true)
+    defer { try? files.removeItem(at: scratch) }
+
+    let settings = scratch.appending(path: "settings.json")
+    let source = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appending(path: "Fixtures/claude-settings")
+
+    try Data(contentsOf: source.appending(path: "missing-stop.json")).write(to: settings)
+
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: HookHealthReader(settingsURL: settings))
+    model.refresh()
+    #expect(model.hookHealth == .missing(["Stop"]))
+
+    // The user pastes the Stop entry back while the app is running.
+    try Data(contentsOf: source.appending(path: "wired.json")).write(to: settings)
+    model.refresh()
+    #expect(model.hookHealth == .wired)
 }

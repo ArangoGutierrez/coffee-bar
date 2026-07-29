@@ -1,0 +1,13 @@
+{
+  "model": "opus",
+  "hooks": {
+    "SessionStart": [
+      {"hooks": [{"type": "command", "command": "/opt/other/thing.sh"}]},
+      {"hooks": [{"type": "command", "command": "curl -sS --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/ingest"}]}
+    ],
+    "PreToolUse": [{"hooks": [{"type": "command", "command": "curl -sS --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/ingest"}]}],
+    "PostToolUse": [{"hooks": [{"type": "command", "command": "curl -sS --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/ingest"}]}],
+    "PermissionDenied": [{"hooks": [{"type": "command", "command": "curl -sS --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/ingest"}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "curl -sS --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/ingest"}]}]
+  }
+}

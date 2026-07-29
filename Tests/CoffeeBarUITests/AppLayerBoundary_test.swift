@@ -80,6 +80,7 @@ private let appLayerTargets = [
 /// somebody reads the new file against design §6.1.
 private let expectedAppLayerEntries = [
     "Sources/CoffeeBarApp/main.swift",
+    "Sources/CoffeeBarUI/HookHealthReader.swift",
     "Sources/CoffeeBarUI/MenuBarGlyphs.swift",
     "Sources/CoffeeBarUI/PanelView.swift",
     "Sources/CoffeeBarUI/ServingModel.swift",

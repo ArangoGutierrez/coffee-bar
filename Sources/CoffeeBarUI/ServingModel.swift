@@ -20,6 +20,7 @@ import CoffeeBarPower
 public final class ServingModel {
     private let holder: any AssertionHolding
     private let reader: any PowerReadingProviding
+    private let health: HookHealthReader
     private var controller = HoldController()
 
     /// The repeating refresh installed by `startMonitoring`.
@@ -55,10 +56,26 @@ public final class ServingModel {
     /// module's public surface for a test would buy nothing.
     private(set) var desired: DesiredPowerState?
 
+    /// Whether the user's Claude Code hooks still point at our socket.
+    ///
+    /// `.unreadable` until the first `refresh()`, which is what "not read yet"
+    /// looks like here. Nothing renders it before then: `PanelView.onAppear`
+    /// calls `refresh()`, and the menu-bar label reads `isServing` only.
+    ///
+    /// **This is a statement about the settings FILE, not about ingest.** PE
+    /// finding B2 measured a second app instance stealing the socket path,
+    /// which kills ingest and leaves the settings file exactly as it was — so
+    /// this stays `.wired` while no event can arrive. Whatever renders it must
+    /// say the hooks are installed and must not claim events are flowing. A
+    /// live-socket probe is the separate check that would close that gap.
+    public private(set) var hookHealth: HookHealthStatus = .unreadable
+
     public init(holder: any AssertionHolding = AssertionHolder(),
-                reader: any PowerReadingProviding = SystemPowerReader()) {
+                reader: any PowerReadingProviding = SystemPowerReader(),
+                health: HookHealthReader = HookHealthReader()) {
         self.holder = holder
         self.reader = reader
+        self.health = health
         self.reading = reader.read()
     }
 
@@ -94,6 +111,9 @@ public final class ServingModel {
     /// Re-samples power and reconciles the assertion. Safe to call on a timer.
     public func refresh() {
         reading = reader.read()
+        // Re-read every time, not once in `init`. The user's recovery path is
+        // to paste the snippet back, and this app runs for days.
+        hookHealth = health.status()
         let state = controller.evaluate(powerSource: reading.source,
                                         batteryPercent: reading.percent)
         desired = state
