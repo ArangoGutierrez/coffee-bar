@@ -362,8 +362,91 @@ private func describePackage() throws -> ResolvedPackage {
 /// BARE REGEX LITERAL (`/…/`) would confuse it; the package uses none, and
 /// `swiftCodeWithoutCommentsKeepsCodeAndDropsComments` pins the behaviour.
 private func swiftCodeWithoutComments(_ source: String) -> String {
-    // NOT IMPLEMENTED. The below-app checks are RED until it strips.
-    source
+    let characters = Array(source)
+    var kept: [Character] = []
+    kept.reserveCapacity(characters.count)
+    var index = 0
+
+    /// Whether `text` sits at `start`.
+    func matches(_ text: [Character], at start: Int) -> Bool {
+        guard start >= 0, start + text.count <= characters.count else { return false }
+        for (offset, character) in text.enumerated() where characters[start + offset] != character {
+            return false
+        }
+        return true
+    }
+
+    while index < characters.count {
+        // A raw string opens with a run of `#` immediately before the quote.
+        var hashes = 0
+        while index + hashes < characters.count && characters[index + hashes] == "#" { hashes += 1 }
+        let pounds = Array(repeating: Character("#"), count: hashes)
+
+        if index + hashes < characters.count && characters[index + hashes] == "\"" {
+            // A string literal. Copy it VERBATIM, delimiters and contents.
+            let multiline = matches(["\"", "\"", "\""], at: index + hashes)
+            let closing = Array(repeating: Character("\""), count: multiline ? 3 : 1) + pounds
+            let opening = hashes + (multiline ? 3 : 1)
+            kept.append(contentsOf: characters[index ..< index + opening])
+            index += opening
+
+            while index < characters.count {
+                // `\` escapes the next character — in a raw string only when a
+                // matching run of `#` follows it.
+                if characters[index] == "\\" && matches(pounds, at: index + 1) {
+                    let width = min(hashes + 2, characters.count - index)
+                    kept.append(contentsOf: characters[index ..< index + width])
+                    index += width
+                    continue
+                }
+                if matches(closing, at: index) {
+                    kept.append(contentsOf: characters[index ..< index + closing.count])
+                    index += closing.count
+                    break
+                }
+                kept.append(characters[index])
+                index += 1
+            }
+            continue
+        }
+
+        if hashes > 0 {
+            // A `#` that opens no string: an attribute, a macro, `#filePath`.
+            kept.append(contentsOf: characters[index ..< index + hashes])
+            index += hashes
+            continue
+        }
+
+        if matches(["/", "/"], at: index) {
+            // To the end of the line. The newline itself is kept next turn, so
+            // the stripped text keeps its line structure.
+            while index < characters.count && characters[index] != "\n" { index += 1 }
+            continue
+        }
+
+        if matches(["/", "*"], at: index) {
+            // Swift nests block comments, so this counts rather than scanning
+            // for the first `*/`.
+            var depth = 0
+            while index < characters.count {
+                if matches(["/", "*"], at: index) { depth += 1; index += 2; continue }
+                if matches(["*", "/"], at: index) {
+                    depth -= 1
+                    index += 2
+                    if depth == 0 { break }
+                    continue
+                }
+                if characters[index] == "\n" { kept.append("\n") }
+                index += 1
+            }
+            continue
+        }
+
+        kept.append(characters[index])
+        index += 1
+    }
+
+    return String(kept)
 }
 
 /// Every file the app layer's targets compile, package-root relative and
