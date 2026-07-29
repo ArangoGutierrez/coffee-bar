@@ -243,9 +243,24 @@ private struct RecordingRunner: CommandRunning, @unchecked Sendable {
         }
     }
 
-    // The discriminating assertion. The child writes 6 bytes and exits, so the
-    // only thing 2 s can fail to cover is a reader that never got a thread.
-    let result = try SystemCommandRunner().run(shim.path, [], timeout: 2)
+    // The discriminating assertion. What it discriminates is a reader that
+    // NEVER gets a thread, and that failure is UNBOUNDED: a starved reader
+    // times out at 2 s, at 30 s, at any budget at all. The number therefore
+    // carries none of the discriminating power — it only decides how much
+    // ordinary scheduling delay on a loaded host gets misread as starvation.
+    //
+    // 2 s misread it. The M2 audit measured this test red on 2 of 33
+    // full-suite runs, and the mechanism reproduces on demand: with 56 CPU
+    // hogs held against this 14-core machine, `run()` threw
+    // timedOut(after: 2.0) for a child that writes 6 bytes and exits. Timed
+    // across that same load, the call itself took 8.43 s — 4x over the old
+    // budget and still 3.5x under this one.
+    //
+    // 30 s matches `CommandRunning.defaultTimeout`, and matches the 30 s the
+    // connection-cap assertion took in d6dafb2 for this same reason. It is
+    // still nowhere near "hung forever", which is the only shape the failure
+    // under test can take.
+    let result = try SystemCommandRunner().run(shim.path, [], timeout: 30)
     #expect(result.exitCode == 0)
     #expect(result.stdout == "hello\n")
 }
