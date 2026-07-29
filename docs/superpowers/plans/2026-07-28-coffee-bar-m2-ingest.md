@@ -1,5 +1,71 @@
 # M2 Claude Code Ingest Implementation Plan
 
+> ## PE CORRECTIONS — read before implementing any task
+>
+> A principal-engineer review compiled this plan's framer and listener into a
+> spike and attacked them. Every item below is a REPRODUCED failure, not a
+> reading. Where this block and the task text disagree, THIS BLOCK WINS.
+>
+> **B1 — `Content-Length: -1` crashes the app.** `Int(...)` accepts a negative,
+> the `available >= length` guard passes, `bodyEnd` lands before `bodyStart`,
+> and the range subscript traps with "Range requires lowerBound <= upperBound".
+> Any same-user process kills the menu-bar app with one 60-byte POST, which
+> releases the assertion and sleeps the machine under a running agent. The 8
+> framer tests miss it: `headersWithNoContentLengthAreRejected` covers a MISSING
+> header, not a negative value. Require `length >= 0 && length <= maximumBytes`,
+> and test the negative case.
+>
+> **B2 — two app instances silently kill ingest.** `start()` and `stop()` both
+> unlink the socket node unconditionally. Measured: instance B steals A's path,
+> A goes deaf forever, then A's `stop()` deletes B's LIVE node and ingest is
+> dead while B looks healthy. Task 7's health check reads settings.json only, so
+> the panel still says "wired". `stop()` must NOT unlink; `start()` must
+> connect-probe before removing a stale node.
+>
+> **B3 — do not reintroduce `isolated deinit`.** It is experimental before Swift
+> 6.3. Commit a33b35f removed it after it turned the repo's first CI run red at
+> 6.1.2. The plan's own citation of `ServingModel.swift:66` points at a line
+> a33b35f deleted. `ci.yml` pins macos-15 with no toolchain selection.
+>
+> **B4 — D1 (`UserIntent.auto`) needs two fixes to work at all.**
+> `HoldController.evaluate` sets `intent = .stop` on ANY suppression, so one
+> low-battery moment permanently disables ingest for the life of the process,
+> and `ServingModel.reason(_:stillTrueOf:)` then hides the explanation once the
+> reading recovers. Latch only when `intent == .serve`; `PowerBroker` re-checks
+> the floor on every call anyway. Second: `PanelView` binds `$model.serving`,
+> whose getter is `isServing` — the actual hold state — so under `.auto` the
+> switch moves by itself and one click installs a `.stop` veto the user never
+> chose. **`.auto` becomes unreachable through the UI after one click.** Needs a
+> 3-way Picker bound to `intent`, not a `Bool` toggle.
+>
+> **I1 — sequencing.** Task 4's `aStaleWorkingSessionStopsHoldingTheAssertion`
+> passes `userIntent: .stop` and asserts `hold == true`; it goes red the moment
+> D1 lands. There are 12 `.stop` occurrences in `PowerBroker_test.swift`.
+> **Land `UserIntent.auto` BEFORE Task 4, not after Task 5.**
+>
+> **I2 — `SessionHub.apply` is not pure.** `URL(fileURLWithPath:)` stats the
+> disk: an existing directory yields a trailing slash, a missing one does not.
+> Use `URL(fileURLWithPath:isDirectory:)`.
+>
+> **I3 — design §11 has zero plan coverage.** The spec-coverage table jumps §10
+> to §12. Decide it or record the deferral.
+>
+> **I4 — a `.working` session appears nowhere in the UI.** The attention list
+> shows only the two blocked states, so the user cannot see what is holding the
+> machine awake, from a product whose pitch is exactly that.
+>
+> **Confirmed NOT defects, tested:** concurrent connections work (3 stalled
+> half-open plus a real POST, delivered); the chmod window did not reproduce
+> (0600 in 12/12 runs); staleness IS on a timer, in `refresh()` not `ingest()`.
+> Network.framework cannot verify a peer, and peer checks would buy nothing:
+> the authorized client is `/usr/bin/curl`, which any process can exec. **§4.1's
+> trust floor is right for v0.1.**
+>
+> **Unverified risk for Task 9:** `LSUIElement` apps are App Nap candidates, and
+> a throttled 30s `Timer` makes the stale timeout late. Measure on hardware.
+
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Bind the power assertion to what a Claude Code agent is actually doing, so the menu-bar glyph follows real session state and the user never touches the toggle.
@@ -2549,13 +2615,20 @@ Replace the initializer:
 Replace the `deinit`:
 
 ```swift
-    /// A model that goes away takes its ticker AND its socket with it. A model
-    /// still holding the socket would stop the next one binding, and ingest
-    /// would be silently dead.
-    isolated deinit {
-        timer?.invalidate()
-        listener.stop()
-    }
+    // CORRECTED after PE finding B3. The original text here used
+    // `isolated deinit`, which is EXPERIMENTAL before Swift 6.3. It compiles on
+    // a 6.3 developer machine and fails the 6.1.2 GitHub runner with "requires
+    // frontend flag -enable-experimental-feature IsolatedDeinit". Commit
+    // a33b35f already removed exactly this construct after it turned the repo's
+    // first CI run red. Do not reintroduce it.
+    //
+    // The ticker is handled by the timer block invalidating the timer it is
+    // handed once `self` has gone — see ServingModel.startMonitoring. The
+    // listener needs the same treatment: it must NOT be stopped from a deinit.
+    //
+    // Note also PE finding B2: `stop()` must not unlink the socket node, or an
+    // orphaned model deletes the LIVE instance's socket and kills ingest for
+    // the whole session while the panel still reports "wired".
 ```
 
 Replace `refresh()`:
