@@ -71,7 +71,92 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     }
 }
 
-// MARK: - The toggle reaches the assertion
+// MARK: - The control carries the intent, not the hold state
+
+@MainActor
+@Test func theModelReportsTheIntentAndNotTheHoldState() {
+    // Named bug this catches: the M1 `serving: Bool`, whose getter returned
+    // `isServing` — the ACTUAL hold state rather than what the user asked for.
+    // A control bound to that moves by itself as sessions come and go, and the
+    // click that moves it back writes an intent the user never chose.
+    //
+    // The two expectations below are the discriminating pair: `.auto` and
+    // `.stop` are DIFFERENT intents that produce the SAME `isServing` here, so
+    // no getter derived from `isServing` can satisfy both.
+    let reader = FakeReader(source: .ac, percent: 80)
+    let model = ServingModel(holder: SpyHolder(), reader: reader)
+
+    // The shipped default, before the user has touched anything. `.auto` holds
+    // nothing while no session is running — M2 ingest is what will feed them —
+    // so the hold state here is false while the intent is not `.stop`.
+    #expect(model.intent == .auto)
+    #expect(model.isServing == false)
+
+    model.intent = .stop
+    #expect(model.intent == .stop)
+    #expect(model.isServing == false)
+}
+
+@MainActor
+@Test func everyControlPositionStaysReachable() {
+    // PE's finding on the M1 toggle: its setter wrote
+    // `newValue ? .serve : .stop`, so the enum's third position was
+    // unreachable from the UI. After one click `.auto` could never be selected
+    // again — the state the product SHIPS in became one the user could leave
+    // and never return to.
+    //
+    // The order matters: `.auto` is asserted LAST, after both explicit
+    // positions have been used, because that is the sequence the Bool could
+    // not express.
+    let reader = FakeReader(source: .ac, percent: 80)
+    let model = ServingModel(holder: SpyHolder(), reader: reader)
+
+    model.intent = .serve
+    #expect(model.intent == .serve)
+
+    model.intent = .stop
+    #expect(model.intent == .stop)
+
+    model.intent = .auto
+    #expect(model.intent == .auto)
+}
+
+@MainActor
+@Test func theIntentSetterReachesTheControllerAndReconciles() {
+    // Two claims about the setter, each with its own mutant.
+    //
+    // Named bug 1: a setter that stores the value on the MODEL instead of
+    // forwarding it to `HoldController`. The controller then decides against a
+    // stale intent forever. The latch proves the forwarding: a `.serve` that
+    // the floor refuses drops the CONTROLLER's intent to `.stop`, so a model
+    // holding its own copy still reports `.serve` at the end.
+    //
+    // Named bug 2: a setter that forwards but never calls `refresh()`. The
+    // control moves, IOKit is never told, and nothing happens until the
+    // 30-second ticker catches up — up to half a minute of a panel that
+    // disagrees with the machine.
+    let reader = FakeReader(source: .ac, percent: 80)
+    let spy = SpyHolder()
+    let model = ServingModel(holder: spy, reader: reader)
+
+    // Precondition: nothing acquired before the set, so the count below cannot
+    // come from anywhere else.
+    #expect(spy.acquireCount == 0)
+
+    // Bug 2: the acquire has to happen on the SET. Nothing here calls refresh().
+    model.intent = .serve
+    #expect(spy.acquireCount == 1, "setting the intent did not reconcile the assertion")
+    #expect(model.isServing == true)
+
+    // Bug 1: the controller latches the intent away under the model.
+    reader.set(source: .battery, percent: 19)
+    model.refresh()
+    #expect(model.isServing == false)
+    #expect(model.intent == .stop,
+            "the model reported its own copy of the intent, not the controller's")
+}
+
+// MARK: - The control reaches the assertion
 
 @MainActor
 @Test func togglingServingOnAcquiresTheAssertion() {
@@ -83,7 +168,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     #expect(model.isServing == false)
     #expect(spy.acquireCount == 0)
 
-    model.serving = true
+    model.intent = .serve
 
     #expect(model.isServing == true)
     #expect(spy.acquireCount == 1)
@@ -95,11 +180,11 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     let spy = SpyHolder()
     let model = ServingModel(holder: spy, reader: reader)
 
-    model.serving = true
+    model.intent = .serve
     #expect(model.isServing == true)
     #expect(spy.releaseCount == 0)
 
-    model.serving = false
+    model.intent = .stop
 
     #expect(model.isServing == false)
     #expect(spy.releaseCount >= 1)
@@ -117,7 +202,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     let spy = SpyHolder()
     let model = ServingModel(holder: spy, reader: reader)
 
-    model.serving = true
+    model.intent = .serve
     #expect(model.isServing == true)
     #expect(spy.releaseCount == 0)
 
@@ -139,7 +224,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     let spy = SpyHolder()
     let model = ServingModel(holder: spy, reader: reader)
 
-    model.serving = true
+    model.intent = .serve
     #expect(spy.acquireCount == 1)
 
     reader.set(source: .battery, percent: 19)
@@ -162,7 +247,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     let spy = SpyHolder()
     let model = ServingModel(holder: spy, reader: reader)
 
-    model.serving = true
+    model.intent = .serve
     reader.set(source: .battery, percent: 19)
     model.refresh()
 
@@ -192,7 +277,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     let spy = SpyHolder()
     let model = ServingModel(holder: spy, reader: reader)
 
-    model.serving = true
+    model.intent = .serve
     #expect(model.isServing == true)
 
     reader.set(source: .battery, percent: 20)
@@ -222,7 +307,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     let spy = SpyHolder()
     let model = ServingModel(holder: spy, reader: reader)
 
-    model.serving = true
+    model.intent = .serve
     #expect(model.isServing == true)
 
     reader.set(source: .battery, percent: 19)
@@ -254,7 +339,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     let spy = SpyHolder()
     let model = ServingModel(holder: spy, reader: reader)
 
-    model.serving = true
+    model.intent = .serve
     reader.set(source: .battery, percent: 19)
     model.refresh()
     // Precondition: without a line to clear, the assertion below would hold for
@@ -286,7 +371,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     let spy = SpyHolder()
     let model = ServingModel(holder: spy, reader: reader)
 
-    model.serving = true
+    model.intent = .serve
     reader.set(source: .battery, percent: 19)
     model.refresh()
     // Precondition: without a line to clear, the assertion below would hold for
@@ -307,7 +392,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     let spy = SpyHolder()
     let model = ServingModel(holder: spy, reader: reader)
 
-    model.serving = true
+    model.intent = .serve
     reader.set(source: .battery, percent: 19)
     model.refresh()
     #expect(model.suppression != nil)
@@ -344,7 +429,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     let spy = SpyHolder()
     let model = ServingModel(holder: spy, reader: reader)
 
-    model.serving = true
+    model.intent = .serve
     // Preconditions: the hold is live and nothing has been released, so the
     // assertions below cannot hold for a model that never acquired anything.
     #expect(model.isServing == true)
@@ -485,19 +570,19 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     let spy = SpyHolder()
     let model = ServingModel(holder: spy, reader: reader)
 
-    model.serving = true
+    model.intent = .serve
     let held = try #require(model.desired)
     #expect(held.idleSleepAssertion == model.isServing)
     #expect(held.idleSleepAssertion == true)
     #expect(held.displaySleepAssertion == false)
 
-    model.serving = false
+    model.intent = .stop
     let stopped = try #require(model.desired)
     #expect(stopped.idleSleepAssertion == model.isServing)
     #expect(stopped.idleSleepAssertion == false)
     #expect(stopped.displaySleepAssertion == false)
 
-    model.serving = true
+    model.intent = .serve
     reader.set(source: .battery, percent: 19)
     model.refresh()
     let suppressed = try #require(model.desired)

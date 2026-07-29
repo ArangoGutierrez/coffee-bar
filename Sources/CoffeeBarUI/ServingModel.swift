@@ -62,12 +62,31 @@ public final class ServingModel {
         self.reading = reader.read()
     }
 
-    /// Bound to the toggle. `isServing` reflects what actually happened, not
-    /// what was asked for: a refused hold leaves the switch off.
-    public var serving: Bool {
-        get { isServing }
+    /// Bound to the panel's 3-way control. What the user ASKED FOR.
+    ///
+    /// This replaced a `serving: Bool` whose getter returned `isServing` — the
+    /// actual hold — and whose setter wrote `newValue ? .serve : .stop`. Both
+    /// halves were wrong once `.auto` existed:
+    ///
+    ///   - the getter made the control move by itself as agent sessions came
+    ///     and went, because it reported what the machine was doing rather
+    ///     than what had been asked of it;
+    ///   - the setter could only express two of the three positions, so one
+    ///     click wrote an explicit `.stop` or `.serve` the user never chose
+    ///     and `.auto` — the position the product SHIPS in — could never be
+    ///     selected again.
+    ///
+    /// The getter reads the controller, not a copy held here, so the `.serve`
+    /// latch is visible to the panel: a hold the battery floor refuses moves
+    /// the control to Off, which is exactly what has happened to the intent.
+    ///
+    /// `isServing` stays as the read-only ACTUAL state and stays on screen
+    /// beside this. The two answer different questions and the panel shows
+    /// both.
+    public var intent: UserIntent {
+        get { controller.intent }
         set {
-            controller.userToggled(to: newValue ? .serve : .stop)
+            controller.userToggled(to: newValue)
             refresh()
         }
     }
@@ -151,11 +170,19 @@ public final class ServingModel {
     /// The panel explains a condition that is still true, or it says nothing.
     ///
     /// `HoldController.lastSuppression` latches: it is cleared only when the
-    /// user toggles back on, and a floor release forces the switch off by
-    /// itself, so the latch would otherwise keep the line on screen through a
-    /// return to AC power and through a full recharge. The latch is deliberate
-    /// and is left alone — recovery must never re-arm the hold — so the
-    /// filtering happens here, on the way to the panel.
+    /// user picks Serve again, so it would otherwise keep the line on screen
+    /// through a return to AC power and through a full recharge. That latch is
+    /// deliberate and is left alone — under `.serve`, recovery must never
+    /// re-arm the hold — so the filtering happens here, on the way to the
+    /// panel.
+    ///
+    /// This filter is what makes the narrow `.serve`-only intent latch safe to
+    /// rely on. Under `.auto` the hold DOES come back once the reading
+    /// recovers, and this drops the stale line at the same moment, so the panel
+    /// never explains a refusal that has stopped happening. Were the intent
+    /// latch still unconditional, this filter would be actively harmful: it
+    /// would hide the reason a permanently disabled app gave for disabling
+    /// itself.
     private static func reason(_ suppression: HoldSuppression?,
                                stillTrueOf reading: PowerReading) -> HoldSuppression? {
         guard case .batteryFloor(_, let floor) = suppression,

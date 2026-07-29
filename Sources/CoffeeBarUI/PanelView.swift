@@ -63,10 +63,31 @@ public struct PanelView: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Toggle("Serving", isOn: $model.serving)
-                .toggleStyle(.switch)
-                .font(.headline)
+            // Three positions, not a switch, and bound to the INTENT rather
+            // than to `isServing`.
+            //
+            // A switch is a Bool, and the intent has never been one. Bound to
+            // `isServing` it also reported the ACTUAL hold, so under `.auto` it
+            // would move by itself as agent sessions came and went, and the
+            // click that moved it back would write an explicit `.stop` or
+            // `.serve` the user never chose — leaving `.auto`, the position the
+            // product ships in, unreachable after the first click.
+            //
+            // The tags are the enum cases, so the control cannot drift from the
+            // policy: a new `UserIntent` case is a compile-time decision here.
+            Text("Serving").font(.headline)
 
+            Picker("Serving", selection: $model.intent) {
+                Text("Off").tag(UserIntent.stop)
+                Text("Auto").tag(UserIntent.auto)
+                Text("On").tag(UserIntent.serve)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            // `isServing` stays on screen beside the control. The user has to
+            // be able to see that Auto is holding right now, or is not — the
+            // control says what was asked for and this line says what happened.
             Text(model.isServing
                  ? "Holding the system awake. The display may still sleep."
                  : "Not holding any assertion.")

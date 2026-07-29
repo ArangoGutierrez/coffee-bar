@@ -13,10 +13,23 @@ private func session(_ state: SessionState) -> AgentSession {
                  lastMessage: nil, attentionSince: nil, turnCount: 0)
 }
 
-@Test func aFreshControllerIsNotServing() {
+@Test func aFreshControllerIsOnAutoAndHoldsNothingYet() {
+    // `.auto` is the default from M2 on — the product follows the agent
+    // sessions until the user says otherwise. It was `.stop`, which now means
+    // an explicit veto and would ship a product that ignores every session
+    // until the user finds the control.
+    //
+    // The second expectation is what keeps `.auto` honest: with no sessions it
+    // still holds nothing. A `.auto` that fell through to a hold would pin a
+    // laptop awake from first launch, before the user had touched anything.
     var c = HoldController()
-    #expect(c.intent == .stop)
+    #expect(c.intent == .auto)
     #expect(c.evaluate(powerSource: .ac, batteryPercent: 80).idleSleepAssertion == false)
+
+    // And it follows a session the moment there is one, which is what makes
+    // the case `.auto` rather than a differently-spelled `.stop`.
+    #expect(c.evaluate(powerSource: .ac, batteryPercent: 80,
+                       sessions: [session(.working)]).idleSleepAssertion == true)
 }
 
 @Test func togglingOnHolds() {
@@ -41,6 +54,51 @@ private func session(_ state: SessionState) -> AgentSession {
     let recovered = c.evaluate(powerSource: .battery, batteryPercent: 21)
     #expect(recovered.idleSleepAssertion == false)
     #expect(c.intent == .stop)
+}
+
+@Test func theLatchDoesNotFireUnderAuto() {
+    // The mirror of `recoveringBatteryDoesNotReArmTheHold`, and the reason the
+    // latch had to be narrowed rather than left alone.
+    //
+    // The latch drops the intent to `.stop` so that a recovering battery cannot
+    // silently re-arm a hold. Under `.serve` that is right: the user asked
+    // once, the floor overrode it, and re-arming is a behaviour they did not
+    // ask for and cannot see coming. Under `.auto` it is fatal. `.auto` is a
+    // CONTINUOUS instruction, not a one-off request, and `PowerBroker` re-reads
+    // the floor on every single call — so latching buys nothing and costs the
+    // whole feature.
+    //
+    // Named bug this catches: the M1 `intent = .stop` on any suppression. One
+    // dip below the floor pins the intent to `.stop` for the life of the
+    // process. Every later session is ignored, the product is dead, and
+    // `ServingModel.reason(_:stillTrueOf:)` hides the battery line as soon as
+    // the reading recovers — so the panel shows a disabled app and no reason.
+    // The user's only cure is to quit and relaunch.
+    var c = HoldController()
+    c.userToggled(to: .auto)
+    let working = [session(.working)]
+
+    // Precondition: `.auto` is genuinely holding, so the release below is a
+    // release and not a hold that never started.
+    #expect(c.evaluate(powerSource: .battery, batteryPercent: 21,
+                       sessions: working).idleSleepAssertion == true)
+
+    let atFloor = c.evaluate(powerSource: .battery, batteryPercent: 20, sessions: working)
+    #expect(atFloor.idleSleepAssertion == false)
+    #expect(atFloor.suppression == .batteryFloor(percent: 20, floor: 20))
+
+    // The intent SURVIVES the suppression. This is the assertion the M1 latch
+    // fails: it reads `.stop` there.
+    #expect(c.intent == .auto, "a floor suppression latched the intent away from .auto")
+
+    // And the hold comes back on its own once the reading recovers, with no
+    // user action at all. Without this the expectation above could hold for a
+    // controller that keeps the label `.auto` while some other piece of state
+    // stays latched off.
+    let recovered = c.evaluate(powerSource: .battery, batteryPercent: 21, sessions: working)
+    #expect(recovered.idleSleepAssertion == true,
+            "Auto never recovered after one dip below the floor")
+    #expect(c.intent == .auto)
 }
 
 @Test func returningToACDoesNotReArmTheHoldEither() {
@@ -91,7 +149,8 @@ private func session(_ state: SessionState) -> AgentSession {
     // in a known state. It asserts no transition between states.
     var c = HoldController()
 
-    // Intent is never toggled, so a hold here can only come from the session.
+    // Intent is never toggled, so a hold here can only come from the session:
+    // the default `.auto` contributes nothing of its own.
     #expect(c.evaluate(powerSource: .ac, batteryPercent: 80,
                        sessions: [session(.working)]).idleSleepAssertion == true)
 
@@ -117,9 +176,10 @@ private func session(_ state: SessionState) -> AgentSession {
 }
 
 @Test func togglingOffStopsTheHoldAndKeepsTheReason() {
-    // `.stop` is how the user switches serving off: Task 5's `ServingModel`
-    // setter calls `userToggled(to: newValue ? .serve : .stop)`. No other test
-    // in this file ever passes `.stop`, so two mutants live here undetected.
+    // `.stop` is how the user switches serving off: `ServingModel.intent`
+    // forwards the panel's Off position to `userToggled(to: .stop)`. It is a
+    // deliberate veto, not the absence of a request — that is `.auto` — so it
+    // is the one position this test must keep passing.
     //
     // Named bug 1: `userToggled` ignoring its argument and always arming
     // (`self.intent = .serve`). The off switch is then dead — the user can

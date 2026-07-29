@@ -18,7 +18,7 @@ public struct PowerInputs: Equatable, Sendable {
     public init(sessions: [AgentSession] = [],
                 powerSource: PowerSource,
                 batteryPercent: Int?,
-                userIntent: UserIntent,
+                userIntent: UserIntent = .auto,
                 holdAwakeWhileBlocked: Bool = false,
                 batteryFloorPercent: Int = 20) {
         self.sessions = sessions
@@ -64,10 +64,37 @@ public enum PowerBroker {
         let active = activeStates(holdAwakeWhileBlocked: inputs.holdAwakeWhileBlocked)
         let sessionsWantAwake = inputs.sessions.contains { active.contains($0.state) }
 
-        // M1 note: `sessions` is always empty, so this reduces to the toggle.
-        // The OR is provisional — M2 must decide whether an explicit `.stop`
-        // outranks an active session. See the design spec §5.1.
-        let wantsHold = inputs.userIntent == .serve || sessionsWantAwake
+        // §5.1 deferred one question to M2: does an explicit `.stop` outrank an
+        // active session? It does. The M1 OR is gone, and the three positions
+        // rank differently:
+        //
+        //   `.stop`  — never hold. The off switch is ABSOLUTE. coffee-bar
+        //              overrides the machine's own sleep policy, so a product
+        //              that then ignores "off" because some background session
+        //              disagrees is a trust failure, not a convenience.
+        //   `.serve` — always hold. An explicit request outranks a quiet
+        //              session list, so picking On mid-task does not stop
+        //              working the moment the last session goes idle.
+        //   `.auto`  — the sessions decide. The default, and what the product
+        //              is for.
+        //
+        // Both remaining paths still answer to the battery floor below: it is a
+        // safety limit on the machine, not a veto on one control position.
+        //
+        // A `switch` rather than a boolean expression, deliberately. The
+        // expression this replaces silently absorbed a third case — `.auto`
+        // is not `.serve`, so it fell into the session predicate and happened
+        // to be right. A fourth case cannot be quietly right or quietly wrong
+        // here: it stops compiling until somebody decides where it belongs.
+        let wantsHold: Bool
+        switch inputs.userIntent {
+        case .stop:
+            wantsHold = false
+        case .serve:
+            wantsHold = true
+        case .auto:
+            wantsHold = sessionsWantAwake
+        }
 
         guard wantsHold else {
             return DesiredPowerState(idleSleepAssertion: false)
