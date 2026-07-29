@@ -13,6 +13,10 @@ let package = Package(
         .target(name: "CoffeeBarCore", swiftSettings: [.swiftLanguageMode(.v6)]),
         .target(name: "CoffeeBarPower", dependencies: ["CoffeeBarCore"],
                 swiftSettings: [.swiftLanguageMode(.v6)]),
+        // The listener and the HTTP framing. Depends on CoffeeBarCore only:
+        // ingest produces sessions, it does not decide what they mean.
+        .target(name: "CoffeeBarIngest", dependencies: ["CoffeeBarCore"],
+                swiftSettings: [.swiftLanguageMode(.v6)]),
         // The model, the panel and the glyphs live in a library rather than in
         // the executable: SwiftPM treats an executable target's `main.swift` as
         // top-level code, which a test target cannot import.
@@ -27,6 +31,8 @@ let package = Package(
         .testTarget(name: "CoffeeBarPowerTests", dependencies: ["CoffeeBarPower"],
                     swiftSettings: [.swiftLanguageMode(.v6)]),
         .testTarget(name: "CoffeeBarUITests", dependencies: ["CoffeeBarUI"],
+                    swiftSettings: [.swiftLanguageMode(.v6)]),
+        .testTarget(name: "CoffeeBarIngestTests", dependencies: ["CoffeeBarIngest"],
                     swiftSettings: [.swiftLanguageMode(.v6)]),
     ]
 )
