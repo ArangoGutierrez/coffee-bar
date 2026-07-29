@@ -370,7 +370,15 @@ private func recordedSessionID() throws -> String {
 
     let out = SessionHub.apply(try recorded("session-start.json"), to: [], now: t0)
     #expect(out.first?.repoName == "coffee-bar")
-    #expect(out.first?.cwd == URL(fileURLWithPath: raw))
+
+    // Compare the PATH, not the URL. This used to read
+    // `out.first?.cwd == URL(fileURLWithPath: raw)`, which built the expectation
+    // with the very call under test — so when that call was reading the
+    // filesystem and appending a trailing slash for directories that happened to
+    // exist, both sides agreed and the test stayed green while the behaviour was
+    // wrong. `path` is stable across the `isDirectory:` form and does not
+    // re-derive the construction being asserted.
+    #expect(out.first?.cwd?.path == raw)
 }
 
 @Test func anEventWithNoCwdKeepsTheOneAlreadyKnown() throws {
