@@ -673,3 +673,74 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     model.refresh()
     #expect(model.hookHealth == .wired)
 }
+
+// MARK: - The line the panel shows for that health
+//
+// The copy is asserted HERE, on the model, and never on rendered AppKit text —
+// M1 design §5.4. `PanelView` renders `hookAdvisory` and transforms nothing, so
+// this is the whole decision: what the line says, and whether there is a line
+// at all.
+
+@MainActor
+@Test func theAdvisorySaysNothingAtAllWhenTheHooksAreWired() {
+    // Named bug this catches: a panel that reports its own health every time it
+    // opens. Silence is also what keeps the panel honest — the check reads the
+    // settings FILE, so it can never prove an event arrived, and a line saying
+    // so would be a claim it has no evidence for. PE finding B2: a second app
+    // instance stealing the socket kills ingest and leaves this file `.wired`.
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth("wired.json"))
+
+    model.refresh()
+    #expect(model.hookHealth == .wired)
+    #expect(model.hookAdvisory == nil)
+}
+
+@MainActor
+@Test func theAdvisoryNamesEveryMissingEventAndTheFileThatFixesIt() {
+    // `missing-two.json` wires SessionStart, PreToolUse and PostToolUse, gives
+    // Stop somebody else's command, and omits PermissionDenied entirely.
+    //
+    // TWO missing events, deliberately: one would leave the separator between
+    // them unasserted, and the panel line is the only place that list is ever
+    // joined.
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth("missing-two.json"))
+
+    model.refresh()
+    #expect(model.hookHealth == .missing(["PermissionDenied", "Stop"]))
+
+    // A literal. Building the expectation from `hookHealth` would let both
+    // sides agree on a line that names no file and tells the user nothing.
+    #expect(model.hookAdvisory == """
+        Not receiving PermissionDenied, Stop. \
+        Add the coffee-bar hooks to ~/.claude/settings.json.
+        """)
+}
+
+@MainActor
+@Test func theAdvisoryNeverTellsTheUserToPasteIntoAFileItCouldNotRead() {
+    // Named bug this catches: folding `.unreadable` into the `.missing` line.
+    //
+    // `.unreadable` is not evidence that the entries are gone — it is a file
+    // this app could not parse. Telling that user to add entries that may
+    // already be there is how a shared settings file gets clobbered, which is
+    // the exact six-occurrence pattern design §6 exists to avoid.
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth("definitely-not-here.json"))
+
+    model.refresh()
+    #expect(model.hookHealth == .unreadable)
+
+    #expect(model.hookAdvisory == """
+        Cannot read ~/.claude/settings.json, so coffee-bar cannot confirm its \
+        hooks are installed. Agent sessions may not arrive.
+        """)
+
+    // The discriminating half: the two states must not reach the same advice.
+    let advisory = model.hookAdvisory ?? ""
+    #expect(!advisory.contains("Add the coffee-bar hooks"))
+}

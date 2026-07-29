@@ -66,9 +66,51 @@ public final class ServingModel {
     /// finding B2 measured a second app instance stealing the socket path,
     /// which kills ingest and leaves the settings file exactly as it was — so
     /// this stays `.wired` while no event can arrive. Whatever renders it must
-    /// say the hooks are installed and must not claim events are flowing. A
-    /// live-socket probe is the separate check that would close that gap.
+    /// never claim events are flowing. `hookAdvisory` below renders NOTHING for
+    /// `.wired`, which is the strongest form of that: a panel that says nothing
+    /// cannot say something untrue. A live-socket probe is the separate check
+    /// that would close the gap.
     public private(set) var hookHealth: HookHealthStatus = .unreadable
+
+    /// The one line the panel shows about that health, or `nil` for no line.
+    ///
+    /// Derived, not stored, so it cannot disagree with `hookHealth`. Reading it
+    /// reads `hookHealth`, so `@Observable` tracks it and the panel updates on
+    /// the same 30-second refresh with no second timer.
+    ///
+    /// **`.wired` says nothing, and that is the honest answer rather than a
+    /// terse one.** This check reads the settings FILE. It cannot see whether a
+    /// single event has ever arrived — PE finding B2 measured a second app
+    /// instance stealing the socket, which kills ingest and leaves the file
+    /// untouched — so any line claiming ingest works would be a claim with no
+    /// evidence behind it. A panel that announces its own health every time it
+    /// opens is also noise the user learns to skip past.
+    ///
+    /// The two failing states are worded apart on purpose. `.missing` is
+    /// evidence the entries are gone, so it names them and names the file.
+    /// `.unreadable` is NOT that evidence — it is a file this app could not
+    /// parse — so it must never tell the user to add entries that may already
+    /// be there. That is how a shared settings file gets clobbered, which is
+    /// the pattern design §6 exists to avoid.
+    ///
+    /// `HookHealth.status(ofSettings:)` never returns `.missing([])`: it reports
+    /// `.wired` when nothing is missing. So the list below is never empty.
+    public var hookAdvisory: String? {
+        switch hookHealth {
+        case .wired:
+            return nil
+        case .missing(let events):
+            return """
+                Not receiving \(events.joined(separator: ", ")). \
+                Add the coffee-bar hooks to ~/.claude/settings.json.
+                """
+        case .unreadable:
+            return """
+                Cannot read ~/.claude/settings.json, so coffee-bar cannot confirm its \
+                hooks are installed. Agent sessions may not arrive.
+                """
+        }
+    }
 
     public init(holder: any AssertionHolding = AssertionHolder(),
                 reader: any PowerReadingProviding = SystemPowerReader(),

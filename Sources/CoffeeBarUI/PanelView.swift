@@ -102,6 +102,28 @@ public struct PanelView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            // Beside the serving state rather than in a footer, because under
+            // `.auto` — the position the product ships in — missing hooks mean
+            // no session ever arrives and the app can therefore never decide to
+            // hold. That is an explanation of what this control is doing, not
+            // an aside.
+            //
+            // Rendered verbatim from the model, with no text built here. The
+            // wording is the honest half of design §6 and is asserted on
+            // `ServingModel.hookAdvisory`; M1 design §5.4 rules out asserting on
+            // this view. A second sentence composed here would be a sentence no
+            // check reads.
+            //
+            // Nothing shows when the hooks are wired. The check reads the
+            // settings file and cannot see an event arrive, so the panel has no
+            // evidence for a healthy line and does not print one.
+            if let line = model.hookAdvisory {
+                Text(line)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             Divider()
 
             Label(batteryLine, systemImage: "bolt")

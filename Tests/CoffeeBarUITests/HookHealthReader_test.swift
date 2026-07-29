@@ -192,8 +192,16 @@ private let forbiddenWriteCalls = [
     // is described as a mode where "coffee-bar may write its own" config. That
     // is about coffee-bar's OWN config, and the loop above now makes the other
     // reading of that sentence fail here.
+    //
+    // `ServingModel.swift` joined the set when `hookAdvisory` landed: the panel
+    // line has to NAME the file the user must fix, or it is not actionable, and
+    // that spells the path out in the model. Admitting it here is the point of
+    // the anchor rather than a cost of it — the loop above now holds the same
+    // no-write line over the model that renders the advice as it does over the
+    // reader that produced it.
     #expect(knowsThePath.sorted() == ["HookHealth.swift",
                                       "HookHealthReader.swift",
+                                      "ServingModel.swift",
                                       "TelemetryRecon.swift"],
             "the set of files that know the settings path changed: \(knowsThePath.sorted())")
 }

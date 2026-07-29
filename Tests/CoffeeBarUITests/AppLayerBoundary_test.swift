@@ -416,3 +416,32 @@ private func resolvedDependencies(ofTarget name: String) throws -> [String] {
         }
     }
 }
+
+@Test func thePanelReadsTheHookAdvisoryTheModelPublishes() throws {
+    // Named bug this catches, and it SHIPPED: commit 5116326 landed the hook
+    // health check, `ServingModel` published it, every check was green — and
+    // `PanelView` read it nowhere, so the user saw nothing at all. A published
+    // value no view reads is a feature that does not exist.
+    //
+    // This reads the source because the behavioural route is closed: M1 design
+    // §5.4 forbids asserting on rendered AppKit text, so no check in this
+    // package can watch the panel draw a line.
+    //
+    // LIMIT, stated rather than hidden: this proves the panel NAMES the
+    // property, not that it renders what it reads. A mention inside a comment
+    // would satisfy it. It is a tripwire against deleting the render, not proof
+    // the render is correct.
+    let files = try appLayerSources()
+    #expect(files.count == expectedSourceCount,
+            "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
+
+    let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
+                             "the app layer no longer compiles a PanelView.swift")
+    let source = try String(contentsOf: panel, encoding: .utf8)
+
+    #expect(source.contains("model.hookAdvisory"), """
+        PanelView.swift never reads model.hookAdvisory, so the hook health \
+        check reaches the user nowhere. Render it, or delete the property and \
+        the checks that assert its text.
+        """)
+}
