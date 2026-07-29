@@ -45,12 +45,32 @@ private func mode(ofItemAtPath path: String) -> Int16? {
         as? NSNumber)??.int16Value
 }
 
+/// The longest a post may take before the test stops waiting for it.
+///
+/// Bounding this is not tidiness. `curl` with no limit waits for an answer for
+/// ever, and a listener that is bound but not being SERVED gives it none: the
+/// node is in the listen backlog, so the connection succeeds and then nothing
+/// arrives. Measured, that hung one test body permanently and took the whole run
+/// with it — 375 tests started, 318 finished, and the run had to be killed after
+/// ten minutes with no failure reported at all.
+///
+/// Sixty seconds is far longer than any post here needs. The exchange is one
+/// small POST over a local socket, and even under the CPU oversubscription that
+/// `pumpBudget` is sized for the whole suite finishes in about 150 s. A post
+/// that reaches this limit reports `curl` exit 28.
+private let postTimeoutSeconds = "60"
+
 /// Posts one payload the way a real hook does. `/usr/bin/curl` ships with macOS.
+///
+/// Returns `curl`'s exit status: 0 on success, 7 when the socket could not be
+/// connected to, and 28 when the listener accepted the connection and never
+/// answered within `postTimeoutSeconds`.
 @discardableResult
 private func post(_ json: String, to socketPath: String) throws -> Int32 {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
     process.arguments = ["--silent", "--show-error", "--fail",
+                         "--max-time", postTimeoutSeconds,
                          "--unix-socket", socketPath,
                          "-X", "POST",
                          "-H", "Content-Type: application/json",
@@ -77,6 +97,7 @@ private func post(contentsOfFile path: String, to socketPath: String) throws -> 
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
     process.arguments = ["--silent", "--show-error", "--fail",
+                         "--max-time", postTimeoutSeconds,
                          "--unix-socket", socketPath,
                          "-X", "POST",
                          "-H", "Content-Type: application/json",
@@ -165,22 +186,89 @@ private final class Collected: @unchecked Sendable {
     }
 }
 
+/// How long every wait in this file gets, unless it states its own budget.
+///
+/// Five seconds was the old value and it was measured to be too short. On this
+/// 14-core machine with 56 CPU burners running — roughly the pressure a 3-core
+/// CI runner is under — the suite took 153 s where it takes 3.9 s idle, and NINE
+/// tests in this file failed purely because a 5 s wait for the bind expired.
+///
+/// A generous budget is close to free. Every default-budget wait here is for
+/// something that MUST happen, so a passing test leaves the loop as soon as the
+/// condition holds and never spends the budget. Only an already-failing test
+/// pays, and it pays in exchange for naming its real cause. The one wait for a
+/// condition that must NEVER hold states its own short budget, and must keep
+/// doing so.
+private let pumpBudget: TimeInterval = 30
+
 /// Waits until `condition` holds or the deadline passes.
 ///
-/// The listener runs on `DispatchQueue.main`. `swift-testing` runs a test body
-/// on the concurrency pool rather than on the main thread, and the harness's own
-/// main-actor executor drains the main queue, so this thread only has to wait.
-/// When a test body IS on the main thread, waiting would starve the very queue
-/// it is waiting for, so the run loop is turned over instead.
-private func pump(until condition: () -> Bool, seconds: TimeInterval = 5) {
+/// NEVER on the main thread. That is enforced below rather than merely written
+/// here, because the failure it prevents is silent and total.
+///
+/// Measured in this package, not assumed. Marking any test in this file
+/// `@MainActor` makes `Thread.isMainThread` true here. This helper used to turn
+/// the run loop over in that case, and inside the `swift test` process that does
+/// not drain `DispatchQueue.main` at all: a bare `DispatchQueue.main.async`
+/// block enqueued just before the wait never ran, and the listener never
+/// reported `.ready`, so the whole budget went by.
+///
+/// What follows is worse than one slow test. `NWListener` binds on its own
+/// internal queue, so the socket node DOES appear — measured at mode 0755,
+/// because the handler that tightens it to 0600 is delivered to `.main` and
+/// never runs. `curl` then connects into the listen backlog and waits for an
+/// answer that cannot come, so the test body never returns and the main thread
+/// is held for ever. One such test wedged the entire run: 375 tests started, 318
+/// finished, killed after ten minutes with no failure reported.
+///
+/// The deleted branch is not wrong everywhere — in a plain executable, where the
+/// Swift runtime does run a CFRunLoop on the main thread, the same code drains
+/// the main queue correctly. That is the point. Its correctness depends on who
+/// owns the main thread, which a test cannot know, so the branch is gone and a
+/// trap that names the cause stands in its place.
+private func pump(until condition: () -> Bool, seconds: TimeInterval = pumpBudget) {
+    precondition(!Thread.isMainThread, """
+        pump() ran on the main thread. Every listener in this file serves on \
+        DispatchQueue.main, and waiting here never lets that queue run, so this \
+        wait cannot end and the run will wedge. Remove @MainActor from the test \
+        that called this.
+        """)
     let deadline = Date().addingTimeInterval(seconds)
     while !condition() && Date() < deadline {
-        if Thread.isMainThread {
-            RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02))
-        } else {
-            Thread.sleep(forTimeInterval: 0.02)
-        }
+        Thread.sleep(forTimeInterval: 0.02)
     }
+}
+
+/// Waits for the listener to bind, and SAYS SO when it does not.
+///
+/// Every test below needs a bound socket before it can measure anything. When
+/// the bind did not happen, the old `pump(until: { listener.isReady })` said
+/// nothing and the next assertion reported the consequence as if it were the
+/// cause. Measured under load, all nine failures in this file read that way:
+///
+/// - `socket mode is absent` — reads as a permissions defect. The listener had
+///   simply not bound.
+/// - `an error was expected but none was thrown` — reads as the guard against
+///   stealing a live node being gone. The first listener had not bound, so the
+///   second one correctly found the path free.
+/// - `RawClient(path:) -> nil` — reads as a refused connection. There was no
+///   node to connect to.
+///
+/// The first of those is why this is a `#require` and not an `#expect`. A
+/// maintainer triaging `socket mode is absent` hunts a permissions defect that
+/// does not exist. A test with no socket has nothing left to say, so it stops
+/// here and names the one thing that did go wrong.
+private func requireReady(_ listener: UnixSocketIngestListener,
+                          within seconds: TimeInterval = pumpBudget,
+                          sourceLocation: SourceLocation = #_sourceLocation) throws {
+    pump(until: { listener.isReady }, seconds: seconds)
+    try #require(listener.isReady,
+                 """
+                 the listener did not bind within \(seconds) s. Nothing below \
+                 this line had a socket to measure, so this is a timeout and \
+                 not a defect in what the test asserts.
+                 """,
+                 sourceLocation: sourceLocation)
 }
 
 /// Waits for the node at `path` to stop answering.
@@ -207,7 +295,7 @@ private func waitUntilNothingAnswers(at path: String) {
     try listener.start { event in
         collected.record(event, onMain: Thread.isMainThread)
     }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
 
     #expect(try post(#"{"hook_event_name":"Stop","session_id":"s1"}"#, to: sandbox.path) == 0)
     pump(until: { !collected.all.isEmpty })
@@ -230,7 +318,7 @@ private func waitUntilNothingAnswers(at path: String) {
     try listener.start { event in
         collected.record(event, onMain: Thread.isMainThread)
     }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
 
     #expect(try post(#"{"hook_event_name":"Stop","session_id":"s1"}"#, to: sandbox.path) == 0)
     pump(until: { !collected.all.isEmpty })
@@ -250,7 +338,7 @@ private func waitUntilNothingAnswers(at path: String) {
     try listener.start { event in
         collected.record(event, onMain: Thread.isMainThread)
     }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
 
     _ = try post("not json at all", to: sandbox.path)
     _ = try post(#"{"hook_event_name":"Stop","session_id":"good"}"#, to: sandbox.path)
@@ -276,7 +364,7 @@ private func waitUntilNothingAnswers(at path: String) {
     try listener.start { event in
         collected.record(event, onMain: Thread.isMainThread)
     }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
 
     let attacker = try #require(RawClient(path: sandbox.path))
     attacker.transmit("POST /ingest HTTP/1.1\r\nHost: localhost\r\nContent-Length: -1\r\n\r\n")
@@ -299,7 +387,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
     try listener.start { _ in }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
 
     #expect(mode(ofItemAtPath: sandbox.path) == 0o600,
             "socket mode is \(mode(ofItemAtPath: sandbox.path).map { String($0, radix: 8) } ?? "absent")")
@@ -315,7 +403,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
     try listener.start { _ in }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
 
     #expect(mode(ofItemAtPath: sandbox.directory.path) == 0o700,
             "parent directory mode is \(mode(ofItemAtPath: sandbox.directory.path).map { String($0, radix: 8) } ?? "absent")")
@@ -337,7 +425,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
     try listener.start { _ in }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
 
     #expect(mode(ofItemAtPath: sandbox.directory.path) == 0o700)
 }
@@ -357,7 +445,7 @@ private func waitUntilNothingAnswers(at path: String) {
     defer { sandbox.remove() }
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     try listener.start { _ in }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
     #expect(FileManager.default.fileExists(atPath: sandbox.path))
 
     listener.stop()
@@ -381,7 +469,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let first = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { first.stop() }
     try first.start { event in collected.record(event, onMain: Thread.isMainThread) }
-    pump(until: { first.isReady })
+    try requireReady(first)
 
     let second = UnixSocketIngestListener(socketPath: sandbox.path)
     #expect(throws: IngestError.alreadyServing(sandbox.path)) {
@@ -408,7 +496,7 @@ private func waitUntilNothingAnswers(at path: String) {
 
     let first = UnixSocketIngestListener(socketPath: sandbox.path)
     try first.start { _ in }
-    pump(until: { first.isReady })
+    try requireReady(first)
     first.stop()
     waitUntilNothingAnswers(at: sandbox.path)
     #expect(FileManager.default.fileExists(atPath: sandbox.path),
@@ -418,7 +506,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let second = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { second.stop() }
     try second.start { event in collected.record(event, onMain: Thread.isMainThread) }
-    pump(until: { second.isReady })
+    try requireReady(second)
 
     #expect(try post(#"{"hook_event_name":"Stop","session_id":"second"}"#,
                      to: sandbox.path) == 0)
@@ -439,7 +527,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
     try listener.start { _ in }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
 
     #expect(mode(ofItemAtPath: sandbox.path) == 0o600)
 }
@@ -474,7 +562,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
     try listener.start { _ in }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
 
     #expect(throws: IngestError.alreadyServing(sandbox.path)) {
         try listener.start { _ in }
@@ -494,7 +582,7 @@ private func waitUntilNothingAnswers(at path: String) {
                                             idleTimeout: 0.5)
     defer { listener.stop() }
     try listener.start { _ in }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
 
     let client = try #require(RawClient(path: sandbox.path))
     defer { client.close() }
@@ -517,7 +605,7 @@ private func waitUntilNothingAnswers(at path: String) {
                                             maximumConnections: 2)
     defer { listener.stop() }
     try listener.start { _ in }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
 
     var parked: [RawClient] = []
     defer { parked.forEach { $0.close() } }
@@ -528,8 +616,25 @@ private func waitUntilNothingAnswers(at path: String) {
     }
     // Both must be ADMITTED before the third arrives, or this measures a race
     // rather than the cap.
-    pump(until: { listener.activeConnectionCount == 2 })
-    #expect(listener.activeConnectionCount == 2)
+    //
+    // Commit `d6dafb2` raised the budget for `extra.peerClosed` below to 30 s
+    // because a loaded 3-core runner could not close a connection inside 5 s.
+    // This wait sits EARLIER in the same test and had kept the 5 s default, so
+    // on that same runner it expired first and masked the fix outright.
+    //
+    // A `#require`, because the assertions below are only about the cap once
+    // this holds. The message has to separate the two readings: a cap of 2
+    // cannot refuse the FIRST two connections, so a count under 2 here is the
+    // runner being slow and never the cap being wrong.
+    let admitBudget: TimeInterval = 30
+    pump(until: { listener.activeConnectionCount == 2 }, seconds: admitBudget)
+    try #require(listener.activeConnectionCount == 2,
+                 """
+                 only \(listener.activeConnectionCount) of 2 connections were \
+                 admitted within \(admitBudget) s. The cap is not implicated — \
+                 a cap of 2 admits the first two — so this is a slow runner, \
+                 and the refusal measured below would have been a race.
+                 """)
 
     let extra = try #require(RawClient(path: sandbox.path))
     defer { extra.close() }
@@ -569,7 +674,7 @@ private func waitUntilNothingAnswers(at path: String) {
                                             maximumConnections: 2)
     defer { listener.stop() }
     try listener.start { event in collected.record(event, onMain: Thread.isMainThread) }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
 
     for index in 0..<3 {
         #expect(try post(#"{"hook_event_name":"Stop","session_id":"s\#(index)"}"#,
@@ -611,7 +716,7 @@ private func waitUntilNothingAnswers(at path: String) {
                                             idleTimeout: 1)
     defer { listener.stop() }
     try listener.start { event in collected.record(event, onMain: Thread.isMainThread) }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
 
     let posts = 5
     for index in 0..<posts {
@@ -649,7 +754,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
     try listener.start { event in collected.record(event, onMain: Thread.isMainThread) }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
 
     let filler = String(repeating: "x", count: 262_144)
     let json = #"{"hook_event_name":"Stop","session_id":"reassembled","last_assistant_message":"\#(filler)"}"#
