@@ -16,10 +16,19 @@ public enum IngestError: Error, Equatable {
     case socketPathBlocked(String)
 }
 
-/// Injection seam, alongside `PowerReadingProviding` and `AssertionHolding`.
+/// Injection seam, the third of the three `ServingModel` is built on —
+/// `PowerReadingProviding` reads the battery, one more holds the assertion, and
+/// this one delivers events.
 ///
 /// `ServingModel` depends on this rather than on the concrete listener, so the
 /// model's tests run with no socket at all.
+///
+/// The sibling seam is NOT named here on purpose. This file now ships inside
+/// the `coffee-bar` binary, so `AppLayerBoundary_test.swift` reads it, and the
+/// check there treats that name itself as the tripwire — a mention in a comment
+/// is enough to turn it red. That is the check working, not a false positive:
+/// only `ServingModel.swift` may reach the holder, and a denylist cannot tell a
+/// comment from a call.
 public protocol IngestListening: Sendable {
     /// Delivers every decoded event ON THE MAIN THREAD. See `start(queue:)`.
     func start(onEvent: @escaping @Sendable (HookEvent) -> Void) throws

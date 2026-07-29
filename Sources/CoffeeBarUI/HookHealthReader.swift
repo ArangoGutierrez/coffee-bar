@@ -24,11 +24,14 @@ import CoffeeBarCore
 /// close that gap.
 ///
 /// Design §8 puts the file read in `CoffeeBarIngest`, so that `CoffeeBarCore`
-/// keeps its no-I/O rule. That target does not exist yet, and this milestone's
-/// task may not add one. `CoffeeBarUI` is the nearest home that keeps the pure
-/// parse in `CoffeeBarCore` and stays inside the resolved build graph, because
-/// `ServingModel` — the one caller — lives here. Move the file when the ingest
-/// target lands; nothing but its module has to change.
+/// keeps its no-I/O rule. This landed first, before that target existed, and
+/// `CoffeeBarUI` is the nearest home that keeps the pure parse in
+/// `CoffeeBarCore` — `ServingModel`, the one caller, lives here.
+///
+/// `CoffeeBarIngest` exists now, and both targets are in the app layer, so the
+/// move is a file move and a module change with no behaviour in it. It is
+/// DEFERRED rather than done: it buys no correctness, and both directories are
+/// scanned by `AppLayerBoundary_test.swift` either way.
 public struct HookHealthReader: Sendable {
     public let settingsURL: URL
 

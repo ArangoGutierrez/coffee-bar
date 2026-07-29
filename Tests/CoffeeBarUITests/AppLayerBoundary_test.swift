@@ -62,13 +62,21 @@ private var packageRoot: URL {
         .deletingLastPathComponent()    // the package root
 }
 
-/// The two targets that make up the app layer.
+/// The targets that make up the app layer.
 ///
 /// Target NAMES, not directories. Where each one lives on disk is SwiftPM's
 /// answer to give, and asking it is what closes the `path:` override escapes.
+///
+/// `CoffeeBarIngest` joined this list when `CoffeeBarUI` gained a dependency on
+/// it: the listener now ships INSIDE the `coffee-bar` binary, which is escape 2
+/// above. Adding a name here is only half the change — every file that target
+/// compiles has to appear in `expectedAppLayerEntries` too, or
+/// `theAppLayerCompilesExactlyTheFilesThisGuardScans` goes red on a correct
+/// change. The two lists move together, always.
 private let appLayerTargets = [
     "CoffeeBarApp",
     "CoffeeBarUI",
+    "CoffeeBarIngest",
 ]
 
 /// Every file the app layer is allowed to compile, package-root relative and
@@ -80,6 +88,8 @@ private let appLayerTargets = [
 /// somebody reads the new file against design §6.1.
 private let expectedAppLayerEntries = [
     "Sources/CoffeeBarApp/main.swift",
+    "Sources/CoffeeBarIngest/HTTPRequestFramer.swift",
+    "Sources/CoffeeBarIngest/IngestListener.swift",
     "Sources/CoffeeBarUI/HookHealthReader.swift",
     "Sources/CoffeeBarUI/MenuBarGlyphs.swift",
     "Sources/CoffeeBarUI/PanelView.swift",
@@ -307,23 +317,29 @@ private func resolvedDependencies(ofTarget name: String) throws -> [String] {
         """)
 }
 
-@Test func theAppLayerIsExactlyTwoTargetsDeepInTheBuildGraph() throws {
-    // The file set above covers two named targets, so it cannot see a THIRD
-    // app-layer target. Named bug this catches: a `Sources/CoffeeBarPanelKit`
+@Test func theAppLayerGainsNoUnscannedTargetInTheBuildGraph() throws {
+    // The file set above covers the NAMED targets in `appLayerTargets`, so it
+    // cannot see one more. Named bug this catches: a `Sources/CoffeeBarPanelKit`
     // that `CoffeeBarApp` depends on. It compiled (`Escape.swift.o`), linked
     // into `coffee-bar`, named `IOPMAssertion`, and both old checks passed —
     // the scan simply never looked there.
     //
-    // `CoffeeBarUI` is asserted as well as `CoffeeBarApp`: a new target hung off
-    // the model rather than off the executable ships in the app just the same.
+    // Every scanned target's own dependency list is asserted, not just the
+    // executable's: a new target hung off the model, or off the listener, ships
+    // in the app just the same. `CoffeeBarIngest` is scanned since
+    // `CoffeeBarUI` gained a dependency on it, so its edges are now the frontier
+    // and are pinned here too.
     //
     // Read from the RESOLVED graph, not from the manifest text. A text parser
     // reads the `dependencies:` list of whichever manifest file it opens, and
     // cannot know that SwiftPM opened a different one.
     #expect(try resolvedDependencies(ofTarget: "CoffeeBarApp") == ["CoffeeBarUI"],
             "CoffeeBarApp gained a dependency; a new app-layer target is unscanned")
-    #expect(try resolvedDependencies(ofTarget: "CoffeeBarUI") == ["CoffeeBarPower"],
+    #expect(try resolvedDependencies(ofTarget: "CoffeeBarUI")
+            == ["CoffeeBarPower", "CoffeeBarIngest"],
             "CoffeeBarUI gained a dependency; a new app-layer target is unscanned")
+    #expect(try resolvedDependencies(ofTarget: "CoffeeBarIngest") == ["CoffeeBarCore"],
+            "CoffeeBarIngest gained a dependency; a new app-layer target is unscanned")
 }
 
 @Test func swiftPMResolvesExactlyOneManifest() throws {

@@ -19,7 +19,15 @@ struct CoffeeBarMenuBarApp: App {
         // only while the panel is open, so a ticker owned by the view stops the
         // moment the user closes it — and a battery floor that is enforced only
         // while the panel is open does not enforce the floor.
-        model.startMonitoring()
+        // Ingest failing must not stop the app launching, and the ticker is
+        // installed before the socket for exactly this reason: the battery
+        // floor still gets enforced when the socket is refused. The likeliest
+        // refusal is a second instance already answering on the path.
+        do {
+            try model.startMonitoring()
+        } catch {
+            NSLog("coffee-bar: ingest did not start: \(error)")
+        }
         _model = State(initialValue: model)
     }
 

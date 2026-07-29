@@ -4,10 +4,27 @@
 import Foundation
 import Testing
 import CoffeeBarCore
+import CoffeeBarIngest
 import CoffeeBarPower
 @testable import CoffeeBarUI
 
 // MARK: - Test doubles
+
+/// Starts nothing.
+///
+/// The three checks below that call `startMonitoring` are handed one. The
+/// SHIPPING default is the real listener, deliberately — see `ServingModel` —
+/// so without this the suite would bind
+/// `~/Library/Application Support/coffee-bar/ingest.sock`, and a `swift test`
+/// run alongside a live coffee-bar would be refused by it.
+///
+/// `ServingModelIngest_test.swift` holds the checks about ingest itself. This
+/// one exists only to keep the socket out of the tests that are about the
+/// ticker.
+private final class NoopIngestListener: IngestListening, @unchecked Sendable {
+    func start(onEvent: @escaping @Sendable (HookEvent) -> Void) throws {}
+    func stop() {}
+}
 
 /// The power reader the tests drive.
 ///
@@ -441,7 +458,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // value to the holder is the tick.
     let reader = FakeReader(source: .battery, percent: 21)
     let spy = SpyHolder()
-    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth(),
+                             listener: NoopIngestListener())
 
     model.intent = .serve
     // Preconditions: the hold is live and nothing has been released, so the
@@ -451,7 +469,7 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
 
     // SHORT, and the run loop is pumped: the 30s default could never fire
     // inside a test, and the test would then fail for the wrong reason.
-    model.startMonitoring(interval: 0.01)
+    try model.startMonitoring(interval: 0.01)
     defer { model.timer?.invalidate() }
 
     // The battery crosses the floor with the panel shut.
@@ -497,8 +515,9 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     var captured: Timer?
     do {
         let model = ServingModel(holder: SpyHolder(),
-                                 reader: FakeReader(source: .ac, percent: 80), health: fixtureHealth())
-        model.startMonitoring(interval: 0.01)
+                                 reader: FakeReader(source: .ac, percent: 80), health: fixtureHealth(),
+                                 listener: NoopIngestListener())
+        try model.startMonitoring(interval: 0.01)
         captured = model.timer
         // Precondition: without a live timer to invalidate, the assertion below
         // would hold for a `startMonitoring` that installs nothing at all.
@@ -536,15 +555,16 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // does, not about what a tick does, so neither timer should fire while it
     // runs — a short interval would let the run loop decide the outcome.
     let model = ServingModel(holder: SpyHolder(),
-                             reader: FakeReader(source: .ac, percent: 80), health: fixtureHealth())
+                             reader: FakeReader(source: .ac, percent: 80), health: fixtureHealth(),
+                             listener: NoopIngestListener())
 
-    model.startMonitoring(interval: 60)
+    try model.startMonitoring(interval: 60)
     let first = try #require(model.timer, "startMonitoring installed no timer")
     // Precondition: without a live first timer, the assertions below would
     // hold for a `startMonitoring` that installs nothing at all.
     #expect(first.isValid == true)
 
-    model.startMonitoring(interval: 60)
+    try model.startMonitoring(interval: 60)
     let second = try #require(model.timer, "the second startMonitoring installed no timer")
 
     // A second call that reused the same object would satisfy the two

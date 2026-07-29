@@ -20,7 +20,7 @@ let package = Package(
         // The model, the panel and the glyphs live in a library rather than in
         // the executable: SwiftPM treats an executable target's `main.swift` as
         // top-level code, which a test target cannot import.
-        .target(name: "CoffeeBarUI", dependencies: ["CoffeeBarPower"],
+        .target(name: "CoffeeBarUI", dependencies: ["CoffeeBarPower", "CoffeeBarIngest"],
                 swiftSettings: [.swiftLanguageMode(.v6)]),
         .executableTarget(name: "CoffeeBarProbe", dependencies: ["CoffeeBarPower"],
                           swiftSettings: [.swiftLanguageMode(.v6)]),

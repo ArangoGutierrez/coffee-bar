@@ -4,6 +4,7 @@
 import Foundation
 import Observation
 import CoffeeBarCore
+import CoffeeBarIngest
 import CoffeeBarPower
 
 // `import Observation` is required: the `@Observable` macro lives there. The
@@ -21,7 +22,31 @@ public final class ServingModel {
     private let holder: any AssertionHolding
     private let reader: any PowerReadingProviding
     private let health: HookHealthReader
+    private let listener: any IngestListening
+    private let policy: StalePolicy
+    private let now: @Sendable () -> Date
     private var controller = HoldController()
+
+    /// True once `startMonitoring` has started the listener successfully.
+    ///
+    /// The listener starts AT MOST ONCE per model. A second `start()` on the
+    /// real listener throws `IngestError.alreadyServing` — it refuses a path it
+    /// already answers on — so a repeat `startMonitoring` would otherwise leave
+    /// the app with no ingest and an error nobody sees. Set only on success, so
+    /// a refused socket can still be retried.
+    @ObservationIgnored private var listenerStarted = false
+
+    /// Every agent session ingest is tracking right now.
+    ///
+    /// This is the array `PowerBroker` reads, and design §14 requires the panel
+    /// to name what is holding the machine awake FROM THIS ARRAY rather than
+    /// from a second source that can disagree with the decision. Task 8 renders
+    /// it.
+    ///
+    /// Internal, not `public`, for the reason `desired` is: the test target
+    /// reaches it through `@testable import CoffeeBarUI`, and no production
+    /// code outside this module reads it.
+    private(set) var sessions: [AgentSession] = []
 
     /// The repeating refresh installed by `startMonitoring`.
     ///
@@ -121,14 +146,49 @@ public final class ServingModel {
         }
     }
 
+    /// The listener default is the REAL one, deliberately.
+    ///
+    /// A null default would let a missing wire ship silently, and ingest that
+    /// looks connected while delivering nothing is the exact honesty failure
+    /// design §6 exists to prevent. Tests inject a double; the three checks in
+    /// `ServingModel_test.swift` that call `startMonitoring` all do.
+    ///
+    /// `now` is injected so the stale-timeout checks move the clock by hand
+    /// instead of waiting five real minutes.
     public init(holder: any AssertionHolding = AssertionHolder(),
                 reader: any PowerReadingProviding = SystemPowerReader(),
-                health: HookHealthReader = HookHealthReader()) {
+                health: HookHealthReader = HookHealthReader(),
+                listener: any IngestListening = UnixSocketIngestListener(),
+                policy: StalePolicy = .standard,
+                now: @escaping @Sendable () -> Date = { Date() }) {
         self.holder = holder
         self.reader = reader
         self.health = health
+        self.listener = listener
+        self.policy = policy
+        self.now = now
         self.reading = reader.read()
     }
+
+    // There is deliberately NO `deinit` here, and none may be added.
+    //
+    // **The compiler will not stop you.** Measured, not read: a plain
+    // `deinit { listener.stop() }` COMPILES on this toolchain — `listener` is a
+    // `Sendable` `let`, so a nonisolated `deinit` may read it and no
+    // `isolated deinit` is needed. The experimental feature that broke CI at
+    // 6.1.2 is a different shape. So the only thing holding this line is
+    // `aModelThatGoesAwayLeavesTheListenerAlone`, which goes red on exactly
+    // that mutant.
+    //
+    // The reason is PE finding B2, which was measured rather than reasoned.
+    // One extra `App` build makes one orphaned model, and an orphan that stops
+    // the listener takes ingest down for the LIVE instance while the panel
+    // still reports the hooks wired.
+    //
+    // Nothing is lost by leaving it out. An orphan's `startMonitoring` cannot
+    // steal the socket — `UnixSocketIngestListener.start` connect-probes first
+    // and throws `alreadyServing` — and the orphan's own `NWListener` goes with
+    // it when the object does.
 
     /// Bound to the panel's 3-way control. What the user ASKED FOR.
     ///
@@ -159,14 +219,24 @@ public final class ServingModel {
         }
     }
 
-    /// Re-samples power and reconciles the assertion. Safe to call on a timer.
+    /// Re-samples power, retires silent sessions, and reconciles the assertion.
+    /// Safe to call on a timer.
+    ///
+    /// Expiry happens HERE and not in `ingest`, and design §5 is why: the stale
+    /// timeout is a SAFETY property, so it has to be evaluated on a TIMER. A
+    /// crashed agent sends no further event, so an expiry that runs only on the
+    /// next event never runs at all and the Mac stays awake until the user
+    /// reboots.
     public func refresh() {
+        sessions = SessionHub.expiring(sessions, now: now(), policy: policy)
+
         reading = reader.read()
         // Re-read every time, not once in `init`. The user's recovery path is
         // to paste the snippet back, and this app runs for days.
         hookHealth = health.status()
         let state = controller.evaluate(powerSource: reading.source,
-                                        batteryPercent: reading.percent)
+                                        batteryPercent: reading.percent,
+                                        sessions: sessions)
         desired = state
         suppression = Self.reason(controller.lastSuppression, stillTrueOf: reading)
 
@@ -176,6 +246,20 @@ public final class ServingModel {
             holder.release()
             isServing = false
         }
+    }
+
+    /// Applies one hook event and reconciles immediately.
+    ///
+    /// Immediately, not on the next tick: 30 seconds between an agent starting
+    /// work and the machine staying awake is a 30-second window in which it can
+    /// fall asleep under that agent.
+    ///
+    /// `SessionHub.apply` decides everything about the session list. This hands
+    /// the array in and takes the answer back, so an event Claude Code adds
+    /// later cannot mint a phantom session here.
+    func ingest(_ event: HookEvent) {
+        sessions = SessionHub.apply(event, to: sessions, now: now())
+        refresh()
     }
 
     /// Starts the repeating refresh, so a battery crossing the floor is noticed
@@ -220,7 +304,13 @@ public final class ServingModel {
     /// The two alternatives stay rejected: moving the call to the view
     /// reintroduces the ticker-dies-with-the-panel defect this design exists to
     /// close, and a process-wide static guard adds hidden global state.
-    public func startMonitoring(interval: TimeInterval = 30) {
+    ///
+    /// It also starts ingest, and the ORDER is load-bearing. The timer goes on
+    /// the run loop FIRST, because the socket is the likeliest thing here to
+    /// fail — a second instance already owns it — and an app that then enforces
+    /// no battery floor at all is a worse failure than an app with no ingest.
+    /// `main.swift` catches the error and launches anyway.
+    public func startMonitoring(interval: TimeInterval = 30) throws {
         timer?.invalidate()
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] tick in
             // `tick` stays OUT of the `assumeIsolated` closure: it is
@@ -236,6 +326,21 @@ public final class ServingModel {
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
+
+        guard !listenerStarted else { return }
+        // `assumeIsolated` is sound here ONLY because the listener delivers on
+        // the main thread. `UnixSocketIngestListener` starts every connection
+        // on `DispatchQueue.main` for this reason, and
+        // `deliveryHappensOnTheMainThread` holds that line. Delivery from any
+        // other queue makes this TRAP at runtime.
+        //
+        // `[weak self]` for the same reason the timer block uses it: the
+        // listener outlives an orphaned model, and the callback must not be
+        // what keeps that model alive.
+        try listener.start { [weak self] event in
+            MainActor.assumeIsolated { self?.ingest(event) }
+        }
+        listenerStarted = true
     }
 
     /// The panel explains a condition that is still true, or it says nothing.
