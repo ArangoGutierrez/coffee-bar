@@ -118,15 +118,15 @@ stranded assertion can be attributed to the code that stranded it.
 ### What the privileged helper will be allowed to do, once M5 lands
 
 M5 adds a root helper, `com.coffeebar.helper`, so the Mac can stay awake with
-the lid closed. It is not implemented. The design in section 5.3 of
-`coffee-bar-HANDOFF.md` bounds it as follows, and a shipped helper that exceeds
-this is a vulnerability under this policy:
+the lid closed. It is not implemented. This policy is the authoritative bound on
+it, and a shipped helper that exceeds any clause below is a vulnerability under
+this policy:
 
-- It is installed through `SMAppService.daemon(plistName:)`, not the deprecated
-  `SMJobBless` path.
-- It listens on an XPC Mach service and pins the protocol with
-  `setCodeSigningRequirement(_:)` on both ends. It rejects any peer that does not
-  match the app's Team ID and bundle ID.
+- It is installed through `SMAppService.daemon(plistName:)` on macOS 13 or
+  later, not the deprecated `SMJobBless` path.
+- It listens on an XPC Mach service through `NSXPCListener(machServiceName:)`
+  and pins the protocol with `setCodeSigningRequirement(_:)` on both ends. It
+  rejects any peer that does not match the app's Team ID and bundle ID.
 - Its verbs are a fixed list, and **none of them takes an arbitrary string**.
   There is no "run this command" and no user-supplied path to execute. The list
   is: read the S1 and S2 capability results; set `SleepDisabled`; set Spotlight

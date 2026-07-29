@@ -289,19 +289,37 @@ CI runs on `macos-15` and does exactly what you ran locally: `swift --version`,
 `swift build`, `swift build -c release`, `swift test`. See
 `.github/workflows/ci.yml`.
 
-## Two limits that bind every change
+## The 0.x non-goals
 
-Section 12 of `coffee-bar-HANDOFF.md` lists the 0.x non-goals. Two of them
-constrain almost every patch:
+This is the authoritative list. Everything on it is out of scope for every
+`0.x` release, and a patch that adds one of them needs this list changed first,
+in its own discussion. Reject scope creep against it.
 
-1. **No transcript reading.** `transcript_path` and
-   `~/.claude/projects/**/*.jsonl` hold proprietary source code and secrets.
-   coffee-bar reads session metadata and nothing else. This is a privacy
-   commitment.
-2. **No network egress.** No telemetry, no crash reporting, no update ping.
-   `Package.swift` has no external dependencies, and `Sources/` contains no
-   networking symbol. A patch that adds either needs the non-goals list changed
-   first, in its own discussion.
+- **No reading, parsing, storing, or displaying agent transcripts.**
+  `transcript_path` and `~/.claude/projects/**/*.jsonl` hold proprietary source
+  code and secrets. coffee-bar reads session metadata and nothing else. This is
+  a privacy commitment, not a performance one. Token accounting does not relax
+  it: that feature reads the OTLP metrics stream, which carries counters and
+  attributes and no content whatsoever. Deriving token counts by parsing
+  transcripts is rejected outright.
+- **No network egress.** No telemetry, no crash reporting to a third party, and
+  no update ping beyond the Sparkle appcast. `Package.swift` has no external
+  dependencies, and `Sources/` contains no networking symbol.
+- **No influence on agent behaviour.** coffee-bar never returns `decision`,
+  `permissionDecision`, or `continue: false`. It observes and nothing more. A
+  power utility that can block your tool calls is a supply-chain risk.
+- **No remote control and no phone notifications.** Real demand exists here, but
+  it inverts the trust model from local-only to networked. That is a separate
+  product decision, not a feature request.
+- **No Windows and no Linux.** The entire value is specific to macOS power
+  management.
+- **No boosting of anything.** No mechanism exists to promote a process onto the
+  performance cores. coffee-bar quiets other work; it never accelerates an
+  agent.
+- **No auto-answering of prompts.** Never.
+
+The first two constrain almost every patch, so check them before you open a
+pull request.
 
 `docs/ROADMAP.md` holds the milestones and the decisions behind them. Read it
 before proposing anything large — the answer to "why is it not like this

@@ -15,10 +15,11 @@ body:
         Lid-closed mode is M5. Codex CLI and Cursor adapters are M3, which the
         v0.1 cut moved to v0.2. Token accounting is M7.
 
-        Section 12 of `coffee-bar-HANDOFF.md` lists what coffee-bar will not do
-        in 0.x at all: read agent transcripts, send anything over the network,
-        influence agent behaviour, answer prompts for you, or run on Windows or
-        Linux. A request against that list is closed, not scheduled.
+        The "0.x non-goals" section of `CONTRIBUTING.md` lists what coffee-bar
+        will not do in 0.x at all: read agent transcripts, send anything over
+        the network, influence agent behaviour, answer prompts for you, or run
+        on Windows or Linux. A request against that list is closed, not
+        scheduled.
 
   - type: textarea
     id: problem
@@ -60,6 +61,6 @@ body:
             milestone.
           required: true
         - label: >-
-            I read section 12 of `coffee-bar-HANDOFF.md` and this is not on the
-            non-goals list.
+            I read the 0.x non-goals in `CONTRIBUTING.md` and this is not on
+            that list.
           required: true

@@ -19,7 +19,7 @@ contact_links:
       already planned. The roadmap says which milestone each one belongs to.
 
   - name: Read the non-goals
-    url: https://github.com/ArangoGutierrez/coffee-bar/blob/main/coffee-bar-HANDOFF.md
+    url: https://github.com/ArangoGutierrez/coffee-bar/blob/main/CONTRIBUTING.md#the-0x-non-goals
     about: >-
-      Section 12 lists what coffee-bar will not do in 0.x, including reading
-      transcripts, network egress, and influencing agent behaviour.
+      CONTRIBUTING.md lists what coffee-bar will not do in 0.x, including
+      reading transcripts, network egress, and influencing agent behaviour.
