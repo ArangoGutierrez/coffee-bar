@@ -6,7 +6,7 @@ keeps the M1 history.
 ## State — verify before trusting
 
 ```
-main = d6dafb2      370 tests in 3 suites      0 warnings debug and release
+main = see `git rev-parse --short main`   370 tests   0 warnings debug and release
 CI   = green TWICE on this commit (a re-run, not one sample)
 ```
 
