@@ -1,0 +1,7 @@
+{
+  "cwd": "/Users/USER/src/github/ArangoGutierrez/coffee-bar",
+  "hook_event_name": "SessionStart",
+  "session_id": "11111111-2222-3333-4444-555555555555",
+  "source": "startup",
+  "transcript_path": "/Users/USER/.claude/projects/-Users-USER-src-github-ArangoGutierrez-coffee-bar/11111111-2222-3333-4444-555555555555.jsonl"
+}
