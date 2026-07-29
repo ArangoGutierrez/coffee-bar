@@ -714,9 +714,16 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
 
     // A literal. Building the expectation from `hookHealth` would let both
     // sides agree on a line that names no file and tells the user nothing.
+    //
+    // The wording no longer says "Not receiving". A settings-file read cannot
+    // establish that events are absent: Claude Code merges hooks from the user
+    // file, a project's .claude/settings.json and settings.local.json, and this
+    // reader sees only the first. See
+    // theMissingAdvisoryClaimsNothingAboutEventsActuallyFlowing.
     #expect(model.hookAdvisory == """
-        Not receiving PermissionDenied, Stop. \
-        Add the coffee-bar hooks to ~/.claude/settings.json.
+        No coffee-bar hooks for PermissionDenied, Stop in \
+        ~/.claude/settings.json. If yours are in a project's \
+        .claude/settings.json, ingest may still be working.
         """)
 }
 
@@ -743,4 +750,33 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // The discriminating half: the two states must not reach the same advice.
     let advisory = model.hookAdvisory ?? ""
     #expect(!advisory.contains("Add the coffee-bar hooks"))
+}
+
+@MainActor
+@Test func theMissingAdvisoryClaimsNothingAboutEventsActuallyFlowing() throws {
+    // MEASURED on the maintainer's machine while this was written: the six hook
+    // entries capturing events at that moment lived in the PROJECT file,
+    // <repo>/.claude/settings.json, NOT in ~/.claude/settings.json. Claude Code
+    // merges hooks from the user file, the project file and settings.local.json.
+    // This reader sees only the first.
+    //
+    // So "Not receiving PermissionDenied, Stop" was FALSE on that machine: 311
+    // events had already flowed. Worse, it then sent the user to hand-edit the
+    // one file this design deliberately never writes.
+    //
+    // The check reads a FILE. It may claim only what a file can tell it.
+    //
+    // Named bug this catches: any future wording that asserts event flow, or the
+    // absence of it, from a settings-file read alone.
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth("missing-two.json"))
+    model.refresh()
+
+    let advisory = try #require(model.hookAdvisory)
+
+    #expect(advisory.contains("settings.json"),
+            "the advisory must name the file it actually inspected")
+    #expect(advisory.lowercased().contains("not receiving") == false,
+            "claims events are not arriving, which a file read cannot establish: \(advisory)")
 }

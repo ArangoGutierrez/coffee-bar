@@ -100,9 +100,18 @@ public final class ServingModel {
         case .wired:
             return nil
         case .missing(let events):
+            // Names the FILE, and claims nothing about events arriving. Claude
+            // Code merges hooks from ~/.claude/settings.json, a project's
+            // .claude/settings.json and settings.local.json; this reader sees
+            // only the first. Measured while writing this: the hooks actually
+            // capturing events on the maintainer's machine were in the PROJECT
+            // file, so "Not receiving …" was false there while 311 events had
+            // flowed — and it sent the user to hand-edit the one file this
+            // design deliberately never writes.
             return """
-                Not receiving \(events.joined(separator: ", ")). \
-                Add the coffee-bar hooks to ~/.claude/settings.json.
+                No coffee-bar hooks for \(events.joined(separator: ", ")) in \
+                ~/.claude/settings.json. If yours are in a project's \
+                .claude/settings.json, ingest may still be working.
                 """
         case .unreadable:
             return """
