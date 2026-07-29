@@ -252,15 +252,26 @@ private struct RecordingRunner: CommandRunning, @unchecked Sendable {
     // 2 s misread it. The M2 audit measured this test red on 2 of 33
     // full-suite runs, and the mechanism reproduces on demand: with 56 CPU
     // hogs held against this 14-core machine, `run()` threw
-    // timedOut(after: 2.0) for a child that writes 6 bytes and exits. Timed
-    // across that same load, the call itself took 8.43 s — 4x over the old
-    // budget and still 3.5x under this one.
+    // timedOut(after: 2.0) for a child that writes 6 bytes and exits.
     //
-    // 30 s matches `CommandRunning.defaultTimeout`, and matches the 30 s the
-    // connection-cap assertion took in d6dafb2 for this same reason. It is
-    // still nowhere near "hung forever", which is the only shape the failure
-    // under test can take.
-    let result = try SystemCommandRunner().run(shim.path, [], timeout: 30)
+    // How long the healthy call ACTUALLY takes under that load varies far more
+    // than one sample suggests. Two independent measurements, same machine,
+    // same 56 hogs, one sample each: 8.43 s and 22.97 s. Do not derive a
+    // headroom ratio from either — an earlier version of this comment did, and
+    // the figure did not reproduce.
+    //
+    // 120 s, not 30 s, for one reason: CI is a THREE-core GitHub runner and
+    // this box has fourteen. A healthy call already reached 22.97 s here, which
+    // is 77% of a 30 s budget, so 30 s leaves CI no margin and the flake simply
+    // moves to the machine that matters. The budget is a CEILING, not a
+    // duration — on an idle host the child writes 6 bytes and exits in
+    // milliseconds — so a larger one costs nothing on the happy path.
+    //
+    // 120 s still discriminates with 2x margin: a starved reader was measured
+    // still blocked at 240 s, because 256 occupiers sit ahead of it FIFO and
+    // the pool never reaches it. That is the only shape the failure under test
+    // can take, and no budget masks it.
+    let result = try SystemCommandRunner().run(shim.path, [], timeout: 120)
     #expect(result.exitCode == 0)
     #expect(result.stdout == "hello\n")
 }
