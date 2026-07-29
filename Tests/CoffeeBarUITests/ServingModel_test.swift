@@ -362,6 +362,48 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
             "the model deallocated and left a live timer on RunLoop.main")
 }
 
+@MainActor
+@Test func startMonitoringTwiceLeavesOnlyOneLiveTimer() throws {
+    // The other of the two ways a second `Timer` reaches `RunLoop.main`. The
+    // doc comment at `ServingModel.swift:107` names a repeat call on the same
+    // instance and closes it with `timer?.invalidate()`; that line was closed
+    // in code and open in the suite.
+    //
+    // Named bug this catches: deleting that one line. `self.timer` is then
+    // overwritten by the second call, so the first timer keeps its place on
+    // the run loop with nothing left pointing at it — a permanent 30s
+    // main-thread wake-up that no handle can reach to stop. The block's
+    // `[weak self]` does not help: the model is still alive, so every tick
+    // does a full `refresh()`, and the machine pays for two tickers for the
+    // life of the process.
+    //
+    // The interval is LONG on purpose. This test is about what `invalidate()`
+    // does, not about what a tick does, so neither timer should fire while it
+    // runs — a short interval would let the run loop decide the outcome.
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80))
+
+    model.startMonitoring(interval: 60)
+    let first = try #require(model.timer, "startMonitoring installed no timer")
+    // Precondition: without a live first timer, the assertions below would
+    // hold for a `startMonitoring` that installs nothing at all.
+    #expect(first.isValid == true)
+
+    model.startMonitoring(interval: 60)
+    let second = try #require(model.timer, "the second startMonitoring installed no timer")
+
+    // A second call that reused the same object would satisfy the two
+    // `isValid` checks below trivially and prove nothing about invalidation.
+    #expect(second !== first, "the second call reused the first timer")
+    #expect(first.isValid == false,
+            "the first timer is still installed on RunLoop.main and is now unreachable")
+    #expect(second.isValid == true,
+            "the second call invalidated the timer it had just installed")
+
+    // Leave nothing of this test's own on the shared run loop.
+    second.invalidate()
+}
+
 // MARK: - The product's central difference
 
 @MainActor
