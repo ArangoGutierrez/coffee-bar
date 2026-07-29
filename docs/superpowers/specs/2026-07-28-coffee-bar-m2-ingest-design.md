@@ -143,8 +143,15 @@ otherwise leave a `.working` session behind and hold the machine awake forever.
 - The timeout must be evaluated on a timer, not only on the next event —
   otherwise a silent agent is never noticed.
 
-`ServingModel` already owns a repeating timer with an `isolated deinit`. Reuse
-that pattern; do not introduce a second timer discipline.
+`ServingModel` already owns a repeating timer. Reuse that pattern; do not
+introduce a second timer discipline.
+
+**Corrected 2026-07-29.** This paragraph used to say the timer is cleaned up by
+an `isolated deinit`. It is not, and must not be: that feature is experimental
+before Swift 6.3, and commit `a33b35f` removed it after it turned this
+repository's first CI run red on the 6.1.2 runner. The timer block now
+invalidates the timer it is handed once `self` has gone. Do not reintroduce the
+deinit — see the PE corrections block at the top of the plan.
 
 **Required test:** a session in `.working` whose `lastEventAt` is older than the
 timeout must not hold the assertion. Mutate the comparison to prove the test
@@ -345,3 +352,52 @@ existing suite's discipline.
 - Killing the agent process releases the assertion within the stale timeout.
 - Removing the hook entries makes the panel say ingest is not wired up.
 - No `PreventUserIdleDisplaySleep` at any point. The §6.1 invariant survives M2.
+
+---
+
+## 13. Resolution of PE finding I3 — section 11 is DEFERRED past v0.1
+
+A principal-engineer review found that section 11, the move from
+`IOPMAssertionCreateWithName` to `IOPMAssertionCreateWithDescription`, has zero
+coverage in the M2 plan: the spec-coverage table jumps from section 10 to
+section 12.
+
+**Decision: defer it, explicitly, rather than let it fall through the gap.**
+
+Reasons:
+
+- It is not in the v0.1 definition of done. `ROADMAP.md` lists the assertion
+  behaviour, the differentiator, the attention queue, Homebrew, CI and licensing.
+  Self-description appears in none of them.
+- Its value depends on M2 finishing. The point of `kIOPMAssertionDetailsKey` is
+  to name WHICH agent session is responsible, and that identity does not exist
+  until ingest works.
+- It touches `AssertionHolder`, whose test asserts the live type set is exactly
+  `["PreventUserIdleSystemSleep"]` by reading `IOPMCopyAssertionsByProcess`.
+  Changing the creation call while racing a release is avoidable risk against a
+  guard that carries the product's central invariant.
+
+What stays true and should be picked up first after v0.1: coffee-bar is
+currently LESS self-describing in `pmset -g assertions` than the tool it is
+defined against. `caffeinate` prints a `Details` line and a localized sentence;
+coffee-bar prints only a name. For a product whose pitch is transparency about
+what keeps a Mac awake, that is backwards. Section 11 holds the measured
+evidence.
+
+## 14. Resolution of PE finding I4 — a holding session must be visible
+
+The attention list as planned shows only the two blocked states,
+`.awaitingPermission` and `.awaitingInput`. So a session in `.working` — the
+state that is actually holding the machine awake — appears nowhere in the UI.
+
+That is the wrong omission for this product. The whole pitch is that a user can
+see what is keeping their Mac awake, and the M1 acceptance run already showed how
+easily an invisible-but-running app confuses even its author.
+
+**Requirement on Task 8:** when a hold is active, the panel must name what is
+causing it. A count is enough — "2 sessions working" — and it must be derived
+from the same `sessions` array the broker reads, never from a second source that
+can disagree with the decision.
+
+Assert on the model's published value, not on rendered AppKit text, per
+section 5.4.
