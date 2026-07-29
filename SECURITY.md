@@ -70,17 +70,32 @@ this policy. Report it.
 
 ### It makes no network egress
 
-The shipped code opens no socket, resolves no host, and sends nothing anywhere.
-No telemetry, no crash reporting, no analytics, no update ping.
+The shipped code resolves no host, opens no network connection, and sends
+nothing anywhere. No telemetry, no crash reporting, no analytics, no update ping.
 
-Two facts back that up, and both are checkable from a clone:
+**It does open one socket, and it is not a network socket.** Ingest listens on a
+**unix domain socket** at `~/Library/Application Support/coffee-bar/ingest.sock`,
+mode `0600`, so Claude Code hooks can post session events. A unix domain socket
+lives in the filesystem namespace: it has no address, no port and no route off
+this machine, and the file permissions are what stop another user reaching it.
+`IngestListener` also calls `Darwin.connect` **against that same local path**,
+once, to tell a stale socket file from one a live instance is still serving —
+without that probe a second app instance would delete the running instance's
+socket and kill ingest silently.
 
-- `Sources/` contains no networking symbol. `URLSession`, `import Network`,
-  `NSURL`, `CFNetwork`, `socket`, `getaddrinfo` and `connect(` all return zero
-  hits across the whole source tree.
+Three facts back the network claim, all checkable from a clone:
+
+- `Sources/` contains no networking symbol. `URLSession`, `NSURL`, `CFNetwork`,
+  `getaddrinfo` and `NWConnection(host:` all return zero hits across the tree.
+- The only `connect(` in `Sources/` is `IngestListener.swift`, on
+  `sockaddr_un` — a filesystem path, never an IP address or a hostname.
 - `Package.swift` declares no external package dependencies, so no third-party
   code is fetched or linked, and none of it can open a socket on coffee-bar's
   behalf.
+
+This section previously read "opens no socket … `connect(` returns zero hits".
+That became false when ingest landed, and a security policy that fails its own
+grep is worse than no policy. The claim is now narrower and true.
 
 One deliberate future exception is on record: an update check through a Sparkle
 appcast. It is not implemented and no code for it exists today. When it lands it
