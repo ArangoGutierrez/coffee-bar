@@ -325,8 +325,11 @@ public final class ServingModel {
     ///     selected again.
     ///
     /// The getter reads the controller, not a copy held here, so the `.serve`
-    /// latch is visible to the panel: a hold the battery floor refuses moves
-    /// the control to Off, which is exactly what has happened to the intent.
+    /// cancel is visible to the panel: a hold the battery floor refuses moves
+    /// the control off On, which is exactly what has happened to the intent.
+    /// It moves back to the STANDING position — Auto or Off — rather than to
+    /// Off every time, so a click that FAILED never leaves the user more
+    /// restricted than before they made it. See `HoldController.evaluate`.
     ///
     /// `isServing` stays as the read-only ACTUAL state and stays on screen
     /// beside this. The two answer different questions and the panel shows
@@ -500,6 +503,24 @@ public final class ServingModel {
     /// latch still unconditional, this filter would be actively harmful: it
     /// would hide the reason a permanently disabled app gave for disabling
     /// itself.
+    ///
+    /// **It reads the newest READING and never asks whether anything currently
+    /// wants a hold**, so with no sessions at all the panel still names the
+    /// battery. That is measured, and it stays. With the control back on its
+    /// standing position the floor is the binding constraint on whatever happens
+    /// next, so the sentence predicts the next working agent exactly, and
+    /// lifting the floor is enough to make the hold arrive —
+    /// `theBatteryLineLeftOnScreenIsTrueOfWhatHappensNext` puts the line to that
+    /// test. The case where it misled was a refused `.serve` landing on `.stop`:
+    /// the battery was then not the operative reason at all, and no recharge
+    /// could change the outcome. `HoldController` no longer lands there.
+    ///
+    /// Narrowing this to the CURRENT decision's suppression stays rejected. It
+    /// would drop the line the moment the last session went idle, which is the
+    /// stale-percent defect `theSuppressionLineNamesTheMeasuredPercent` and
+    /// `theSuppressionLineSurvivesARecoveryToExactlyTheFloor` exist to catch,
+    /// and it would leave a user who clicked On with no session running looking
+    /// at a refusal and no reason for it.
     private static func reason(_ suppression: HoldSuppression?,
                                stillTrueOf reading: PowerReading) -> HoldSuppression? {
         guard case .batteryFloor(_, let floor) = suppression,

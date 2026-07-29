@@ -3,52 +3,99 @@
 
 import Foundation
 
-/// Owns the user's intent and the latching release rule.
+/// Owns the user's intent and the rule that cancels a refused request.
 ///
 /// `PowerBroker` is a pure function with no memory, so "release once and do
 /// not re-arm" cannot live there. When the broker suppresses a `.serve` hold
-/// this controller drops the intent back to `.stop`, so a recovering battery
-/// or a return to AC power does not silently switch the hold back on. The user
-/// re-arms by moving the control.
+/// this controller cancels that one-off request, so a recovering battery or a
+/// return to AC power does not silently switch an unconditional hold back on.
+/// The user asks again by moving the control.
 ///
-/// The latch applies to `.serve` ONLY — see `evaluate`.
+/// The cancel applies to `.serve` ONLY, and it returns the user to the STANDING
+/// position they were on rather than to `.stop` — see `evaluate` for both
+/// halves, which are separate decisions.
 public struct HoldController: Equatable, Sendable {
     public private(set) var intent: UserIntent
     public private(set) var lastSuppression: HoldSuppression?
 
+    /// The position a refused `.serve` returns to.
+    ///
+    /// `.serve` is a ONE-OFF request; `.auto` and `.stop` are STANDING
+    /// instructions that hold until the user changes them. This records the
+    /// standing instruction that was in force when the one-off arrived, so
+    /// cancelling the one-off puts the user back where they were.
+    ///
+    /// It never records `.serve`, and that is what keeps the latch honest. A
+    /// naive "restore whatever the intent was" reads `.serve` after a second On
+    /// click and restores the very request the floor refused —
+    /// `aSecondOnClickCannotMakeServeItsOwnFallback` goes red on exactly that.
+    ///
+    /// Private, so a check can only reach it through behaviour.
+    private var standing: UserIntent
+
     /// `.auto` by default: a fresh install follows the agent sessions until
     /// the user says otherwise.
+    ///
+    /// A controller built at `.serve` stands at `.stop`. Nothing constructs one,
+    /// and `.stop` is the safe direction: a `.serve` fallback would re-arm the
+    /// hold the floor has just refused.
     public init(intent: UserIntent = .auto) {
         self.intent = intent
+        self.standing = intent == .serve ? .stop : intent
         self.lastSuppression = nil
     }
 
     /// Records an explicit user action. Toggling to `.serve` clears any stale
     /// reason so the panel does not keep explaining a release the user has
     /// already answered.
+    ///
+    /// The two other positions are STANDING instructions, so each one also
+    /// becomes the position a later refused `.serve` returns to.
     public mutating func userToggled(to intent: UserIntent) {
         self.intent = intent
-        if self.intent == .serve { lastSuppression = nil }
+        if self.intent == .serve {
+            lastSuppression = nil
+        } else {
+            standing = intent
+        }
     }
 
-    /// Decides, then latches `.serve`. Returns what the caller should apply.
+    /// Decides, then cancels a refused `.serve`. Returns what the caller should
+    /// apply.
     ///
-    /// The latch is narrow on purpose, and the two cases are not symmetric:
+    /// The cancel is narrow on purpose, and the two cases are not symmetric:
     ///
-    /// `.serve` is a ONE-OFF request that the battery floor overrode. Latching
-    /// it to `.stop` stops a recovering battery from silently re-arming a hold
-    /// the user asked for once and has since watched fail. Re-arming is a
-    /// behaviour they did not ask for and cannot see coming, so they re-arm by
-    /// hand.
+    /// `.serve` is a ONE-OFF request that the battery floor overrode. Cancelling
+    /// it stops a recovering battery from silently re-arming a hold the user
+    /// asked for once and has since watched fail. Re-arming is a behaviour they
+    /// did not ask for and cannot see coming, so they ask again by hand.
     ///
     /// `.auto` is a CONTINUOUS instruction, and `PowerBroker` re-reads the
     /// floor on every single call — so the floor is already enforced without
-    /// any memory here. Latching it would buy nothing and cost the whole
+    /// any memory here. Cancelling it would buy nothing and cost the whole
     /// feature: one dip below the floor would pin the intent to `.stop` for
     /// the life of the process, every later session would be ignored, and
     /// `ServingModel.reason(_:stillTrueOf:)` hides the battery line as soon as
     /// the reading recovers — so the panel would show a dead app and no reason
     /// for it. Quitting and relaunching would be the only cure.
+    ///
+    /// **The cancel returns to `standing`, not to `.stop`.** That is audit
+    /// finding I4, and it is a separate question from whether to cancel at all.
+    /// `.stop` is a THIRD position: neither the one-off the user asked for nor
+    /// the standing instruction they were on. Landing there from a FAILED
+    /// request leaves them holding strictly less than before they touched the
+    /// control — a user on `.auto` who clicks On once below the floor ends up
+    /// with the same Mac asleep under the same working agent that `.auto` would
+    /// have kept awake. `askingForAHoldNeverLeavesLessHeldThanAskingForNothing`
+    /// measures exactly that, one click apart.
+    ///
+    /// Returning to `.auto` reintroduces nothing. What must not come back is
+    /// `.serve`'s defining property — a hold that ignores the session list — and
+    /// it does not: `aRefusedServeNeverComesBackAsAnUnconditionalHold` recovers
+    /// the battery with an EMPTY list and stays released. What does come back is
+    /// the session-gated `.auto` behaviour the user was already running, which
+    /// the paragraph above already rules correct. A user who stood on `.stop`
+    /// returns to `.stop`, so the absolute veto still survives a failed click.
     ///
     /// `lastSuppression` is recorded for BOTH, because the panel has to be able
     /// to explain a refusal whichever position asked for the hold.
@@ -67,7 +114,7 @@ public struct HoldController: Equatable, Sendable {
 
         if let suppression = state.suppression {
             lastSuppression = suppression
-            if intent == .serve { intent = .stop }
+            if intent == .serve { intent = standing }
         }
         return state
     }
