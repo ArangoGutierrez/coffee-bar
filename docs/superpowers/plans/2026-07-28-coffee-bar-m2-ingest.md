@@ -54,6 +54,23 @@
 > shows only the two blocked states, so the user cannot see what is holding the
 > machine awake, from a product whose pitch is exactly that.
 >
+> **B5 — landing `CoffeeBarIngest` breaks the app-layer guard unless TWO lists
+> move together.** Plan Steps 5 and 6 contradict each other: Step 6 adds the new
+> Ingest file to `expectedAppLayerEntries` (AppLayerBoundary_test.swift:81) but
+> leaves `appLayerTargets` (line 69) at `[CoffeeBarApp, CoffeeBarUI]`. The guard
+> derives `found` from `appLayerTargets`, so the new entry can never appear in it
+> and `theAppLayerCompilesExactlyTheFilesThisGuardScans` goes RED on a correct
+> change. Whoever lands the ingest target updates BOTH lists in the same commit.
+>
+> **B6 — `HookHealthReader` lives in `Sources/CoffeeBarUI/`, not
+> `CoffeeBarIngest`.** Task 7 landed before the ingest target existed and could
+> not create it. The pure parse is in Core as planned. Moving the reader is one
+> file move once the target lands, and it is subject to B5.
+>
+> **B7 — Task 6 will conflict with `ServingModel_test.swift`.** Task 7 changed 17
+> `ServingModel` constructions there so no test reads the real
+> `~/.claude/settings.json`. Rebase before starting, do not merge blind.
+>
 > **Confirmed NOT defects, tested:** concurrent connections work (3 stalled
 > half-open plus a real POST, delivered); the chmod window did not reproduce
 > (0600 in 12/12 runs); staleness IS on a timer, in `refresh()` not `ingest()`.
