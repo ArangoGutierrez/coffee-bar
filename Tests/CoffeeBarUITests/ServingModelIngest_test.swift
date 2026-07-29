@@ -28,17 +28,26 @@ private final class StubListener: IngestListening, @unchecked Sendable {
     private var handler: (@Sendable (HookEvent) -> Void)?
     private var started = 0
     private var stopped = 0
+    private var ready = false
 
     func start(onEvent: @escaping @Sendable (HookEvent) -> Void) throws {
         lock.lock(); defer { lock.unlock() }
         handler = onEvent
         started += 1
+        ready = true
     }
 
     func stop() {
         lock.lock(); defer { lock.unlock() }
         stopped += 1
+        ready = false
     }
+
+    /// Follows `UnixSocketIngestListener`: false before the first `start()`,
+    /// true while serving, false again after `stop()`. A double that answered
+    /// `true` for ever would let a model that CACHES the first `start()` pass
+    /// the checks a live listener would fail.
+    var isReady: Bool { lock.lock(); defer { lock.unlock() }; return ready }
 
     var startCount: Int { lock.lock(); defer { lock.unlock() }; return started }
     var stopCount: Int { lock.lock(); defer { lock.unlock() }; return stopped }
@@ -65,6 +74,45 @@ private final class RefusingListener: IngestListening, @unchecked Sendable {
         throw ListenerRefused()
     }
     func stop() {}
+    /// Never serves, so the panel must never claim it does.
+    var isReady: Bool { false }
+}
+
+/// Refuses with the REAL error the shipped app meets, rather than with a
+/// stand-in.
+///
+/// `RefusingListener` above throws an error of its own, which is the right
+/// double for "any refusal at all". This one exists because the panel's line
+/// reads fields OFF the error, so a check on that wording needs the error the
+/// listener actually throws.
+private final class AlreadyServingListener: IngestListening, @unchecked Sendable {
+    static let takenPath = "/Users/example/Library/Application Support/coffee-bar/ingest.sock"
+
+    func start(onEvent: @escaping @Sendable (HookEvent) -> Void) throws {
+        throw IngestError.alreadyServing(Self.takenPath)
+    }
+    func stop() {}
+    var isReady: Bool { false }
+}
+
+/// Refuses the first `start()` and serves the second.
+///
+/// `ServingModel.listenerStarted` is set only on success, deliberately, so a
+/// refused socket can be retried. This double is the only way to walk that path.
+private final class FlakyListener: IngestListening, @unchecked Sendable {
+    private let lock = NSLock()
+    private var attempts = 0
+    private var ready = false
+
+    func start(onEvent: @escaping @Sendable (HookEvent) -> Void) throws {
+        lock.lock(); defer { lock.unlock() }
+        attempts += 1
+        if attempts == 1 { throw IngestError.alreadyServing(AlreadyServingListener.takenPath) }
+        ready = true
+    }
+
+    func stop() { lock.lock(); defer { lock.unlock() }; ready = false }
+    var isReady: Bool { lock.lock(); defer { lock.unlock() }; return ready }
 }
 
 /// The power reader these checks drive. Mutable, so the battery can move.
@@ -535,6 +583,170 @@ private func makeModel(listener: any IngestListening,
     }
     #expect(model.timer?.isValid == true,
             "a refused socket left the app with no ticker and no battery floor")
+
+    model.timer?.invalidate()
+}
+
+// MARK: - Is this process actually serving?
+
+// Two DIFFERENT questions, and the panel must never merge them:
+//
+//   `hookHealth`      — are the hooks installed? A read of a settings FILE.
+//                       It cannot see this process at all.
+//   `ingestListening` — is this process serving? A read of the LISTENER.
+//                       It cannot see the user's settings at all.
+//
+// PE finding B2 is why. A second app instance stealing the socket path kills
+// ingest and leaves the settings file exactly as it was, so `hookHealth` stays
+// `.wired` while nothing can arrive. Before this, `startMonitoring` threw and
+// `main.swift` wrote the error to NSLog, where no user looks.
+
+@MainActor
+@Test func aListenerThatIsNotServingIsSaidSoInThePanel() {
+    // Named bug this catches: a refused socket that is invisible. The app
+    // launches, the panel looks healthy, `.auto` never holds because no session
+    // ever arrives, and the only record is a line in the system log.
+    let model = makeModel(listener: RefusingListener())
+
+    #expect(throws: ListenerRefused.self) {
+        try model.startMonitoring(interval: 3600)
+    }
+    model.refresh()
+
+    #expect(model.ingestListening == false)
+    #expect(model.ingestAdvisory != nil, "a refused socket reached the user nowhere")
+
+    model.timer?.invalidate()
+}
+
+@MainActor
+@Test func aServingListenerSaysNothingAboutItself() throws {
+    // A panel that announces its own health every time it opens is noise the
+    // user learns to skip past, and the line beside it would then be skipped
+    // too. Nothing to report means nothing on screen.
+    let listener = StubListener()
+    let model = makeModel(listener: listener)
+
+    try model.startMonitoring(interval: 3600)
+    model.refresh()
+
+    #expect(model.ingestListening == true)
+    #expect(model.ingestAdvisory == nil)
+
+    model.timer?.invalidate()
+}
+
+@MainActor
+@Test func aListenerThatStopsServingIsNoticedOnTheNextRefresh() throws {
+    // Named bug this catches, and it is the whole reason this reads the
+    // listener rather than remembering the one `start()` call: a `start()` that
+    // returns without throwing has created an `NWListener`, not proved a bind.
+    // The bind lands asynchronously and can still fail. A model that cached
+    // "started successfully" would claim to be serving for the life of the
+    // process, which is the same false claim in a new place.
+    let listener = StubListener()
+    let model = makeModel(listener: listener)
+
+    try model.startMonitoring(interval: 3600)
+    model.refresh()
+    // Precondition: it really was serving, so the flip below is a change and
+    // not a value that was false all along.
+    #expect(model.ingestListening == true)
+
+    listener.stop()
+    model.refresh()
+
+    #expect(model.ingestListening == false,
+            "the model kept claiming to serve after the listener stopped")
+    #expect(model.ingestAdvisory != nil)
+
+    model.timer?.invalidate()
+}
+
+@MainActor
+@Test func theListenerClaimIsSeparateFromTheHookHealthClaim() {
+    // PE finding B2, held as a check. Named bug this catches: one merged
+    // "ingest is fine" claim. `HookHealthReader` reads
+    // `~/.claude/settings.json` and NOTHING else — it cannot see this process,
+    // so a wired settings file would hide a dead socket, and the panel would
+    // tell the user everything is fine while no event could possibly arrive.
+    //
+    // The fixture is `wired.json`, so the hook half is deliberately healthy and
+    // silent. The listener half must still speak.
+    let model = makeModel(listener: RefusingListener())
+
+    #expect(throws: ListenerRefused.self) {
+        try model.startMonitoring(interval: 3600)
+    }
+    model.refresh()
+
+    #expect(model.hookHealth == .wired)
+    #expect(model.hookAdvisory == nil, "the fixture is not the healthy one, so this proves nothing")
+    #expect(model.ingestAdvisory != nil,
+            "a wired settings file silenced the report that this process is not serving")
+
+    model.timer?.invalidate()
+}
+
+@MainActor
+@Test func aStolenSocketNamesThePathAndTheFix() {
+    // `IngestError.alreadyServing` is the failure design §4 says is likeliest:
+    // a second copy of coffee-bar already answers on the path. Named bug this
+    // catches: a generic "ingest is not working" that leaves the user with no
+    // idea what to do next. The panel names the path and names the fix.
+    let model = makeModel(listener: AlreadyServingListener())
+
+    #expect(throws: IngestError.self) {
+        try model.startMonitoring(interval: 3600)
+    }
+    model.refresh()
+
+    let advisory = model.ingestAdvisory ?? ""
+    #expect(advisory.contains(AlreadyServingListener.takenPath),
+            "the advisory does not name the path: \(advisory)")
+    #expect(advisory.contains("Quit"),
+            "the advisory does not name the fix: \(advisory)")
+
+    model.timer?.invalidate()
+}
+
+@MainActor
+@Test func aRetryThatWorksStopsExplainingTheOldRefusal() throws {
+    // The same discipline `reason(_:stillTrueOf:)` applies to the battery line:
+    // the panel explains a condition that is still true, or it says nothing.
+    //
+    // Named bug this catches: a refusal recorded once and never cleared. The
+    // socket is retried, binds, and the panel is quiet — so the stale text is
+    // invisible until the listener stops later, at which point the user is told
+    // to go quit a copy of coffee-bar that stopped being the problem long ago.
+    //
+    // This check was written after the implementation, driven by an unkilled
+    // mutant: deleting the line that clears the refusal left every other check
+    // in this file green.
+    let listener = FlakyListener()
+    let model = makeModel(listener: listener)
+
+    #expect(throws: IngestError.self) {
+        try model.startMonitoring(interval: 3600)
+    }
+    model.refresh()
+    #expect(model.ingestAdvisory?.contains(AlreadyServingListener.takenPath) == true,
+            "the first refusal was never explained, so the clearing below proves nothing")
+
+    // `listenerStarted` is set only on success, so the socket really is retried.
+    try model.startMonitoring(interval: 3600)
+    model.refresh()
+    #expect(model.ingestListening == true)
+    #expect(model.ingestAdvisory == nil)
+
+    // Gone, not merely hidden behind a healthy socket. Stopping the listener is
+    // what makes the difference visible.
+    listener.stop()
+    model.refresh()
+
+    let advisory = try #require(model.ingestAdvisory)
+    #expect(!advisory.contains(AlreadyServingListener.takenPath),
+            "the panel still explains a refusal that has stopped: \(advisory)")
 
     model.timer?.invalidate()
 }

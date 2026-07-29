@@ -23,6 +23,13 @@ struct CoffeeBarMenuBarApp: App {
         // installed before the socket for exactly this reason: the battery
         // floor still gets enforced when the socket is refused. The likeliest
         // refusal is a second instance already answering on the path.
+        //
+        // This log line is no longer the only report. `startMonitoring`
+        // records the reason on the model on its way past, and the panel
+        // renders it as `ingestAdvisory` — a socket refused here used to be
+        // visible in Console.app and nowhere else, which for a menu-bar app is
+        // the same as invisible. The log stays for the case where the user
+        // cannot open the panel at all.
         do {
             try model.startMonitoring()
         } catch {

@@ -472,7 +472,10 @@ private func resolvedDependencies(ofTarget name: String) throws -> [String] {
     //
     // `model.attention` is what design §10.3 asks for; `model.workingSummary`
     // is what design §14 REQUIRES, after a review found that the session
-    // holding the machine awake appeared nowhere.
+    // holding the machine awake appeared nowhere. `model.ingestAdvisory` is the
+    // report that THIS PROCESS is not serving, which no read of the user's
+    // settings file can give — PE finding B2. Losing that one silently is how
+    // a dead socket ships under a panel that looks healthy.
     //
     // Same LIMIT as above, stated rather than hidden: this proves the panel
     // NAMES each property, not that it renders it correctly. A mention in a
@@ -485,7 +488,7 @@ private func resolvedDependencies(ofTarget name: String) throws -> [String] {
                              "the app layer no longer compiles a PanelView.swift")
     let source = try String(contentsOf: panel, encoding: .utf8)
 
-    for property in ["model.attention", "model.workingSummary"] {
+    for property in ["model.attention", "model.workingSummary", "model.ingestAdvisory"] {
         #expect(source.contains(property), """
             PanelView.swift never reads \(property), so what the model computes \
             for it reaches the user nowhere. Render it, or delete the property \

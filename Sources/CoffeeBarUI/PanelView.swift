@@ -124,6 +124,22 @@ public struct PanelView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            // A SECOND line, beside the one above and never merged into it.
+            // The two answer different questions from different evidence: the
+            // one above reads the user's settings FILE and cannot see this
+            // process, this one reads this PROCESS and cannot see the settings.
+            // Merged, a wired settings file would hide a dead socket — PE
+            // finding B2, measured.
+            //
+            // Both are silent when there is nothing to report, so the usual
+            // panel carries neither.
+            if let line = model.ingestAdvisory {
+                Text(line)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             // What is holding the machine awake, right under the line that says
             // whether anything is. Design §14: the attention list below shows
             // the two BLOCKED states, so without this the session actually

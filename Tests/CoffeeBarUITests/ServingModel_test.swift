@@ -24,6 +24,10 @@ import CoffeeBarPower
 private final class NoopIngestListener: IngestListening, @unchecked Sendable {
     func start(onEvent: @escaping @Sendable (HookEvent) -> Void) throws {}
     func stop() {}
+    /// It binds nothing, so it serves nothing. The checks in this file are
+    /// about the ticker and read nothing off this; the honest answer is still
+    /// `false`, so a model that read it would not be told a comfortable lie.
+    var isReady: Bool { false }
 }
 
 /// The power reader the tests drive.

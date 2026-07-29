@@ -112,9 +112,34 @@ public final class ServingModel {
     /// this stays `.wired` while no event can arrive. Whatever renders it must
     /// never claim events are flowing. `hookAdvisory` below renders NOTHING for
     /// `.wired`, which is the strongest form of that: a panel that says nothing
-    /// cannot say something untrue. A live-socket probe is the separate check
-    /// that would close the gap.
+    /// cannot say something untrue.
+    ///
+    /// `ingestListening` is the OTHER half of that gap, and the two are kept
+    /// apart deliberately. This one sees the user's settings and cannot see
+    /// this process; that one sees this process and cannot see the settings.
+    /// Merged into one claim, a wired settings file would hide a dead socket.
     public private(set) var hookHealth: HookHealthStatus = .unreadable
+
+    /// Whether this process is serving the ingest socket RIGHT NOW.
+    ///
+    /// Read off the listener on every `refresh()`, never remembered from the
+    /// one `start()` call. A `start()` that returns without throwing has
+    /// created an `NWListener`, not proved a bind: the bind lands
+    /// asynchronously and can still fail, and `stop()` clears it again. A
+    /// cached "started successfully" would be the same false claim in a new
+    /// place.
+    ///
+    /// `false` until the first `refresh()`, which is what "not asked yet" looks
+    /// like here — and it is the safe direction: the panel says the socket is
+    /// not serving until something proves it is.
+    public private(set) var ingestListening = false
+
+    /// Why the socket was refused, when `startMonitoring` was told.
+    ///
+    /// Only `start()` reports a reason, so this is `nil` for a bind that
+    /// reaches no `.ready` state on its own. `ingestAdvisory` therefore has to
+    /// stand up without it.
+    private var listenerRefusal: String?
 
     /// The one line the panel shows about that health, or `nil` for no line.
     ///
@@ -162,6 +187,56 @@ public final class ServingModel {
                 Cannot read ~/.claude/settings.json, so coffee-bar cannot confirm its \
                 hooks are installed. Agent sessions may not arrive.
                 """
+        }
+    }
+
+    /// The one line the panel shows about this process's own ingest socket, or
+    /// `nil` for no line.
+    ///
+    /// A SEPARATE line from `hookAdvisory`, never merged with it. The two
+    /// answer different questions from different evidence, and one combined
+    /// "ingest is fine" would be a claim neither check can support: a wired
+    /// settings file says nothing about whether this process holds the socket,
+    /// which is PE finding B2 exactly.
+    ///
+    /// Silent while the socket is serving, for the reason `hookAdvisory` is
+    /// silent on `.wired`: a panel that announces its own health every time it
+    /// opens is noise the user learns to skip past, and then skips the line
+    /// that mattered.
+    ///
+    /// It names the cause only when `start()` gave one. A bind that fails after
+    /// `start()` returned reports no reason at all, so the first sentence has
+    /// to stand on its own — and it does: it states what is not happening, and
+    /// claims nothing about why.
+    public var ingestAdvisory: String? {
+        guard !ingestListening else { return nil }
+        let opening = "coffee-bar is not listening for agent events, "
+                    + "so no agent session can reach it."
+        guard let refusal = listenerRefusal else { return opening }
+        return "\(opening) \(refusal)"
+    }
+
+    /// Turns a `start()` failure into something the user can act on.
+    ///
+    /// Each case names the path and the next step, because "ingest is not
+    /// working" leaves a user with nowhere to go. `IngestError` is matched
+    /// through a cast: the parameter is `any Error`, and a listener injected by
+    /// a test may throw something else entirely.
+    private static func describe(_ error: any Error) -> String {
+        guard let ingestError = error as? IngestError else {
+            return "The socket was refused: \(error)."
+        }
+        switch ingestError {
+        case .alreadyServing(let path):
+            return "Another process already answers on \(path). "
+                 + "Quit the other copy of coffee-bar, then reopen this one."
+        case .socketPathBlocked(let path):
+            return "Something that is not a socket sits at \(path). "
+                 + "Move it out of the way, then reopen coffee-bar."
+        case .directoryUnwritable(let path):
+            return "\(path) could not be created or written."
+        case .socketPathTooLong(let bytes):
+            return "The socket path is \(bytes) bytes, over the 103-byte limit."
         }
     }
 
@@ -279,6 +354,10 @@ public final class ServingModel {
         // Re-read every time, not once in `init`. The user's recovery path is
         // to paste the snippet back, and this app runs for days.
         hookHealth = health.status()
+        // ASKED, not remembered. The bind is asynchronous, so a `start()` that
+        // returned cleanly is not proof the socket is serving, and `stop()`
+        // takes it away again.
+        ingestListening = listener.isReady
         let state = controller.evaluate(powerSource: reading.source,
                                         batteryPercent: reading.percent,
                                         sessions: sessions)
@@ -387,9 +466,21 @@ public final class ServingModel {
         // `[weak self]` for the same reason the timer block uses it: the
         // listener outlives an orphaned model, and the callback must not be
         // what keeps that model alive.
-        try listener.start { [weak self] event in
-            MainActor.assumeIsolated { self?.ingest(event) }
+        do {
+            try listener.start { [weak self] event in
+                MainActor.assumeIsolated { self?.ingest(event) }
+            }
+        } catch {
+            // Recorded on the way past, then rethrown unchanged. `main.swift`
+            // still catches it and launches anyway — an app with no ingest is
+            // far better than no app — but the reason now reaches the panel
+            // instead of stopping at NSLog.
+            listenerRefusal = Self.describe(error)
+            throw error
         }
+        // Cleared only on success. A retry that works must not leave the panel
+        // explaining a refusal that has stopped happening.
+        listenerRefusal = nil
         listenerStarted = true
     }
 

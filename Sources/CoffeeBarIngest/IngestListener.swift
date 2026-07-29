@@ -33,6 +33,20 @@ public protocol IngestListening: Sendable {
     /// Delivers every decoded event ON THE MAIN THREAD. See `start(queue:)`.
     func start(onEvent: @escaping @Sendable (HookEvent) -> Void) throws
     func stop()
+
+    /// Whether this listener is serving RIGHT NOW.
+    ///
+    /// A requirement rather than a detail of the concrete type, because the
+    /// panel has to be able to say so. `startMonitoring` throwing was the only
+    /// report before, and `main.swift` writes that to NSLog, where no user
+    /// looks.
+    ///
+    /// It must answer for the CURRENT state, never for a past `start()`. A
+    /// `start()` that returns without throwing has created a listener, not
+    /// proved a bind — `UnixSocketIngestListener` binds asynchronously — so a
+    /// conformance that returned "started successfully once" would let the
+    /// panel claim to be serving while nothing was.
+    var isReady: Bool { get }
 }
 
 /// An HTTP-over-unix-socket ingest endpoint.
@@ -87,10 +101,16 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
 
     /// True once the socket is bound AND its mode has been tightened.
     ///
-    /// Internal rather than public: it exists so the tests can wait for the bind
-    /// instead of racing it. The node appears at bind time but the mode only
-    /// changes on `.ready`, so `fileExists` is not the same question.
-    var isReady: Bool {
+    /// The tests use it to wait for the bind instead of racing it: the node
+    /// appears at bind time but the mode only changes on `.ready`, so
+    /// `fileExists` is not the same question.
+    ///
+    /// `public` since it became an `IngestListening` requirement. It is the
+    /// panel's answer to "is this process serving", which no read of the user's
+    /// settings file can give. `stop()` clears it, and a bind that never
+    /// reaches `.ready` never sets it, so a false answer here means the socket
+    /// really is not serving.
+    public var isReady: Bool {
         lock.lock(); defer { lock.unlock() }
         return ready
     }
