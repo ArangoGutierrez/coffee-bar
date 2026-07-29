@@ -1,5 +1,10 @@
 # Session Handoff — 2026-07-28 evening, M1 closed
 
+> **READ THE UPDATE AT THE BOTTOM FIRST.** Everything above it describes the
+> state on the evening of 2026-07-28 and is now out of date: `main` exists and
+> is the default branch, M4's documents are merged, and M2 is under way. The
+> section "Update — 2026-07-29, autonomous run" carries the current state.
+
 Project: **coffee-bar**. **M0 and M1 are closed and merged.** M4 documents are
 built and pushed but not merged. **M2 has not started.**
 
@@ -182,3 +187,93 @@ Verify in a `git archive` copy, never the working tree.
 - `tac` does not exist on macOS. Use `tail -r`.
 - Run `shellcheck` on every script you write. It caught three real defects in the
   orchestrator's own scripts this session, including an unguarded `cd`.
+
+---
+
+# Update — 2026-07-29, autonomous run
+
+**`main` = `06bdbc1`. 222 tests in 3 suites. CI green on Swift 6.1.2 / macOS 15.**
+
+`main` now exists and is the default branch. Before this run there was none, and
+**CI had never executed once** — `gh run list` was empty. Every green result
+before that came from one machine on Swift 6.3.3.
+
+## What CI caught on its first two runs
+
+1. **`isolated deinit` is experimental before Swift 6.3.** It compiled on the
+   developer machine and failed the 6.1.2 runner. Verifying a language feature
+   against one toolchain is not verifying it. Replaced with a timer block that
+   invalidates the timer it is handed.
+2. **A real deadlock in `CommandRunner`.** Pipe readers ran on
+   `DispatchQueue.global()`, a bounded process-wide pool, and starved against
+   their own caller: `run()` reported `timedOut` for a child that exited in
+   milliseconds. Measured cliff — 64 workers fine, 70 threw. It was live in M5's
+   watchdog path too. Fixed with a dedicated thread per reader.
+
+Neither was reachable locally. Both would have shipped.
+
+## M2 progress
+
+| Task | State |
+|---|---|
+| 1 fixtures | **Done.** All six event kinds captured and redacted |
+| 2 `HookEvent` + privacy guard | **Done**, merged |
+| 3 `SessionHub` | building |
+| 4–8 | not started |
+
+### Capturing an event the current session cannot produce
+
+A hook installed mid-session never sees the `SessionStart` that already fired.
+Run Claude Code headless in the repository directory to cross a real boundary:
+
+```
+cd <repo> && claude -p "Reply with exactly: OK" --max-turns 1
+```
+
+That produced `SessionStart` and `SessionEnd` in one run, and settled design §3.2
+by measurement: `SessionEnd` genuinely fires, carrying `reason`.
+
+### Facts the fixtures overturned
+
+- `SessionStart` carries neither `agent_type`, `permission_mode` nor `effort`.
+  A decoder built from tool events alone throws on it.
+- `SessionEnd` and `PermissionDenied` both use `reason`. The plan assumed
+  `message`. **The fixtures win.**
+- The `Stop` payload carries `last_assistant_message` — 2747 characters of
+  assistant reply text, delivered directly, not behind `transcript_path`. The
+  privacy boundary as originally written permitted exactly what handoff §12
+  forbids. Spec §7.1 now names it.
+
+## `coffee-bar-HANDOFF.md` is NOT retired, deliberately
+
+A filename grep finds ~5 references. There are **30 more citations by section
+number** across 11 sections (`§2.2 §5.1 §5.2 §6.1 §8.2 §10 §12 §13.1 §13.4 §15
+§16`), two of them inside `Sources/`. The §12 non-goals and the M5 helper bounds
+were extracted into `CONTRIBUTING.md` and `SECURITY.md`, and all three
+user-facing citations were repointed, so nothing 404s. The file stays until the
+remaining sections have homes.
+
+## Blocked on the user
+
+1. **`ArangoGutierrez/homebrew-coffee-bar` does not exist.** "Installs via
+   Homebrew" is in the v0.1 definition of done, and creating a public repo is
+   not an unattended action.
+2. **The v0.1 tag.** Reserved by the user.
+3. **Branch protection.** Now unblocked — `release.yml` no longer pushes to
+   `main` — but enabling it while an agent is pushing to `main` would halt the
+   loop. It is the correct LAST step.
+
+## v0.1 definition of done, audited
+
+Done and evidenced: display sleeps while the system stays awake (verified on
+hardware with `pmset`); Apache-2.0 clean (30 of 30 Swift files carry SPDX);
+no network egress (0 matches for any networking symbol); CI green.
+
+Outstanding: the three M2 items, and Homebrew.
+
+## Tooling defect found, not fixed
+
+`hooks/tdd-guard.sh` has no SwiftPM rule. It maps `src/`, `lib/`,
+`electron/renderer/` to test paths, so it misses **every** Swift test in this
+repo and refuses doc-comment edits to `Sources/`. It blocked a legitimate change
+this run. The builder correctly refused to bypass it.
