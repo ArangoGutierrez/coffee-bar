@@ -47,15 +47,21 @@ Nothing is released yet: there is no tag, so there is nothing to
 `brew install` today. Build from source as above. That needs macOS 14 or
 later and a Swift 6 toolchain (Xcode 16 or later).
 
-Homebrew support arrives with M4. The formula moves to a dedicated tap repo,
-`ArangoGutierrez/homebrew-coffee-bar`, because `brew tap user/repo` resolves to
-`github.com/user/homebrew-repo` — a `Formula/` directory in this repo is not
-tappable by the conventional command. See `docs/ROADMAP.md`. The install will
-then be — and neither command works today, because
-`ArangoGutierrez/homebrew-coffee-bar` does not exist yet:
+The formula lives in a dedicated tap repository,
+[`ArangoGutierrez/homebrew-coffee-bar`](https://github.com/ArangoGutierrez/homebrew-coffee-bar),
+because `brew tap user/repo` resolves to `github.com/user/homebrew-repo` — a
+`Formula/` directory in this repository is not tappable by the conventional
+one-argument command.
+
+The tap exists and carries the formula. The install will be:
 
     brew tap ArangoGutierrez/coffee-bar
     brew install coffee-bar
+
+**Neither command succeeds yet.** The formula pins a release tarball by tag and
+SHA-256, and no release is tagged, so `url` points at a tag that does not exist
+and `sha256` is still a placeholder. Both are pinned when the first release is
+cut.
 
 The formula builds from source, so the CLI needs no notarisation. It installs
 the `coffee-bar-probe` capability probe and nothing else. It does not install
