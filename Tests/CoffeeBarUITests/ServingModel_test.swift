@@ -319,6 +319,62 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     #expect(model.isServing == false)
 }
 
+// MARK: - The ticker does its job
+
+@MainActor
+@Test func theTickerEnforcesTheFloorWithNobodyWatching() throws {
+    // The reason `startMonitoring` exists at all. The doc comment at
+    // `ServingModel.swift:91` puts it plainly: `MenuBarExtra` with
+    // `.menuBarExtraStyle(.window)` builds its content only while the panel is
+    // open, so a floor enforced only by the panel does not enforce the floor.
+    //
+    // Named bug this catches: `MainActor.assumeIsolated { model.refresh() }`
+    // reduced to `_ = model`. `startMonitoring` then installs a timer that
+    // fires forever and does nothing, and the battery floor is enforced only
+    // when the user opens the panel or moves the toggle — the exact defect
+    // this design exists to prevent, with the machine held awake below the
+    // floor for as long as nobody looks.
+    // `theModelInvalidatesItsTimerWhenItGoesAway` cannot see it: that test
+    // asserts only that the timer stops after dealloc, never that a tick does
+    // anything while the model is alive.
+    //
+    // Nothing here calls `refresh()`. The only route from the reader's new
+    // value to the holder is the tick.
+    let reader = FakeReader(source: .battery, percent: 21)
+    let spy = SpyHolder()
+    let model = ServingModel(holder: spy, reader: reader)
+
+    model.serving = true
+    // Preconditions: the hold is live and nothing has been released, so the
+    // assertions below cannot hold for a model that never acquired anything.
+    #expect(model.isServing == true)
+    #expect(spy.releaseCount == 0)
+
+    // SHORT, and the run loop is pumped: the 30s default could never fire
+    // inside a test, and the test would then fail for the wrong reason.
+    model.startMonitoring(interval: 0.01)
+    defer { model.timer?.invalidate() }
+
+    // The battery crosses the floor with the panel shut.
+    reader.set(source: .battery, percent: 19)
+
+    // Bounded, so a regression fails rather than hangs the suite.
+    let deadline = Date().addingTimeInterval(2.0)
+    while model.isServing, Date() < deadline {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+    }
+
+    #expect(model.isServing == false,
+            "the ticker fired but never re-sampled: the floor is enforced only while the panel is open")
+    // `>= 1` rather than `== 1`: once the hold is down every further tick
+    // releases again, and how many ticks land inside one pump is the run
+    // loop's business. One release is the whole claim.
+    #expect(spy.releaseCount >= 1,
+            "the model reported the hold down without telling the holder")
+    #expect(model.suppression == .batteryFloor(percent: 19, floor: 20),
+            "the tick released the hold without recording why")
+}
+
 // MARK: - The ticker outlives nothing
 
 @MainActor
