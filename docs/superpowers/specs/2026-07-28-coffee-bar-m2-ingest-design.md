@@ -279,7 +279,50 @@ explicit approval, and it must be reverted afterwards.
 
 ---
 
-## 10. Decisions M2 must still make
+## 10. Decisions M2 must still make — ALL FOUR RESOLVED
+
+Recorded 2026-07-29, after M2 shipped. Each answer below is what the code does,
+read from the source rather than from intent.
+
+**1. Does an explicit `.stop` outrank an active session? YES, absolutely.**
+`UserIntent` gained `.auto`, which is now the DEFAULT, and `PowerBroker.decide`
+switches exhaustively on three cases: `.stop` never holds, `.serve` always holds
+subject to the floor, `.auto` lets the sessions decide subject to the floor. A
+power tool that ignores "off" is a trust failure, so `.stop` decides before the
+wake predicate runs.
+
+A PE review then proved the case alone was not enough. `HoldController` latched
+`intent = .stop` on ANY suppression, so one dip below the battery floor would
+have disabled ingest for the life of the process; the latch is now narrowed to
+`.serve` only. And the panel bound a `Bool` over the actual hold state, which
+made `.auto` unreachable after a single click; it is now a three-position control
+bound to the intent.
+
+**2. The stale timeout differs per state.** `StalePolicy.standard` ships
+`workingTimeout: 300` and `blockedTimeout: 14_400` — five minutes and four
+hours. A `.working` session going quiet for five minutes is suspicious; a session
+blocked on the human may legitimately wait all afternoon. Both boundaries are
+guarded on both sides.
+
+**3. The attention list shows the two blocked states, ordered by
+`attentionSince`, with unstamped sessions LAST.** The comparator is a total
+order, because `sorted` is not documented as stable in Swift and an unstable sort
+would reshuffle the list on every refresh.
+
+Section 14 was added on top of this: the list as first planned showed blocked
+states only, so the `.working` session actually HOLDING the machine awake
+appeared nowhere. A count of holding sessions now appears beside it, derived from
+the same `sessions` array the broker reads.
+
+**4. `SessionEnd` exists, and it fires.** MEASURED, not inferred: running Claude
+Code headless in the repository directory crosses a real session boundary and
+produced both `SessionStart` and `SessionEnd`. The earlier evidence was a string
+found in a binary. The captured payload carries a `reason` field, which read
+`other` for a headless run. Fixture: `Tests/Fixtures/claude-hooks/session-end.json`.
+
+---
+
+## 10.1 The original text, for the record
 
 1. **Does an explicit `.stop` outrank an active session?** `decide` currently
    ORs user intent with the session predicate, and the M1 note calls the OR

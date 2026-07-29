@@ -205,11 +205,11 @@ Without item 1 the panel's objection stands unanswered.
 
 ### M4 execution checklist
 
-- [ ] Create `ArangoGutierrez/homebrew-coffee-bar` (outward-facing — needs explicit approval)
-- [ ] Move `Formula/coffee-bar.rb` there; delete `Formula/` from this repo
+- [x] Create `ArangoGutierrez/homebrew-coffee-bar` — created by the user 2026-07-29
+- [x] Move `Formula/coffee-bar.rb` there; delete `Formula/` from this repo — moved byte-identically, blob `ec33de9c` both sides
 - [x] Strip the `formula` job from `release.yml`; keep the `verify` job
 - [ ] Port the substitution checks into the tap's CI, per the three items above
-- [ ] Update `README.md` to the one-argument `brew tap ArangoGutierrez/coffee-bar`
+- [x] Update `README.md` to the one-argument `brew tap ArangoGutierrez/coffee-bar`
 - [ ] Enable branch protection on `main`, required check `build-test` (`ci.yml`)
 
 ### Two related residuals, still open
