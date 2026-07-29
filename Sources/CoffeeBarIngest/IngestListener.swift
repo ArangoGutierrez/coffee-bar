@@ -362,11 +362,30 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
         connection.cancel()
     }
 
+    /// The most bytes one `receive` may hand back at a time.
+    ///
+    /// Deliberately NOT `HTTPRequestFramer.maximumBytes`, which this used to be.
+    /// The two answer different questions. That constant is a PROTOCOL limit —
+    /// how large one request may be. This one is a TRANSPORT limit — how much of
+    /// that request may arrive in a single delivery. Tying the second to the
+    /// first means every rise in the request cap silently retunes the socket.
+    ///
+    /// It matters in bytes, not only in tidiness. The framer refuses only AFTER
+    /// it appends, so a connection peaks at `maximumBytes + receiveChunkBytes`.
+    /// With `defaultMaximumConnections` at 32 and the cap now 1 MiB, holding
+    /// this at 64 KiB keeps the worst case near 34 MiB, where copying the cap
+    /// here would allow 64 MiB — in an app that is meant to stay invisible.
+    ///
+    /// A smaller value costs more receives, never a stalled read:
+    /// `minimumIncompleteLength` is 1, so each receive returns as soon as any
+    /// byte is available and never waits for this many.
+    private static let receiveChunkBytes = 65_536
+
     private func receive(_ connection: NWConnection,
                          state: ConnectionState,
                          onEvent: @escaping @Sendable (HookEvent) -> Void) {
         connection.receive(minimumIncompleteLength: 1,
-                           maximumLength: HTTPRequestFramer.maximumBytes) {
+                           maximumLength: Self.receiveChunkBytes) {
             [weak self] data, _, isComplete, error in
             guard let self else { connection.cancel(); return }
 

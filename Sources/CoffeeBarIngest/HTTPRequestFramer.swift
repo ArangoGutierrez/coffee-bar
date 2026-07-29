@@ -18,8 +18,28 @@ struct HTTPRequestFramer {
     /// The largest request accepted, headers included.
     ///
     /// Design §4.1 is explicit that a same-user process can post here. A cap
-    /// stops it pinning unbounded memory in a menu-bar app.
-    static let maximumBytes = 65_536
+    /// stops it pinning unbounded memory in a menu-bar app. That intent is
+    /// unchanged; only the number moved.
+    ///
+    /// It moved because 64 KiB dropped real traffic. Measured end to end against
+    /// this listener with `/usr/bin/curl`: a `Stop` body of 65,386 bytes
+    /// returned 204, and one of 65,387 bytes returned 413 and was never
+    /// delivered. A reply carrying a large code block passes 64 KiB routinely,
+    /// and design §7.1 already measured 2747 characters of reply text in an
+    /// ORDINARY one.
+    ///
+    /// The refusal was worse than the loss. The documented hook command had no
+    /// `--fail`, so curl exited 0 and printed nothing, the event vanished with
+    /// no signal anywhere, and the session never left `.working` — which means
+    /// the hold never released. `docs/V0.1-ACCEPTANCE.md` now carries
+    /// `--fail-with-body` so a refusal is at least visible.
+    ///
+    /// The cap counts HEADERS, which is why the measured body threshold sits
+    /// about 150 bytes under this number rather than on it.
+    ///
+    /// `UnixSocketIngestListener.receiveChunkBytes` is deliberately NOT this
+    /// value. See the comment there.
+    static let maximumBytes = 1_048_576
 
     enum Outcome: Equatable {
         case needMore
