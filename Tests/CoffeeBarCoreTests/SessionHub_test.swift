@@ -401,3 +401,39 @@ private func recordedSessionID() throws -> String {
         .subtracting(PowerBroker.activeStates(holdAwakeWhileBlocked: false))
     #expect(SessionState.attentionStates == added)
 }
+
+@Test func theSameEventYieldsTheSameSessionWhetherTheDirectoryExistsOrNot() throws {
+    // PE finding I2. `URL(fileURLWithPath:)` STATS THE DISK: an existing
+    // directory comes back with a trailing slash, a missing one does not.
+    // Measured:
+    //   existing, no flag -> file:///…/exists/
+    //   missing,  no flag -> file:///…/missing
+    // So `apply` stopped being a pure function of (state, event, now) — the
+    // same payload produced two different `cwd` values depending on whether
+    // that directory happened to be on disk when it was decoded.
+    //
+    // Named bug this catches: dropping `isDirectory:` again. It is invisible in
+    // every other test here, because they all use paths that do not exist.
+    let base = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        .appending(path: "coffeebar-purity-\(UInt32.random(in: 0..<UInt32.max))")
+    let fm = FileManager.default
+    try fm.createDirectory(at: base, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(at: base) }
+
+    let event = HookEvent(hookEventName: "SessionStart",
+                          sessionID: "purity-1",
+                          cwd: base.path,
+                          source: "startup")
+
+    let whenPresent = SessionHub.apply(event, to: [], now: t0).first?.cwd
+
+    try fm.removeItem(at: base)
+    #expect(fm.fileExists(atPath: base.path) == false,
+            "precondition failed: the directory is still on disk, so this cannot discriminate")
+
+    let whenAbsent = SessionHub.apply(event, to: [], now: t0).first?.cwd
+
+    #expect(whenPresent != nil)
+    #expect(whenPresent == whenAbsent,
+            "apply() read the filesystem: \(String(describing: whenPresent)) vs \(String(describing: whenAbsent))")
+}

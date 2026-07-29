@@ -78,7 +78,7 @@ public enum SessionHub {
                              kind: HookEventKind,
                              state: SessionState,
                              now: Date) -> AgentSession {
-        let cwd = event.cwd.map { URL(fileURLWithPath: $0) }
+        let cwd = event.cwd.map { URL(fileURLWithPath: $0, isDirectory: true) }
         return AgentSession(
             tool: .claudeCode,
             sessionID: event.sessionID,
@@ -102,7 +102,7 @@ public enum SessionHub {
         // Every recorded payload carries `cwd`, but the decoder allows it to be
         // absent, and an event without one must not blank the repository name
         // out of the attention list.
-        let cwd = event.cwd.map { URL(fileURLWithPath: $0) } ?? session.cwd
+        let cwd = event.cwd.map { URL(fileURLWithPath: $0, isDirectory: true) } ?? session.cwd
 
         let attentionSince: Date?
         if SessionState.attentionStates.contains(state) {
