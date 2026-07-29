@@ -102,14 +102,38 @@ private func rawPayload(_ name: String) throws -> [String: Any] {
     #expect(event.reason?.contains("Sensitive-Source Provenance") == true)
 }
 
-@Test func aCapturedPayloadCarriesNoSourceBecauseSessionStartWasNotCaptured() throws {
-    // `source` exists for `SessionStart`, which the capture never produced. The
-    // property is declared for it and no test asserts a value we do not hold.
-    // This pins the honest state of the corpus: if a `SessionStart` fixture
-    // lands, this test goes red and whoever adds it must assert `source` for
-    // real.
-    for name in try fixtureNames() {
-        #expect(try decode(name).source == nil, "\(name) carries `source`; assert it properly")
+@Test func onlySessionStartCarriesASource() throws {
+    // This replaces `aCapturedPayloadCarriesNoSourceBecauseSessionStartWasNotCaptured`,
+    // whose comment predicted exactly this: "if a SessionStart fixture lands,
+    // this test goes red and whoever adds it must assert source for real." One
+    // did — captured by running `claude -p` headless, which crosses a real
+    // session boundary — so here is the real assertion.
+    //
+    // Named bug this catches: `source` decoded from the wrong key, or applied
+    // to every event. It is a SessionStart-only field, and `SessionHub` uses it
+    // to tell a fresh start from a resume.
+    let starts = try fixtureNames().filter { $0 == "session-start.json" }
+    #expect(starts.count == 1, "the SessionStart fixture is missing; this test cannot discriminate")
+
+    #expect(try decode("session-start.json").source == "startup")
+
+    for name in try fixtureNames() where name != "session-start.json" {
+        #expect(try decode(name).source == nil, "\(name) carries `source`; only SessionStart should")
+    }
+}
+
+@Test func sessionStartCarriesASmallerFieldSetThanAToolEvent() throws {
+    // Measured, not assumed: SessionStart carries neither agent_type,
+    // permission_mode nor effort, while PreToolUse carries all three. A decoder
+    // that made those non-optional would decode PreToolUse and throw on
+    // SessionStart — and a corpus of only tool events would never reveal it.
+    let start = try rawPayload("session-start.json")
+    for absent in ["agent_type", "permission_mode", "effort"] {
+        #expect(start[absent] == nil, "SessionStart grew \(absent); the decoder's optionality assumption changed")
+    }
+    let tool = try rawPayload("pre-tool-use.json")
+    for present in ["agent_type", "permission_mode", "effort"] {
+        #expect(tool[present] != nil, "PreToolUse lost \(present); this test no longer discriminates")
     }
 }
 
