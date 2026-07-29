@@ -87,6 +87,19 @@ public final class ServingModel {
     /// newest reading. `nil` otherwise — see `refresh()`.
     public private(set) var suppression: HoldSuppression?
 
+    /// The position a refused On click returned the control to, when that
+    /// refusal is still true of the newest reading. `nil` otherwise.
+    ///
+    /// Filtered ONCE in `refresh()`, against the same `suppression` above, so
+    /// the refusal claim has exactly the lifetime of the sentence that explains
+    /// it. The two can never appear apart.
+    ///
+    /// Internal, not `public`, for the reason `desired` is: `suppressionAdvisory`
+    /// is what the panel reads, and the test target reaches this through
+    /// `@testable import CoffeeBarUI`. Design §5.4 asserts the reason on the
+    /// enum, so this stays a `UserIntent` and not a rendered string.
+    private(set) var refusedServeReturnedTo: UserIntent?
+
     /// The state `refresh()` last reconciled to, or `nil` before the first
     /// `refresh()`.
     ///
@@ -214,6 +227,72 @@ public final class ServingModel {
                     + "so no agent session can reach it."
         guard let refusal = listenerRefusal else { return opening }
         return "\(opening) \(refusal)"
+    }
+
+    /// The one line the panel shows about the battery floor, or `nil` for no
+    /// line.
+    ///
+    /// Built HERE and not in `PanelView`, for the reason `hookAdvisory` is: M1
+    /// design §5.4 forbids asserting on rendered AppKit text, so a sentence
+    /// composed in the view is a sentence no check reads. `PanelView` built this
+    /// one until now, and that is exactly why the defect below stayed invisible.
+    ///
+    /// **The two sentences are ONE property, never two.** They answer the same
+    /// question from the same evidence, and the refusal half is meaningless
+    /// without the reason half. Split across two properties the view can render
+    /// one and drop the other, and no check can see it do that. Merged, that
+    /// mistake cannot be made.
+    ///
+    /// The first sentence is unchanged, and both halves of its wording are load
+    /// bearing. It has to be true in BOTH cases that reach it: spec §5.3 refuses
+    /// a toggle-on that starts below the floor, and `evaluate` records the same
+    /// `lastSuppression` for that refusal as for a real release, so "Released at
+    /// N%" would announce a release that never happened. "at or below" matches
+    /// `PowerBroker`, which suppresses at `percent <= floor`, so at exactly 20%
+    /// a line reading "below 20%" states the opposite of what the product did.
+    /// The percentage is the reading the DECISION was made on, not the newest
+    /// one — the battery keeps draining after a release, and the battery line in
+    /// the panel carries the current value.
+    ///
+    /// The second sentence exists because the first cannot separate these:
+    ///
+    ///   A — the user clicked On, the floor refused it, and coffee-bar moved
+    ///       their control back to where it stood.
+    ///   B — the user clicked nothing, and the floor is refusing a hold the
+    ///       sessions asked for.
+    ///
+    /// Both used to render the identical line. In A the app changed a setting
+    /// for the user, the picker snaps back on its own, and nothing said so — so
+    /// a return to Auto reads as On being honoured. B adds NO sentence, and must
+    /// not: a user who touched nothing cannot be told their click was refused.
+    ///
+    /// It names the position from `refusedServeReturnedTo` rather than a fixed
+    /// "Auto", because the standing position is not always Auto. A user who
+    /// vetoed serving lands back on Off, and `aRefusedOnClickFromOffNamesOffNotAuto`
+    /// goes red on the hard-coded word.
+    public var suppressionAdvisory: String? {
+        guard case .batteryFloor(let percent, let floor) = suppression else { return nil }
+        let reason = "At \(percent)% — coffee-bar does not hold at or below \(floor)%."
+
+        // Situation B stops here, with the line it has always had.
+        guard let landed = refusedServeReturnedTo else { return reason }
+
+        return reason + " Your On click was refused, so the control is back on "
+             + "\(Self.label(for: landed))."
+    }
+
+    /// What the three control positions are CALLED, in one place.
+    ///
+    /// `PanelView`'s picker reads this too. The sentence above names a position
+    /// the user has to find on that picker, so a second list of labels in the
+    /// view is a list that can drift — and the drift is invisible, because
+    /// design §5.4 rules out asserting on the rendered control.
+    static func label(for intent: UserIntent) -> String {
+        switch intent {
+        case .stop: return "Off"
+        case .auto: return "Auto"
+        case .serve: return "On"
+        }
     }
 
     /// Turns a `start()` failure into something the user can act on.
@@ -371,6 +450,11 @@ public final class ServingModel {
         working = AttentionList.working(from: sessions)
         desired = state
         suppression = Self.reason(controller.lastSuppression, stillTrueOf: reading)
+        // Gated on the FILTERED value above, not on the controller alone, so the
+        // refusal claim dies with the sentence that explains it. A recovery
+        // above the floor drops both together —
+        // `theRefusalSentenceGoesWhenTheBatteryRecovers` measures that.
+        refusedServeReturnedTo = suppression == nil ? nil : controller.cancelledServeReturnedTo
 
         if state.idleSleepAssertion {
             isServing = holder.acquire()
