@@ -170,3 +170,86 @@ does not exist.
 Write briefs that carry the INVARIANT so a worker can attack it, not just the
 instruction. The plan has been the weakest artifact throughout: **eight defects
 in plan literals**, two of them the orchestrator's.
+
+---
+
+# Added 2026-07-29 — two adoption items the user asked for
+
+Both are outward-facing and both need the user. Neither is in the current v0.1
+definition of done, so decide explicitly whether they gate the tag or follow it.
+
+## A. GitHub Pages — for SEO and GEO
+
+The user considers this key to adoption. It is also the cheapest item here: no
+signing, no cost, no Apple dependency.
+
+What it needs:
+
+1. A source: either `docs/` on `main` or a `gh-pages` branch. `docs/` already
+   holds the specs and plans, so a `site/` directory or a `gh-pages` branch keeps
+   engineering docs out of the published surface.
+2. Content. `docs/ROADMAP.md` "README: SEO and GEO" already carries the term list
+   and the **binding honesty constraint** — reuse it rather than inventing a
+   second voice.
+3. Enabling Pages in repo settings. **Outward-facing; the user does it.**
+
+**The honesty constraint applies to the site exactly as it does to the README.**
+`Codex CLI` and `Cursor` are v0.2 terms: M3 is deferred, so ranking for them
+before the adapters exist claims support that does not exist. GEO makes this
+worse than ordinary SEO — once an assistant cites an overclaim, the overclaim is
+durable. This README already needed four corrections for exactly that.
+
+Good GEO content, per the roadmap: a one-sentence definition near the top, and
+self-contained quotable claims. "Releases the wake assertion when every agent is
+blocked on the human" is retrievable; "smart power management" is not.
+
+## B. A downloadable .app — BLOCKED, and not on effort
+
+The user wants a drag-to-Applications download for people who do not use
+Homebrew. That is the right instinct: `brew` is a developer habit, not a Mac
+user habit.
+
+**It cannot ship as things stand, and the blocker is not code.** Measured on the
+current bundle:
+
+```
+$ codesign -dv build/CoffeeBar.app
+Signature=adhoc          flags=0x20002(adhoc,linker-signed)
+TeamIdentifier=not set
+```
+
+An ad-hoc signed app downloaded from the internet carries
+`com.apple.quarantine`, and Gatekeeper refuses it — the user sees "damaged and
+can't be opened", which is worse than no download at all. `SECURITY.md:179`
+already records this.
+
+The chain that unblocks it, in order:
+
+1. **An Apple Developer Program membership.** Paid, annual, and a decision only
+   the user can make. Everything below depends on it.
+2. A **Developer ID Application** certificate.
+3. `codesign --options runtime --timestamp` with that identity — the hardened
+   runtime is required for notarisation.
+4. `xcrun notarytool submit --wait`, then `xcrun stapler staple` so the app
+   validates offline.
+5. Package as a `.dmg` with an `/Applications` symlink, or a `.zip`. A DMG is
+   what Mac users expect for drag-to-install.
+6. Attach the artifact to the GitHub release. Note `release.yml` currently has
+   only the `verify` job — the formula job was removed — so this is new work
+   there, and it needs secrets for the certificate and an app-specific password.
+
+**Recommendation: do not gate v0.1 on this.** v0.1 already installs via Homebrew,
+which is in the definition of done. Ship v0.1, then treat signed distribution as
+its own milestone once the membership exists. Shipping a download that Gatekeeper
+blocks would damage adoption more than having no download.
+
+**If the user does NOT want to pay for a membership**, say so in the README
+rather than leaving people to discover it: build-from-source stays the only path
+for the app, and Homebrew covers the CLI probe.
+
+## Sequencing against the tag
+
+- Pages can ship before or after v0.1. Before is better for launch traction, and
+  it costs nothing but content.
+- Signed distribution should follow v0.1. It has a paid prerequisite and a real
+  release-pipeline change, and neither belongs in a first tag.
