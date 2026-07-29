@@ -48,6 +48,25 @@ public final class ServingModel {
     /// code outside this module reads it.
     private(set) var sessions: [AgentSession] = []
 
+    /// The sessions blocked on the human, longest wait first.
+    ///
+    /// Recomputed in `refresh()` from `sessions`, never accumulated. A list
+    /// built once when an event arrives would keep a crashed agent under
+    /// "waiting on you" for the life of the process, because the stale timeout
+    /// runs on the ticker and nothing else would ever revisit the row.
+    public private(set) var attention: [AgentSession] = []
+
+    /// The sessions holding the machine awake right now.
+    ///
+    /// Design §14 requires the panel to name what is causing a hold, FROM THIS
+    /// ARRAY rather than from a second source that can disagree with the
+    /// decision — so this is `AttentionList.working(from:)` over exactly the
+    /// array handed to `evaluate` on the same line of `refresh()`.
+    ///
+    /// Internal: `workingSummary` below is what the panel renders, and nothing
+    /// outside this module reads the sessions themselves.
+    private(set) var working: [AgentSession] = []
+
     /// The repeating refresh installed by `startMonitoring`.
     ///
     /// Internal `private(set)` for the same reason `desired` is: the one thing
@@ -146,6 +165,32 @@ public final class ServingModel {
         }
     }
 
+    /// The one line the panel shows about what is holding the machine awake, or
+    /// `nil` for no line.
+    ///
+    /// PE finding I4, resolved as design §14. The attention list shows the two
+    /// BLOCKED states, so without this the session actually holding the
+    /// assertion appears nowhere — in a product whose whole pitch is that you
+    /// can see what is keeping your Mac awake. §14 says a count is enough.
+    ///
+    /// The sentence is built here rather than in `PanelView` for the reason
+    /// `hookAdvisory` is: M1 design §5.4 forbids asserting on rendered AppKit
+    /// text, so a sentence composed in the view would be a sentence no check
+    /// reads — and "1 sessions working" would ship.
+    ///
+    /// It states the COUNT and claims no cause. Under `.serve` the hold exists
+    /// whatever the sessions are doing, and under `.stop` it exists for none of
+    /// them, so "2 sessions are keeping this Mac awake" would be false in both
+    /// positions. The panel already says whether it is holding, one line above.
+    /// Both lines are true independently, which is the only way two lines can
+    /// sit together and stay honest.
+    ///
+    /// Derived, not stored, so it cannot disagree with `working`.
+    public var workingSummary: String? {
+        guard working.isEmpty == false else { return nil }
+        return working.count == 1 ? "1 session working" : "\(working.count) sessions working"
+    }
+
     /// The listener default is the REAL one, deliberately.
     ///
     /// A null default would let a missing wire ship silently, and ingest that
@@ -237,6 +282,11 @@ public final class ServingModel {
         let state = controller.evaluate(powerSource: reading.source,
                                         batteryPercent: reading.percent,
                                         sessions: sessions)
+        // Derived from the SAME array handed to `evaluate` above, on purpose.
+        // Design §14 forbids a second source here: a panel that disagrees with
+        // the hold decision is worse than a panel with nothing on it.
+        attention = AttentionList.rows(from: sessions)
+        working = AttentionList.working(from: sessions)
         desired = state
         suppression = Self.reason(controller.lastSuppression, stillTrueOf: reading)
 

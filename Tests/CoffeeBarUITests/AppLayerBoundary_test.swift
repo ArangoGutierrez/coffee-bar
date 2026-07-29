@@ -90,6 +90,7 @@ private let expectedAppLayerEntries = [
     "Sources/CoffeeBarApp/main.swift",
     "Sources/CoffeeBarIngest/HTTPRequestFramer.swift",
     "Sources/CoffeeBarIngest/IngestListener.swift",
+    "Sources/CoffeeBarUI/AttentionListView.swift",
     "Sources/CoffeeBarUI/HookHealthReader.swift",
     "Sources/CoffeeBarUI/MenuBarGlyphs.swift",
     "Sources/CoffeeBarUI/PanelView.swift",
@@ -460,4 +461,35 @@ private func resolvedDependencies(ofTarget name: String) throws -> [String] {
         check reaches the user nowhere. Render it, or delete the property and \
         the checks that assert its text.
         """)
+}
+
+@Test func thePanelReadsEverySessionValueTheModelPublishes() throws {
+    // The same tripwire as the check above, for the three values the panel
+    // gained with the attention list. Each one is computed in `refresh()`, has
+    // its own checks in `ServingModelIngest_test.swift`, and reaches the user
+    // through exactly one line of `PanelView`. Delete that line and every one
+    // of those checks stays green while the panel goes blank.
+    //
+    // `model.attention` is what design §10.3 asks for; `model.workingSummary`
+    // is what design §14 REQUIRES, after a review found that the session
+    // holding the machine awake appeared nowhere.
+    //
+    // Same LIMIT as above, stated rather than hidden: this proves the panel
+    // NAMES each property, not that it renders it correctly. A mention in a
+    // comment would satisfy it. It is a tripwire against deleting the render.
+    let files = try appLayerSources()
+    #expect(files.count == expectedSourceCount,
+            "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
+
+    let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
+                             "the app layer no longer compiles a PanelView.swift")
+    let source = try String(contentsOf: panel, encoding: .utf8)
+
+    for property in ["model.attention", "model.workingSummary"] {
+        #expect(source.contains(property), """
+            PanelView.swift never reads \(property), so what the model computes \
+            for it reaches the user nowhere. Render it, or delete the property \
+            and the checks that assert its value.
+            """)
+    }
 }

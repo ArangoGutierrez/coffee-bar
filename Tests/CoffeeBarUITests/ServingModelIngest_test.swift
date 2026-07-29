@@ -335,6 +335,166 @@ private func makeModel(listener: any IngestListening,
     #expect(holder.releaseCount >= 1)
 }
 
+// MARK: - What the panel is told about those sessions
+
+// `AttentionList` is checked directly in `CoffeeBarCoreTests`. These checks are
+// about the WIRING: that the model publishes what that rule computes, off the
+// same `sessions` array it hands the broker. A published value nothing feeds is
+// the failure `thePanelReadsTheHookAdvisoryTheModelPublishes` exists to catch,
+// and it has already shipped here once.
+//
+// Asserted on the model's published values, never on rendered AppKit text. M1
+// design §5.4 rules the second one out.
+
+@MainActor
+@Test func aBlockedSessionAppearsInTheAttentionList() throws {
+    // The list answers "what is waiting on me". Named bug this catches: a model
+    // that tracks sessions for the broker and publishes nothing for the panel,
+    // so a permission prompt the user has to answer is invisible until they go
+    // hunting through terminal windows for it.
+    let listener = StubListener()
+    let model = makeModel(listener: listener)
+    try model.startMonitoring(interval: 3600)
+
+    #expect(model.attention.isEmpty)
+
+    listener.deliver(HookEvent(hookEventName: "PermissionDenied", sessionID: "s1",
+                               cwd: "/Users/example/src/coffee-bar",
+                               reason: "Bash needs approval"))
+
+    #expect(model.attention.map(\.sessionID) == ["s1"])
+    #expect(model.attention.first?.state == .awaitingPermission)
+    #expect(model.attention.first?.repoName == "coffee-bar")
+    #expect(model.attention.first?.lastMessage == "Bash needs approval")
+}
+
+@MainActor
+@Test func aWorkingSessionIsNotWaitingOnTheUser() throws {
+    // Named bug this catches: publishing `sessions` straight through as the
+    // attention list. Every busy agent then shows up under "waiting on you" and
+    // the list stops meaning anything.
+    let listener = StubListener()
+    let model = makeModel(listener: listener)
+    try model.startMonitoring(interval: 3600)
+
+    listener.deliver(HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
+
+    #expect(model.sessions.count == 1, "the model stopped tracking the session at all")
+    #expect(model.attention.isEmpty, "a working agent was listed as waiting on the user")
+}
+
+@MainActor
+@Test func theAttentionListPutsTheLongestWaitFirst() throws {
+    // Named bug this catches: `attention = sessions.filter { … }` in the model,
+    // which produces the right SET in ingest order. The user then reads a list
+    // whose top entry is whichever agent blocked most recently, and the one
+    // that has been waiting longest scrolls off the bottom.
+    //
+    // The fixture blocks the sessions in the OPPOSITE order to the one they
+    // arrived in, and that is what makes it discriminate. `SessionHub.apply`
+    // appends, so a session that arrives blocked and stays blocked sits in
+    // ingest order AND in wait order at once — measured: with both sessions
+    // delivered blocked, the unordered filter above passed this check.
+    let listener = StubListener()
+    let clock = TestClock()
+    let model = makeModel(listener: listener, clock: clock)
+    try model.startMonitoring(interval: 3600)
+
+    // Arrives FIRST, and it is working, so it is not waiting on anybody yet.
+    listener.deliver(HookEvent(hookEventName: "PreToolUse", sessionID: "arrived-first"))
+    // Arrives SECOND and blocks immediately, so it is the longest wait.
+    listener.deliver(HookEvent(hookEventName: "Stop", sessionID: "blocked-first"))
+
+    clock.advance(60)
+    listener.deliver(HookEvent(hookEventName: "Stop", sessionID: "arrived-first"))
+
+    #expect(model.sessions.map(\.sessionID) == ["arrived-first", "blocked-first"],
+            "the fixture no longer holds the two orders apart, so it proves nothing")
+    #expect(model.attention.map(\.sessionID) == ["blocked-first", "arrived-first"])
+}
+
+@MainActor
+@Test func aWorkingSessionIsVisibleAsACount() throws {
+    // Design §14, and PE finding I4 that it resolves. Named bug this catches,
+    // and it is the one the design rejected the original plan over: the panel
+    // shows the blocked states only, so the session ACTUALLY holding the machine
+    // awake appears NOWHERE — in a product whose entire pitch is that you can
+    // see what is keeping your Mac awake.
+    let listener = StubListener()
+    let model = makeModel(listener: listener)
+    try model.startMonitoring(interval: 3600)
+
+    // Precondition: an idle machine names nothing, so the line below is caused
+    // by the event and not printed unconditionally.
+    #expect(model.workingSummary == nil)
+
+    listener.deliver(HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
+
+    #expect(model.isServing == true)
+    #expect(model.workingSummary == "1 session working")
+}
+
+@MainActor
+@Test func theWorkingCountIsPluralisedAndCounts() throws {
+    // Named bug this catches: "2 session working", and a count hard-coded to 1.
+    // The line is built in the model rather than in the view because M1 design
+    // §5.4 forbids asserting on rendered AppKit text — a sentence composed in
+    // `PanelView` would be a sentence no check reads.
+    let listener = StubListener()
+    let model = makeModel(listener: listener)
+    try model.startMonitoring(interval: 3600)
+
+    listener.deliver(HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
+    listener.deliver(HookEvent(hookEventName: "PreToolUse", sessionID: "s2"))
+
+    #expect(model.workingSummary == "2 sessions working")
+}
+
+@MainActor
+@Test func aBlockedSessionIsNotCountedAsWorkingInThePanel() throws {
+    // Named bug this catches: counting every tracked session. "1 session
+    // working" printed beside "Not holding any assertion" tells the user the
+    // app is broken at the exact moment it is doing the right thing — an agent
+    // blocked on a person does not hold the machine awake.
+    let listener = StubListener()
+    let model = makeModel(listener: listener)
+    try model.startMonitoring(interval: 3600)
+
+    listener.deliver(HookEvent(hookEventName: "Stop", sessionID: "s1"))
+
+    #expect(model.attention.map(\.sessionID) == ["s1"])
+    #expect(model.isServing == false)
+    #expect(model.workingSummary == nil, "a session blocked on the user was counted as working")
+}
+
+@MainActor
+@Test func aStaleSessionIsNeitherWaitingNorWorking() throws {
+    // The stale timeout is a SAFETY property (design §5), and the panel has to
+    // follow it. Named bug this catches: an `attention` or a count computed once
+    // in `ingest` and never recomputed in `refresh()`. A crashed agent sends no
+    // further event, so its row would sit under "waiting on you" for the life of
+    // the process, telling the user to go answer a dead terminal.
+    let listener = StubListener()
+    let clock = TestClock()
+    let model = makeModel(listener: listener, clock: clock,
+                          policy: StalePolicy(workingTimeout: 100, blockedTimeout: 200))
+    try model.startMonitoring(interval: 3600)
+
+    listener.deliver(HookEvent(hookEventName: "PreToolUse", sessionID: "busy"))
+    listener.deliver(HookEvent(hookEventName: "Stop", sessionID: "blocked"))
+    #expect(model.workingSummary == "1 session working")
+    #expect(model.attention.map(\.sessionID) == ["blocked"])
+
+    // Only the clock moves. The one route from here to the panel is `refresh()`.
+    clock.advance(200)
+    model.refresh()
+
+    #expect(model.sessions.allSatisfy { $0.state == .stale },
+            "the fixture did not go stale, so the expectations below prove nothing")
+    #expect(model.workingSummary == nil, "a dead agent was still counted as working")
+    #expect(model.attention.isEmpty, "a dead agent was still listed as waiting on the user")
+}
+
 // MARK: - The listener's lifecycle
 
 @MainActor

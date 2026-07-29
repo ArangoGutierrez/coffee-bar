@@ -124,11 +124,32 @@ public struct PanelView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            // What is holding the machine awake, right under the line that says
+            // whether anything is. Design §14: the attention list below shows
+            // the two BLOCKED states, so without this the session actually
+            // causing the hold appears nowhere in a product whose pitch is that
+            // you can see it.
+            //
+            // Rendered verbatim from the model, with no sentence built here —
+            // M1 design §5.4 forbids asserting on rendered AppKit text, so a
+            // sentence composed in this file would be a sentence no check reads.
+            if let summary = model.workingSummary {
+                Text(summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Divider()
 
             Label(batteryLine, systemImage: "bolt")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            Divider()
+
+            Text("Waiting on you").font(.headline)
+
+            AttentionListView(sessions: model.attention)
 
             Divider()
 
