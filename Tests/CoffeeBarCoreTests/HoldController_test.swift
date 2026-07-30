@@ -399,7 +399,11 @@ private func session(_ state: SessionState) -> AgentSession {
             "precondition: the click was served, so a later cancel is a RELEASE")
     #expect(c.cancelledServe == nil, "nothing is cancelled while the hold runs")
 
-    _ = c.evaluate(powerSource: .battery, batteryPercent: 19)
+    // `assertionIsHeld` reports that the caller really took the assertion the
+    // evaluate above asked for. The controller decides what should happen and
+    // IOKit decides what did, so this fact can only come from the caller —
+    // `aHoldThatWasNeverTakenIsNotCalledAReleasedHold` covers the other answer.
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 19, assertionIsHeld: true)
 
     #expect(c.intent == .auto)
     #expect(c.cancelledServe == .released(returnedTo: .auto))
@@ -419,10 +423,15 @@ private func session(_ state: SessionState) -> AgentSession {
     #expect(c.evaluate(powerSource: .battery, batteryPercent: 50).idleSleepAssertion == true,
             "precondition: the FIRST click was served")
 
+    // The hold is really taken, so the FIRST request genuinely held. Without
+    // this the check runs against a request that never held and proves nothing
+    // about a success leaking forward.
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 50, assertionIsHeld: true)
+
     // Back to Auto by hand, with no cancel in between — so nothing else clears
     // the memory of that success.
     c.userToggled(to: .auto)
-    _ = c.evaluate(powerSource: .battery, batteryPercent: 50)
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 50, assertionIsHeld: true)
 
     // A fresh click, below the floor this time. It is refused, never served.
     c.userToggled(to: .serve)

@@ -92,6 +92,19 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     }
 }
 
+/// An assertion holder that always refuses.
+///
+/// `AssertionHolder.acquire()` returns `false` when IOKit refuses the
+/// assertion, and `ServingModel` then leaves `isServing` false. Without a
+/// double for that, every check here runs against a holder that never fails,
+/// and the panel's claims about a hold go untested on the path where no hold
+/// exists.
+private final class FailingHolder: AssertionHolding, @unchecked Sendable {
+    @discardableResult
+    func acquire() -> Bool { false }
+    func release() {}
+}
+
 /// A hook-health reader pointed at a committed fixture.
 ///
 /// EVERY `ServingModel` built in this file is handed one. `refresh()` reads the
@@ -907,6 +920,104 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     #expect(model.suppressionAdvisory == """
         At 19% — coffee-bar does not hold at or below 20%. coffee-bar released \
         the hold from your On click, so the control is back on Auto.
+        """)
+}
+
+@MainActor
+@Test func aReleasedHoldFromOffNamesOffNotAuto() {
+    // The RELEASE sentence names a position too, and the standing position is
+    // not always Auto. `aRefusedOnClickFromOffNamesOffNotAuto` drives only the
+    // REFUSED wording, so without this the release half is unguarded.
+    //
+    // Named bug this catches: hard-coding "Auto" in the release sentence, or
+    // returning `.auto` instead of `standing` from the release branch. Both
+    // survive the whole suite otherwise — measured. A user who vetoed serving
+    // reads that they are back on Auto while the control shows Off, so the one
+    // sentence explaining the move describes a move that did not happen.
+    let reader = FakeReader(source: .battery, percent: 50)
+    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+
+    model.intent = .stop
+    model.intent = .serve
+    #expect(model.isServing == true, "precondition: the click was honoured from the Off position")
+
+    reader.set(source: .battery, percent: 19)
+    model.refresh()
+
+    #expect(model.intent == .stop, "the veto survives a released hold")
+    #expect(model.suppressionAdvisory == """
+        At 19% — coffee-bar does not hold at or below 20%. coffee-bar released \
+        the hold from your On click, so the control is back on Off.
+        """)
+}
+
+@MainActor
+@Test func aHoldThatWasNeverTakenIsNotCalledAReleasedHold() {
+    // `holder.acquire()` can fail: IOKit refuses, and `isServing` stays false.
+    // Nothing is ever held, so nothing can be released.
+    //
+    // Named bug this catches: sourcing "this request has held" from the DESIRED
+    // state rather than the actual acquisition. The panel then reads "coffee-bar
+    // released the hold from your On click" directly beside its own line "Not
+    // holding any assertion." — two sentences that contradict each other on one
+    // screen. The word "released" is new, so this falsehood is new.
+    let reader = FakeReader(source: .battery, percent: 50)
+    let model = ServingModel(holder: FailingHolder(), reader: reader, health: fixtureHealth())
+
+    model.intent = .serve
+    // The precondition that makes this the failing-holder path. Without it the
+    // check passes for a click that was simply never honoured.
+    #expect(model.isServing == false, "precondition: acquire() refused, so NO hold exists")
+    #expect(model.desired?.idleSleepAssertion == true,
+            "precondition: the hold was DESIRED, so only the acquisition failed")
+
+    reader.set(source: .battery, percent: 19)
+    model.refresh()
+
+    #expect(model.suppressionAdvisory?.contains("released the hold") == false,
+            "claims a hold was released when none was ever taken: \(model.suppressionAdvisory ?? "nil")")
+    #expect(model.suppressionAdvisory == """
+        At 19% — coffee-bar does not hold at or below 20%. Your On click was \
+        refused, so the control is back on Auto.
+        """)
+}
+
+@MainActor
+@Test func aHoldInheritedFromAutoIsNotCreditedToALaterRefusedClick() {
+    // The battery can cross the floor between ticks. `.auto` is holding for a
+    // working session, the reading drops, and the user clicks On before the next
+    // refresh — a click that is refused AT CLICK TIME and never holds.
+    //
+    // Named bug this catches: reading "is a hold active?" off the previous tick
+    // and crediting it to this request. The hold belonged to `.auto`, not to the
+    // click, so "coffee-bar released the hold from your On click" names the
+    // wrong cause. This is the case a naive fix for the failing holder breaks.
+    // The user has served before, so BOTH stale signals are live: an earlier
+    // request that asked for a hold, and a hold that is still up when the next
+    // click lands. Without the earlier On click this check misses the case
+    // where the "did this request ask for a hold?" flag survives the new click.
+    let reader = FakeReader(source: .battery, percent: 50)
+    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+
+    model.ingest(HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
+    model.intent = .serve
+    #expect(model.isServing == true, "precondition: an earlier On click asked for, and got, a hold")
+
+    // Back to Auto. The working session keeps the machine held, so the hold
+    // that outlives this click belongs to `.auto` and not to the click.
+    model.intent = .auto
+    #expect(model.isServing == true, "precondition: .auto holds the machine for the session")
+
+    // The reading falls, and the user clicks On before any refresh sees it.
+    reader.set(source: .battery, percent: 19)
+    model.intent = .serve
+
+    #expect(model.isServing == false)
+    #expect(model.suppressionAdvisory?.contains("released the hold") == false,
+            "credits .auto's hold to a click that never held: \(model.suppressionAdvisory ?? "nil")")
+    #expect(model.suppressionAdvisory == """
+        At 19% — coffee-bar does not hold at or below 20%. Your On click was \
+        refused, so the control is back on Auto.
         """)
 }
 
