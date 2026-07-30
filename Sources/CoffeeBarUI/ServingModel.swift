@@ -505,6 +505,16 @@ public final class ServingModel {
         // claim dies with the sentence that explains it. A recovery above the
         // floor drops both together —
         // `theRefusalSentenceGoesWhenTheBatteryRecovers` measures that.
+        //
+        // This gate HIDES a stale claim; it does not end one, and audit finding
+        // 2 is the difference. The controller kept a cancel that no suppression
+        // followed, this line hid it while the battery was above the floor, and
+        // the next drain handed the same record back — so the record's own
+        // lifetime had to be fixed in `HoldController.evaluate`. The gate stays:
+        // it is what keeps the claim and the sentence from ever appearing apart,
+        // and two independent mechanisms are what
+        // `aRefusalFromAnEarlierDrainNeverReturnsAtALaterOne` asserts on
+        // separately, one on the state and one on the wording.
         cancelledServe = suppression == nil ? nil : controller.cancelledServe
 
         if state.idleSleepAssertion {

@@ -55,11 +55,25 @@ public struct HoldController: Equatable, Sendable {
     /// floor refused outright, and a click that was honoured for hours and then
     /// released on a draining battery. `ServeCancellation` says which.
     ///
-    /// Written in LOCKSTEP with `lastSuppression`, inside the same branch, so a
-    /// NEW suppression that cancels nothing clears it. Without that a refused
-    /// click replays onto every later suppression the user never caused —
-    /// `aSuppressionThatCancelsNoClickClearsAStaleCancel` goes red on exactly
-    /// that.
+    /// Its LIFETIME is the suppression EPISODE it explains. It is written when
+    /// the cancel happens and cleared when `lastSuppression` stops being true of
+    /// the reading — the same test `ServingModel.reason(_:stillTrueOf:)` applies
+    /// one layer up, so the record and the sentence explaining it cannot
+    /// disagree about when they end.
+    ///
+    /// It was written in lockstep with `lastSuppression` INSIDE the same branch
+    /// until audit findings 1 and 2, which are one defect with two faces.
+    /// Clearing it on any suppression that cancelled no click wiped a LIVE
+    /// record on the next hook event, which lands sub-second under a working
+    /// agent — so the disclosure died in exactly the case it targets, because
+    /// the user clicks On precisely when an agent is running.
+    /// `aLaterSuppressionUnderAutoKeepsALiveRefusalOnRecord` goes red on that.
+    /// Clearing it ONLY there left it on record for ever the rest of the time:
+    /// with no session `PowerBroker` returns early, the branch never runs, and
+    /// the refusal replays days later onto a reading it does not name —
+    /// `aRecoveryAboveTheFloorClearsTheCancelForGood` goes red on that half, and
+    /// `aRefusalFromAnEarlierDrainNeverReturnsAtALaterOne` measures the sentence
+    /// the user reads. The two halves need ONE rule, not two clearing sites.
     ///
     /// `standing` stays private: this is non-`nil` only after a real cancel, so
     /// a check still reaches the position through behaviour.
@@ -158,13 +172,28 @@ public struct HoldController: Equatable, Sendable {
     /// A new `.serve` also clears both hold flags: this click has served nothing
     /// yet, and inheriting the last one's success would report the next refusal
     /// as a release.
+    ///
+    /// **A `.serve` written while `.serve` is already in force is NOT a new
+    /// click**, and the flags survive it — audit finding 3. A segmented SwiftUI
+    /// picker writes its binding on a re-tap of the segment that is ALREADY
+    /// selected, measured with a synthesised NSEvent, so the panel reaches this
+    /// with one tap on a control that never moves. Treating that as a new
+    /// request discards the memory of a hold this same request really won, and
+    /// the release that follows is then announced as a refusal —
+    /// `aRepeatedOnClickKeepsTheHoldItAlreadyWon` and
+    /// `aRepeatedOnClickNeverTurnsAReleaseIntoARefusal` go red on it. The
+    /// previous position has to be read BEFORE the assignment below, which is
+    /// why the test cannot be written against `self.intent` in the branch.
     public mutating func userToggled(to intent: UserIntent) {
+        let wasServing = self.intent == .serve
         self.intent = intent
         cancelledServe = nil
         if self.intent == .serve {
             lastSuppression = nil
-            serveHasHeld = false
-            serveDesiredHold = false
+            if !wasServing {
+                serveHasHeld = false
+                serveDesiredHold = false
+            }
         } else {
             standing = intent
         }
@@ -213,8 +242,9 @@ public struct HoldController: Equatable, Sendable {
     /// happened. A refused click and a hold nobody asked for reach the panel as
     /// the same value, so the panel renders one sentence for a user whose
     /// control coffee-bar just moved and for a user who touched nothing.
-    /// `cancelledServe` carries that difference, and is written here in
-    /// lockstep — set on the cancel, cleared on any other suppression.
+    /// `cancelledServe` carries that difference. It is set on the cancel and
+    /// cleared when the floor it names stops binding — see the rule at the end
+    /// of this method, which is the ONE place it dies.
     ///
     /// `assertionIsHeld` is the caller's report of whether an assertion is
     /// actually held RIGHT NOW, which only the caller can know: this type
@@ -261,12 +291,52 @@ public struct HoldController: Equatable, Sendable {
                 cancelledServe = serveHasHeld
                     ? .released(returnedTo: standing)
                     : .refused(returnedTo: standing)
-            } else {
-                // Not an omission. This suppression cancelled no click, so any
-                // earlier cancel is no longer what the panel is explaining.
-                cancelledServe = nil
             }
+            // No `else` clear here, and its absence is the fix for audit
+            // finding 1. A suppression that cancelled no click does not end the
+            // episode a live record explains: under `.auto` a working session
+            // asks for the same hold on every hook event, so that clear wiped
+            // the user's own refusal sub-second after they read it.
+        }
+
+        // The ONE place the record dies. It explains a single episode below the
+        // floor, so it lives exactly as long as that episode is still true of
+        // the reading — the test `ServingModel.reason(_:stillTrueOf:)` applies
+        // to the sentence one layer up, applied here to the state behind it.
+        //
+        // This cannot fight the branch above: a suppression is produced only for
+        // a reading at or below the floor, and `lastSuppression` carries that
+        // same floor, so a cancel recorded on this call always survives it.
+        //
+        // Placed OUTSIDE the branch on purpose. Audit finding 2 is what a clear
+        // that runs only on a suppression costs: `PowerBroker` returns early
+        // whenever nothing wants a hold, so with no session no suppression ever
+        // fires under `.auto`, nothing clears the record, and the refusal
+        // replays onto the next drain days later.
+        if !Self.stillTrue(lastSuppression, ofBattery: batteryPercent, on: powerSource) {
+            cancelledServe = nil
         }
         return state
+    }
+
+    /// Whether a recorded suppression is still true of the reading now being
+    /// evaluated.
+    ///
+    /// The same comparison `PowerBroker` suppresses on — `percent <= floor` on
+    /// battery — read from the RECORDED floor rather than from this call's
+    /// parameter, so a floor the user changes between calls cannot strand a
+    /// record that a different floor produced.
+    ///
+    /// `nil` for either operand answers `false`: no reading and no record are
+    /// both states where nothing is being explained.
+    private static func stillTrue(_ suppression: HoldSuppression?,
+                                  ofBattery percent: Int?,
+                                  on source: PowerSource) -> Bool {
+        guard case .batteryFloor(_, let floor) = suppression,
+              source == .battery,
+              let percent
+        else { return false }
+
+        return percent <= floor
     }
 }
