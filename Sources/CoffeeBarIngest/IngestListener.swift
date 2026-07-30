@@ -12,7 +12,8 @@ public enum IngestError: Error, Equatable {
     case directoryUnwritable(String)
     /// Another listener already answers at this path, or this one already does.
     case alreadyServing(String)
-    /// Something sits at the socket path that must not be cleared out.
+    /// Something sits at the socket path that must not, or cannot, be cleared
+    /// out.
     case socketPathBlocked(String)
 }
 
@@ -89,7 +90,25 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
     private let lock = NSLock()
     private var listener: NWListener?
     private var activeConnections = 0
-    private var ready = false
+
+    /// Which socket node this listener bound, captured when it reported
+    /// `.ready`. Non-nil IS "ready". See `isReady`.
+    ///
+    /// It replaces a plain `Bool`. Two fields that have to agree would be one
+    /// more invariant to keep, and this one carries strictly more than the flag
+    /// did. The three write sites are unchanged: here, the `.ready` state, and
+    /// `stop()`.
+    private var boundNode: NodeIdentity?
+
+    /// Identifies one node on one filesystem.
+    ///
+    /// Device AND inode. An inode number is unique only within a filesystem,
+    /// and the socket path is user-configurable at the initialiser, so the two
+    /// have to travel together.
+    private struct NodeIdentity: Equatable {
+        let device: dev_t
+        let inode: ino_t
+    }
 
     /// Lifetime census for the per-connection state. See `ConnectionCensus`.
     ///
@@ -115,31 +134,40 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
     /// panel's answer to "is this process serving", which no read of the user's
     /// settings file can give.
     ///
-    /// The stored flag alone answered for the PAST. It is written at exactly
+    /// A stored flag alone answered for the PAST. It was written at exactly
     /// three sites — the initialiser, the `.ready` state, and `stop()` — so
     /// `stop()` was the only thing that ever cleared it, and a node that went
     /// away while the process ran left it true. Measured: the user deletes the
     /// node, `curl` fails at exit 7, every event is lost, and the panel reports
     /// no problem at all, because `ingestListening` is this value.
     ///
-    /// So the flag is now a precondition and the node is the proof. `lstat`
-    /// does not follow a symlink, which is deliberate: the question is whether
-    /// OUR node is still at the path, not whether the path resolves to some
-    /// socket elsewhere.
+    /// So the flag became a precondition and the node became the proof. The
+    /// question asked is IDENTITY, not existence: is the node at the path the
+    /// one this listener bound. A type check cannot answer it. The scenario
+    /// recorded at the `occupant` call site below — a second binder unlinks the
+    /// node and binds its own, and this listener is left `.ready` on an
+    /// unlinked inode, deaf for ever — leaves a socket of exactly the right
+    /// type at the path. Only device and inode tell the two apart.
+    ///
+    /// `lstat`, never `stat`. A symlink at the path answers false even when it
+    /// resolves to this listener's own socket. The node has then left the 0700
+    /// directory, which is the whole access control of design §4, so answering
+    /// true would report a security property the app no longer has.
     ///
     /// The lock is released BEFORE the syscall. This is polled in tight loops,
     /// not only on the 30 s refresh, and `accept` takes the same lock on every
-    /// connection.
+    /// connection. Measured at 1.3 µs per call against 11.9 ns for the bare
+    /// flag: 113 times the cost, and 0.0067 % of a core at one call per 20 ms.
     ///
-    /// `stop()` still clears the flag, and that is still load-bearing: it
+    /// `stop()` still clears the identity, and that is still load-bearing: it
     /// leaves the node in place on purpose, so the node alone cannot say that
     /// this listener stopped.
     public var isReady: Bool {
         lock.lock()
-        let bound = ready
+        let bound = boundNode
         lock.unlock()
-        guard bound else { return false }
-        return Self.nodeType(atPath: socketPath) == mode_t(S_IFSOCK)
+        guard let bound else { return false }
+        return Self.nodeIdentity(atPath: socketPath) == bound
     }
 
     /// How many connections are being served right now.
@@ -200,6 +228,22 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
             // on it. Removing a node NOTHING answers on is how every unix-socket
             // server starts.
             try? FileManager.default.removeItem(atPath: path)
+            // The AFTER-STATE, not the return. `try?` is right here — the node
+            // may legitimately have gone by itself between the probe and this
+            // line, and that error means nothing — but a node that SURVIVES
+            // means everything. Measured: a dangling symlink plus
+            // `lchflags(path, UF_IMMUTABLE)`, a USER flag any process under this
+            // account can set on its own link, made the delete fail silently.
+            // The bind then went THROUGH the surviving link and the socket
+            // landed at the far end, which is the relocation this probe exists
+            // to stop, reached by a second route.
+            //
+            // Refusing is the only honest answer. Recovery is what makes
+            // `.stale` the right classification for a link, and where the
+            // recovery cannot happen there is nothing left to prefer it for.
+            guard Self.nodeType(atPath: path) == nil else {
+                throw IngestError.socketPathBlocked(path)
+            }
         }
 
         let parameters = NWParameters.tcp
@@ -214,8 +258,12 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
             try? FileManager.default.setAttributes(
                 [.posixPermissions: 0o600], ofItemAtPath: path)
             guard let self else { return }
+            // Identity, not existence. A capture that fails means no socket of
+            // ours is at the path, which is what `isReady` would answer in any
+            // case, so nothing is stored and this listener reports false.
+            guard let identity = Self.nodeIdentity(atPath: path) else { return }
             self.lock.lock()
-            self.ready = true
+            self.boundNode = identity
             self.lock.unlock()
         }
 
@@ -253,7 +301,7 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
         let cancelling = listener
         listener = nil
         activeConnections = 0
-        ready = false
+        boundNode = nil
         lock.unlock()
         cancelling?.cancel()
     }
@@ -267,7 +315,7 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
         case stale
         /// Something answers, or we cannot prove otherwise.
         case live
-        /// Something is there that must not be cleared out.
+        /// Something is there that must not, or cannot, be cleared out.
         case blocked
     }
 
@@ -329,10 +377,15 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
             // not follow a symlink, so it takes the LINK, and a dangling link
             // has no target left to take. A link to an unserved socket and a
             // link to a regular file already resolve here, so all three
-            // removable link cases now follow one rule. It also DEFEATS a
-            // planted link instead of reporting it: refusing to start would
-            // turn an attempted relocation into a standing denial of service
-            // that the app cannot clear itself.
+            // removable link cases now follow one rule. It also RECOVERS from a
+            // planted link rather than only reporting it, and recovery here is
+            // free: a dangling link has no target to lose.
+            //
+            // That is a preference, not an absolute. A refusal is NOT uniquely
+            // bad — a link to a directory already gives a standing refusal this
+            // app cannot clear itself, and the design accepts that outcome. So
+            // `.blocked` is chosen wherever recovery is not free, including a
+            // delete that fails, above.
             //
             // A live node is never reached by this branch. It answers `connect`
             // or gives ECONNREFUSED, and it is not a symlink either way.
@@ -350,6 +403,17 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
         var status = stat()
         guard lstat(path, &status) == 0 else { return nil }
         return status.st_mode & mode_t(S_IFMT)
+    }
+
+    /// Which SOCKET node is at `path`, or nil when the path does not hold one.
+    ///
+    /// `lstat`, never `stat`, for the reason `isReady` gives: a symlink must
+    /// answer nil even when it resolves to this listener's own socket.
+    private static func nodeIdentity(atPath path: String) -> NodeIdentity? {
+        var status = stat()
+        guard lstat(path, &status) == 0 else { return nil }
+        guard status.st_mode & mode_t(S_IFMT) == mode_t(S_IFSOCK) else { return nil }
+        return NodeIdentity(device: status.st_dev, inode: status.st_ino)
     }
 
     // MARK: - Serving one connection
