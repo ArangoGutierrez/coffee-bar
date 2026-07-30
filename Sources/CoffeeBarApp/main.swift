@@ -30,6 +30,18 @@ struct CoffeeBarMenuBarApp: App {
         // visible in Console.app and nowhere else, which for a menu-bar app is
         // the same as invisible. The log stays for the case where the user
         // cannot open the panel at all.
+        // Not retried, and that is a decision rather than an omission.
+        // `listenerStarted` is set only on success, so `startMonitoring` is
+        // already safe to call a second time — nothing calls it. What a retry
+        // still needs is a way to tell a socket THIS process leaked from one
+        // another process owns. `ServingModel` has no cleanup path for its
+        // listener, so an orphaned model's `NWListener` keeps the socket for
+        // the life of the process, and `occupant()` connect-probes that socket
+        // and reports `.live`. A retry would then fail for ever while the panel
+        // told the user to go quit a second instance that does not exist —
+        // measured — and a confident wrong explanation is a worse failure than
+        // the silence it replaces. The check belongs in `IngestListener`, not
+        // here. Read the leak note in `ServingModel.swift` before adding one.
         do {
             try model.startMonitoring()
         } catch {

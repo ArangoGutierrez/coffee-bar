@@ -406,10 +406,33 @@ public final class ServingModel {
     // the listener takes ingest down for the LIVE instance while the panel
     // still reports the hooks wired.
     //
-    // Nothing is lost by leaving it out. An orphan's `startMonitoring` cannot
-    // steal the socket — `UnixSocketIngestListener.start` connect-probes first
-    // and throws `alreadyServing` — and the orphan's own `NWListener` goes with
-    // it when the object does.
+    // What leaving it out costs, stated exactly, because the sentence that used
+    // to sit here was FALSE. An orphan's `startMonitoring` cannot steal the
+    // socket — `UnixSocketIngestListener` connect-probes first and throws
+    // `alreadyServing` — but this then claimed the orphan's own `NWListener`
+    // went with it when the object did. It does not. Measured against this
+    // repo's own class, with a control at each step:
+    //
+    //   - the `UnixSocketIngestListener` DOES deallocate — a weak reference to
+    //     it goes nil — which is what made the claim look right;
+    //   - the `NWListener` it started does NOT. The socket still accepts
+    //     connections two seconds after the last owning reference goes away,
+    //     and a real `curl` post to it exits 52: accepted, then dropped;
+    //   - only `cancel()` frees it. The same class stopped through `stop()`
+    //     refuses the next connection.
+    //
+    // So an orphan that DID bind leaks its socket for the life of the process.
+    // Nothing reaches that today, so this is LATENT and not a live defect:
+    // `startMonitoring` runs once per model from `App.init`, and a second
+    // model's `start()` throws off the FIRST model's still-live listener rather
+    // than binding a second one. The instrumented bundle ran `App.init` exactly
+    // once over 122 s and five real hook events.
+    //
+    // A bind RETRY is what would wake it up, and `main.swift` carries that
+    // decision. `occupant()` cannot tell a socket this process leaked from one
+    // another process owns, so a retry finds the leak `.live` and throws
+    // `alreadyServing` for ever — measured — while the panel blames a second
+    // instance that does not exist.
 
     /// Bound to the panel's 3-way control. What the user ASKED FOR.
     ///
