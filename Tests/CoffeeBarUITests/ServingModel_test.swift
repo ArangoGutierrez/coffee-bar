@@ -1131,11 +1131,20 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
 
     model.intent = .serve
 
-    #expect(model.intent == .auto)
-    #expect(model.suppressionAdvisory == """
+    let refusal = """
         At 20% — coffee-bar does not hold at or below 20%. Your On click was \
         refused, so the control is back on Auto.
-        """)
+        """
+    #expect(model.intent == .auto)
+    #expect(model.suppressionAdvisory == refusal)
+
+    // And it survives the next refresh at that same reading. The click itself
+    // cannot test the boundary: `userToggled` clears `lastSuppression`, so the
+    // rule that ends the episode has no record to judge on the very call that
+    // writes one. Only a LATER reading puts `percent > floor` to the test, and
+    // 20% is the one value where `>` and `>=` disagree.
+    model.refresh()
+    #expect(model.suppressionAdvisory == refusal)
 }
 
 @MainActor

@@ -508,6 +508,90 @@ private func session(_ state: SessionState) -> AgentSession {
     #expect(c.cancelledServe == nil, "a refusal from an earlier episode replayed onto a later one")
 }
 
+@Test func aRefusalUnderOneFloorDiesWhenTheFloorMoves() {
+    // The record belongs to the suppression that PRODUCED it, so the rule that
+    // ends its life has to read that suppression — not the one this same call is
+    // about to record over it.
+    //
+    // Named bug this catches: reading `lastSuppression` AFTER the branch has
+    // overwritten it. The record is then judged against a floor it never met, so
+    // a refusal from a 20% floor survives into an episode of a 30% floor and the
+    // panel explains a click with the wrong constraint. `ServingModel` passes no
+    // floor today, so the shipping app runs at a constant 20 and cannot reach
+    // this — but `WatchdogDecision.batteryFloorPercent` is already configurable,
+    // so the settings surface that exposes the floor makes it live.
+    var c = HoldController()
+    c.userToggled(to: .serve)
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 19)
+    #expect(c.cancelledServe == .refused(returnedTo: .auto), "precondition: a cancel is on record")
+
+    // The floor moves to 30 and the battery sits at 28: ABOVE the floor that
+    // refused the click, below the new one. A working session asks for the hold,
+    // so a new suppression fires on this same call.
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 28,
+                   sessions: [session(.working)], batteryFloorPercent: 30)
+
+    #expect(c.lastSuppression == .batteryFloor(percent: 28, floor: 30),
+            "precondition: a NEW episode really did start")
+    #expect(c.cancelledServe == nil,
+            "a refusal from the 20% floor was judged against the 30% floor and survived")
+}
+
+@Test func aReadingWithNoPercentageDoesNotKillALiveRefusal() {
+    // Absence of a reading is not evidence that the episode ended. The rule
+    // clears the record only on a reading that PROVES the floor no longer binds.
+    //
+    // `SystemPowerReader.reading(from:providingType:)` returns
+    // `(battery, nil)` whenever no internal-battery source reports a usable
+    // capacity, so this arrives in the shipping app rather than only in a test.
+    //
+    // Named bug this catches: treating a missing percentage as a recovery. One
+    // such sample destroys a live refusal for good, and the sentence never comes
+    // back — where the filter it mirrors, `ServingModel.reason(_:stillTrueOf:)`,
+    // only HIDES the line and restores it on the next real reading.
+    var c = HoldController()
+    c.userToggled(to: .serve)
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 19)
+    #expect(c.cancelledServe == .refused(returnedTo: .auto), "precondition: a cancel is on record")
+
+    _ = c.evaluate(powerSource: .battery, batteryPercent: nil)
+    #expect(c.cancelledServe == .refused(returnedTo: .auto))
+
+    // The next real reading is still under the floor. The control is still on
+    // Auto because coffee-bar moved it, so the sentence is still the true
+    // explanation of what the user is looking at.
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 19)
+    #expect(c.cancelledServe == .refused(returnedTo: .auto))
+}
+
+@Test func aReturnToACEndsTheEpisodeForGood() {
+    // The deliberate other side of the check above, and the reason the rule
+    // tests for POSITIVE evidence rather than simply keeping the record whenever
+    // it cannot see a percentage. AC power is evidence: the battery floor cannot
+    // bind while the machine is not on battery, so the episode is over and a
+    // later drain is a NEW one.
+    //
+    // Named bug this catches: dropping the power-source half of the rule while
+    // fixing the missing-percentage half. The record then survives a full
+    // recharge on AC and replays onto the next drain — audit finding 2, back
+    // through the door that the missing-percentage fix opens.
+    var c = HoldController()
+    c.userToggled(to: .serve)
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 19)
+    #expect(c.cancelledServe == .refused(returnedTo: .auto), "precondition: a cancel is on record")
+
+    // The charger goes in. The reading does not move, so the power source is the
+    // only thing that can end the episode here.
+    _ = c.evaluate(powerSource: .ac, batteryPercent: 19)
+    #expect(c.cancelledServe == nil)
+
+    // Unplugged again, still under the floor, with a session asking for a hold.
+    // The click is two power transitions old and must not come back.
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 19,
+                   sessions: [session(.working)])
+    #expect(c.cancelledServe == nil, "a refusal replayed across a charge")
+}
+
 @Test func aRepeatedOnClickKeepsTheHoldItAlreadyWon() {
     // A second write of `.serve` while `.serve` is already in force is not a new
     // request. A segmented SwiftUI picker writes its binding on a re-tap of the
