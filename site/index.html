@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<!--
+  Copyright 2026 Carlos Eduardo Arango Gutierrez
+  SPDX-License-Identifier: Apache-2.0
+
+  HONESTY CONSTRAINTS — binding, from docs/ROADMAP.md "README: SEO and GEO"
+  and the 2026-07-30 targeted audit. Read before editing a single claim here.
+
+  1. No novelty claim in usage monitoring. CodexBar already occupies that space.
+     When M7's Token Tap lands, the honest framing is that coffee-bar JOINS token
+     data to the battery delta — not that local token accounting is new.
+  2. Token accounting is M7 = v0.3. It does not exist. Do not imply it does.
+  3. Do not advertise the "coffee-bar moved your control" panel disclosure as
+     complete. The 2026-07-30 audit proved it is durable only when no agent is
+     running, which is the opposite of when it matters.
+  4. Every claim below must be true of the SHIPPED build. If a claim stops being
+     true, the claim is the thing to fix.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>coffee-bar — your Mac sleeps while the agent waits on you</title>
+<meta name="description" content="A macOS menu-bar app that keeps your Mac awake exactly while a coding agent is working, and lets it sleep the moment the agent is waiting on you. Screen off, no root, no password.">
+<link rel="canonical" href="https://arangogutierrez.github.io/coffee-bar/">
+<meta property="og:title" content="coffee-bar — your Mac sleeps while the agent waits on you">
+<meta property="og:description" content="Keeps your Mac awake exactly while a coding agent is working. Releases the moment every agent is blocked on a human.">
+<meta property="og:type" content="website">
+<style>
+  :root { color-scheme: light dark; --fg:#1a1a1a; --dim:#555; --line:#e3e3e3; --accent:#6b4423; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg:#e8e8e8; --dim:#a0a0a0; --line:#2e2e2e; --accent:#c99a6b; }
+    body { background:#141414; }
+  }
+  * { box-sizing:border-box; }
+  body { font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+         color:var(--fg); max-width:44rem; margin:0 auto; padding:3rem 1.25rem 5rem; }
+  h1 { font-size:2rem; line-height:1.2; margin:0 0 .4rem; letter-spacing:-.02em; }
+  h2 { font-size:1.15rem; margin:2.75rem 0 .75rem; letter-spacing:-.01em; }
+  .tag { color:var(--dim); font-size:1.05rem; margin:0 0 2rem; }
+  code, pre { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.875rem; }
+  pre { background:rgba(128,128,128,.1); padding:.85rem 1rem; border-radius:6px; overflow-x:auto;
+        border:1px solid var(--line); }
+  ul { padding-left:1.15rem; }
+  li { margin:.4rem 0; }
+  .note { border-left:3px solid var(--accent); padding:.1rem 0 .1rem 1rem; color:var(--dim); margin:1.5rem 0; }
+  footer { margin-top:4rem; padding-top:1.5rem; border-top:1px solid var(--line);
+           color:var(--dim); font-size:.875rem; }
+  a { color:inherit; text-underline-offset:2px; }
+</style>
+</head>
+<body>
+
+<h1>coffee-bar</h1>
+<p class="tag">Your Mac stays awake while a coding agent is working, and sleeps the moment the agent is waiting on <em>you</em>.</p>
+
+<h2>The behaviour</h2>
+<p>
+Long agent runs and Mac idle sleep do not get along. The usual fix is
+<code>caffeinate</code>, or a toggle you flip and forget — both of which keep the
+machine awake whether or not anything is happening.
+</p>
+<p>
+coffee-bar binds the wake assertion to <strong>agent state</strong> instead of to a
+timer or a switch. While Claude Code is running a tool, the Mac stays up. The
+moment every agent is blocked on a human, the assertion is released and the
+machine is free to sleep — and it wakes into work when you answer.
+</p>
+
+<h2>What it actually does</h2>
+<ul>
+  <li>Holds <code>PreventUserIdleSystemSleep</code>, bound to live agent session state.</li>
+  <li><strong>Never holds a display assertion.</strong> The screen still sleeps while the work continues.</li>
+  <li>Releases when every agent is blocked on input, not when a timer expires.</li>
+  <li>Shows which sessions are working and which are waiting on you.</li>
+  <li>Retires a session whose agent crashed, so a dead process cannot pin the machine awake for ever.</li>
+  <li>Three positions — Off, Auto, On. <strong>Off is an absolute veto</strong> and outranks everything.</li>
+  <li>A battery floor: below 20% on battery, it does not hold.</li>
+</ul>
+
+<div class="note">
+No root. No password prompt. No kernel flags. No App Store. No network egress —
+it listens on a unix socket in a directory only your account can read, and posts
+nothing anywhere.
+</div>
+
+<h2>Install</h2>
+<!--
+  DO NOT PUBLISH THIS SECTION UNTIL BOTH ARE TRUE, verified by running them:
+    1. the tap ArangoGutierrez/homebrew-coffee-bar carries the formula that
+       installs CoffeeBar.app, not only coffee-bar-probe; and
+    2. a release is tagged, so the formula's url and sha256 resolve.
+  On 2026-07-30 NEITHER held. The formula shipped the probe alone, and no tag
+  existed. An install command that does not work is worse than none.
+-->
+<pre>brew tap ArangoGutierrez/coffee-bar
+brew install coffee-bar</pre>
+<p>
+Homebrew builds it from source on your machine, so there is no Gatekeeper
+prompt and nothing to notarise. It installs the menu-bar app and a capability
+probe. The app lands in the Homebrew prefix; the install prints the one command
+that links it into <code>/Applications</code>.
+</p>
+<p>
+Then add the five Claude Code hooks so coffee-bar can see session state. The
+README carries the exact block — coffee-bar never writes your settings file for
+you.
+</p>
+
+<h2>Privacy</h2>
+<p>
+coffee-bar reads hook events to learn <em>whether</em> an agent is working. It does
+not read your conversations. <code>last_assistant_message</code> and
+<code>transcript_path</code> never reach a stored property, a log line, or anything
+rendered on screen — that boundary is held by tests, not by intention.
+</p>
+
+<h2>What this version is not</h2>
+<p>
+v0.1 supports <strong>Claude Code</strong>. Codex and Cursor adapters are planned, and
+are not here yet. Token and usage accounting is a later milestone and does not
+exist in this release — if that is what you want today,
+<a href="https://codexbar.app/">CodexBar</a> already does it well.
+</p>
+<p>
+Lid-closed operation needs a privileged helper and is deliberately out of scope
+for a release that asks for no elevated privilege.
+</p>
+
+<h2>Requirements</h2>
+<ul>
+  <li>macOS 14 or later</li>
+  <li>Claude Code, with the five hooks installed</li>
+</ul>
+
+<footer>
+Apache-2.0 · <a href="https://github.com/ArangoGutierrez/coffee-bar">Source on GitHub</a><br>
+Built by <a href="https://github.com/ArangoGutierrez">Carlos Eduardo Arango Gutierrez</a>.
+</footer>
+
+</body>
+</html>

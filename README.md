@@ -61,11 +61,22 @@ The tap exists and carries the formula. The install will be:
 **Neither command succeeds yet.** The formula pins a release tarball by tag and
 SHA-256, and no release is tagged, so `url` points at a tag that does not exist
 and `sha256` is still a placeholder. Both are pinned when the first release is
-cut.
+cut. Until then the formula carries a `head` block, so it can be exercised with
+`brew install --HEAD ArangoGutierrez/coffee-bar/coffee-bar`.
 
-The formula builds from source, so the CLI needs no notarisation. It installs
-the `coffee-bar-probe` capability probe and nothing else. It does not install
-the menu-bar app.
+The formula installs **both** the `coffee-bar-probe` capability probe and the
+`CoffeeBar.app` menu-bar app. Homebrew formulae do not write to `/Applications`,
+so the app lands in the Homebrew prefix and the install prints the one command
+that links it there.
+
+**Why a formula and not a cask, while the app is unsigned.** A cask distributes
+a *downloaded* binary, and anything downloaded arrives carrying
+`com.apple.quarantine`, which is what makes Gatekeeper refuse an ad-hoc signed
+app. This formula builds from source on your machine, and a locally compiled
+bundle never gets that attribute — measured: only `com.apple.provenance` is
+present, and the app launches. So the signing work that blocks a downloadable
+`.dmg` does not block this path. A cask becomes the better route once
+notarisation lands, for people who would rather not build.
 
 ## Licence
 
