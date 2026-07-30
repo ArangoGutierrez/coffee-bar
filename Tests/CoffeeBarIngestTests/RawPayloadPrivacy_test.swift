@@ -69,6 +69,15 @@ import Foundation
 //     when a new one is found, and never read a pass as proof of absence.
 //   - It covers LOGGING only. Bytes written to a file, or posted somewhere, are
 //     a different sink and design §4 answers them by other means.
+//   - `loggerMessageRoutes` is matched on a RECEIVER — `log.error(`, or a
+//     newline chained off a `)`, `]` or `}` — and never as a bare word, because
+//     `error` is the name of every `NWConnection` completion parameter in the
+//     file this scans. The price is a space: `log .error(` reads as nothing,
+//     because stepping back over that space reaches `case .error:` too. Nobody
+//     writes the first; the second is ordinary Swift, and a guard that reports
+//     ordinary Swift gets deleted. It reads the METHOD, never the receiver's
+//     type, so `Darwin.log(x)` would be reported as well. The ingest path does
+//     no arithmetic, and a rule that had to resolve types would be a compiler.
 //   - The lexer is small, not the Swift grammar. It handles `//`, nested
 //     `/* */`, escapes, interpolation, multi-line `"""` and raw `#"…"#`, which
 //     is what the scanned target contains. A bare regex literal (`/…/`) would
@@ -134,6 +143,33 @@ private let loggingRoutes = [
     "assertionFailure",
     "FileHandle.standardOutput",
     "FileHandle.standardError",
+]
+
+/// The `os.Logger` methods that take a message.
+///
+/// A SECOND list, because these are reached by a different route and matched by
+/// a different rule. `Logger` is the sink that replaces `NSLog` on this
+/// platform, and a message goes through an INSTANCE: `log.error("…")` names
+/// neither `Logger` nor `os_log` anywhere on the line, so `loggingRoutes` —
+/// which reads whole words — cannot see it. The receiver's name is the author's
+/// to pick, so the method is the only fixed part to match on.
+///
+/// These CANNOT be read as bare words the way `loggingRoutes` are. `error` is
+/// what `NWConnection` calls the completion parameter, and
+/// `IngestListener.receive` takes that parameter and tests it twice; a bare-word
+/// rule reports those three lines, and none of them logs anything. `memberRoute`
+/// therefore asks for a receiver before the dot — see the LIMITS at the top of
+/// this file for what that costs.
+private let loggerMessageRoutes = [
+    "log",
+    "trace",
+    "debug",
+    "info",
+    "notice",
+    "warning",
+    "error",
+    "critical",
+    "fault",
 ]
 
 private func isIdentifierCharacter(_ character: Character) -> Bool {
@@ -368,8 +404,56 @@ private func loggingCallsCarryingAValue(in code: String) -> [String] {
             .max { $0.count < $1.count }
     }
 
+    /// Whether a RECEIVER ends at the `.` sitting at `dot`.
+    ///
+    /// The whole discriminator for `loggerMessageRoutes`. `log.error(` is a call
+    /// on an instance and the dot follows the instance; `type: .error` and
+    /// `case .error:` are leading-dot member references, where the dot follows a
+    /// colon, a comma or a keyword and no receiver exists. A receiver ends in an
+    /// identifier character, or in the `)`, `]` or `}` that closes a call, a
+    /// subscript or a closure.
+    ///
+    /// Whitespace before the dot is stepped over only back to a bracket, which
+    /// is what reads `Logger(…)\n    .error(` — a chained call is the one thing
+    /// that can be meant there. It is NOT stepped over back to an identifier:
+    /// `case .error:` reaches `case` that way, and reporting a switch is how a
+    /// guard gets deleted.
+    func receiverEnds(before dot: Int) -> Bool {
+        guard dot > 0 else { return false }
+        if isIdentifierCharacter(characters[dot - 1]) { return true }
+        var back = dot - 1
+        while back >= 0,
+              characters[back] == " " || characters[back] == "\t" || characters[back] == "\n" {
+            back -= 1
+        }
+        guard back >= 0 else { return false }
+        return characters[back] == ")" || characters[back] == "]" || characters[back] == "}"
+    }
+
+    /// The longest `Logger` message method called on a receiver at `index`.
+    ///
+    /// The trailing check is what keeps `state.logging` from reading as `log`,
+    /// and the receiver check is what keeps the `error` parameter of an
+    /// `NWConnection` completion handler from reading as anything at all.
+    func memberRoute(at index: Int) -> String? {
+        guard index > 0, characters[index - 1] == ".", receiverEnds(before: index - 1) else {
+            return nil
+        }
+        return loggerMessageRoutes
+            .filter { name in
+                guard matches(Array(name), at: index) else { return false }
+                let after = index + name.count
+                return after >= characters.count || !isIdentifierCharacter(characters[after])
+            }
+            .max { $0.count < $1.count }
+    }
+
     while index < characters.count {
-        guard let name = route(at: index) else {
+        // `label` is how a finding names what it found: a message method is
+        // reported as `.error(…)`, which is how it reads in the source.
+        let found: (name: String, label: String)? =
+            route(at: index).map { ($0, $0) } ?? memberRoute(at: index).map { ($0, ".\($0)") }
+        guard let (name, label) = found else {
             index += 1
             continue
         }
@@ -384,7 +468,7 @@ private func loggingCallsCarryingAValue(in code: String) -> [String] {
             cursor += 1
         }
         guard cursor < characters.count, characters[cursor] == "(" else {
-            findings.append("\(name) — named, and this guard reads no arguments for it")
+            findings.append("\(label) — named, and this guard reads no arguments for it")
             index += name.count
             continue
         }
@@ -401,14 +485,14 @@ private func loggingCallsCarryingAValue(in code: String) -> [String] {
             end += 1
         }
         guard closed else {
-            findings.append("\(name)( — unbalanced parentheses; this guard reads no arguments")
+            findings.append("\(label)( — unbalanced parentheses; this guard reads no arguments")
             index = cursor + 1
             continue
         }
 
         let arguments = String(characters[(cursor + 1) ..< end])
         if !argumentsAreConstantText(arguments) {
-            findings.append("\(name)(\(arguments))")
+            findings.append("\(label)(\(arguments))")
         }
         index = end + 1
     }
@@ -650,6 +734,38 @@ private func ingestPathEntriesFound() throws -> [String] {
 
         ("a condition check is not a logging route",
          "precondition(length >= 0)\nassert(buffer.count > 0)", 0),
+
+        // `os.Logger` is the sink that replaces `NSLog`, and its message goes
+        // through an INSTANCE. The line below names neither `Logger` nor
+        // `os_log`, so no whole-word route above can see it.
+        ("a Logger instance method carrying a value is refused",
+         "log.error(\"\"(body))", 1),
+
+        ("a Logger instance method with a constant message is allowed",
+         "log.notice(\"\")", 0),
+
+        ("a Logger message on a call result is refused",
+         "Logger(subsystem: \"\", category: \"\").fault(\"\"(body))", 1),
+
+        ("a Logger message chained over a newline is refused",
+         "Logger(subsystem: \"\")\n    .critical(\"\"(body))", 1),
+
+        ("a Logger method handed to another name is refused",
+         "let write = log.error\nlet a = 1", 1),
+
+        // The discriminator. These three lines are `IngestListener.receive`
+        // verbatim: `error` is what `NWConnection` calls its completion
+        // parameter, and reading it as a bare word reports code that logs
+        // nothing. A receiver before the dot is what tells the two apart.
+        ("a completion handler's `error` parameter is not a logging route",
+         "data, _, isComplete, error in\nif !isComplete && error == nil { return }\nif isComplete || error != nil { return }",
+         0),
+
+        ("a leading-dot enum case sharing a method name is not a call",
+         "switch outcome {\ncase .fault: break\n}\nsend(type: .error, body)", 0),
+
+        ("a name that merely starts with a method name is not one",
+         "state.logging = true\nlet a = state.information", 0),
     ]
 
     for testCase in cases {
