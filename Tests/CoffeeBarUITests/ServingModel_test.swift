@@ -877,7 +877,37 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // one broken, and a refusal latched past its condition sits there waiting
     // for the first reader that does not guard. Measured: deleting the filter
     // leaves the string assertion above passing.
-    #expect(model.refusedServeReturnedTo == nil)
+    #expect(model.cancelledServe == nil)
+}
+
+@MainActor
+@Test func anHonouredOnClickReleasedByTheFloorNeverSaysItWasRefused() {
+    // `PowerBroker` holds for `.serve` unconditionally, so a click at 50% is
+    // HONOURED and the Mac stays awake. The battery then drains under it and the
+    // floor releases the hold. That is the normal end of the On position.
+    //
+    // Named bug this catches: calling that a refusal. The panel tells a user
+    // whose click worked for hours that it was refused — a sentence that is
+    // simply false, and false on the commonest exit from On rather than on an
+    // edge case. Shipped in round 1 of this task and measured before this fix.
+    let reader = FakeReader(source: .battery, percent: 50)
+    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+
+    model.intent = .serve
+    // The two preconditions that make this the RELEASE path and not the refusal
+    // path. Without them the check passes for a click that was never served.
+    #expect(model.isServing == true, "precondition: the click was honoured and the Mac is held")
+    #expect(model.suppressionAdvisory == nil, "precondition: nothing is refusing anything yet")
+
+    reader.set(source: .battery, percent: 19)
+    model.refresh()
+
+    #expect(model.isServing == false, "precondition: the floor released the hold")
+    #expect(model.intent == .auto)
+    #expect(model.suppressionAdvisory == """
+        At 19% — coffee-bar does not hold at or below 20%. coffee-bar released \
+        the hold from your On click, so the control is back on Auto.
+        """)
 }
 
 @MainActor

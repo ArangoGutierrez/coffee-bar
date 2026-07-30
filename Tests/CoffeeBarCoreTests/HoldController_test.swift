@@ -372,13 +372,64 @@ private func session(_ state: SessionState) -> AgentSession {
     // The control snaps back to Auto with no state saying it moved, so the panel
     // shows a refused click and an untouched control the same way.
     var c = HoldController()
-    #expect(c.cancelledServeReturnedTo == nil, "a fresh controller has refused nothing")
+    #expect(c.cancelledServe == nil, "a fresh controller has refused nothing")
 
     c.userToggled(to: .serve)
     _ = c.evaluate(powerSource: .battery, batteryPercent: 19)
 
     #expect(c.intent == .auto)
-    #expect(c.cancelledServeReturnedTo == .auto)
+    #expect(c.cancelledServe == .refused(returnedTo: .auto))
+}
+
+@Test func anHonouredServeReleasedByTheFloorIsNotRecordedAsRefused() {
+    // `PowerBroker` holds for `.serve` unconditionally, so a click well above the
+    // floor is HONOURED. The battery then drains under it and the same floor
+    // releases the hold — the normal way the On position ends, not an edge case.
+    //
+    // Named bug this catches: recording every cancelled `.serve` as a refusal.
+    // The panel then tells a user whose click worked for hours that it was
+    // refused, which is simply false. It is the ambiguity `lastSuppression`
+    // already had, one level down: "refused" and "served then released" arrive
+    // at the same branch and must not leave it as the same value.
+    var c = HoldController()
+    c.userToggled(to: .serve)
+
+    // Honoured. This is the half that separates the two paths.
+    #expect(c.evaluate(powerSource: .battery, batteryPercent: 50).idleSleepAssertion == true,
+            "precondition: the click was served, so a later cancel is a RELEASE")
+    #expect(c.cancelledServe == nil, "nothing is cancelled while the hold runs")
+
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 19)
+
+    #expect(c.intent == .auto)
+    #expect(c.cancelledServe == .released(returnedTo: .auto))
+}
+
+@Test func aFreshOnClickRefusedAfterAnEarlierHoldSaysRefusedNotReleased() {
+    // A new click is a NEW request, judged on its own outcome. The success of an
+    // earlier one must not carry into it.
+    //
+    // Named bug this catches: `userToggled(to: .serve)` not clearing the "this
+    // request has held" memory. The user serves happily at 50%, goes back to
+    // Auto, and later clicks On at 19% — a click that is refused outright and
+    // never holds for a second. The panel reports it as a released hold, so it
+    // describes a hold that never existed.
+    var c = HoldController()
+    c.userToggled(to: .serve)
+    #expect(c.evaluate(powerSource: .battery, batteryPercent: 50).idleSleepAssertion == true,
+            "precondition: the FIRST click was served")
+
+    // Back to Auto by hand, with no cancel in between — so nothing else clears
+    // the memory of that success.
+    c.userToggled(to: .auto)
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 50)
+
+    // A fresh click, below the floor this time. It is refused, never served.
+    c.userToggled(to: .serve)
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 19)
+
+    #expect(c.intent == .auto)
+    #expect(c.cancelledServe == .refused(returnedTo: .auto))
 }
 
 @Test func aSuppressionThatCancelsNoClickClearsAStaleCancel() {
@@ -392,7 +443,7 @@ private func session(_ state: SessionState) -> AgentSession {
     var c = HoldController()
     c.userToggled(to: .serve)
     _ = c.evaluate(powerSource: .battery, batteryPercent: 19)
-    #expect(c.cancelledServeReturnedTo == .auto, "precondition: a cancel is on record")
+    #expect(c.cancelledServe == .refused(returnedTo: .auto), "precondition: a cancel is on record")
 
     // No click. A working session asks for the hold under `.auto`, and the same
     // floor refuses it.
@@ -401,7 +452,7 @@ private func session(_ state: SessionState) -> AgentSession {
 
     #expect(c.lastSuppression == .batteryFloor(percent: 19, floor: 20),
             "precondition: that evaluate really did suppress")
-    #expect(c.cancelledServeReturnedTo == nil)
+    #expect(c.cancelledServe == nil)
 }
 
 @Test func movingTheControlByHandClearsTheRefusalRecord() {
@@ -415,11 +466,11 @@ private func session(_ state: SessionState) -> AgentSession {
     var c = HoldController()
     c.userToggled(to: .serve)
     _ = c.evaluate(powerSource: .battery, batteryPercent: 12)
-    #expect(c.cancelledServeReturnedTo == .auto, "precondition: a cancel is on record")
+    #expect(c.cancelledServe == .refused(returnedTo: .auto), "precondition: a cancel is on record")
 
     c.userToggled(to: .stop)
 
-    #expect(c.cancelledServeReturnedTo == nil)
+    #expect(c.cancelledServe == nil)
     #expect(c.lastSuppression == .batteryFloor(percent: 12, floor: 20),
             "the reason the user has not read yet must still survive an Off click")
 }
