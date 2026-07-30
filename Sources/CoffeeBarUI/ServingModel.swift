@@ -87,18 +87,18 @@ public final class ServingModel {
     /// newest reading. `nil` otherwise — see `refresh()`.
     public private(set) var suppression: HoldSuppression?
 
-    /// The position a refused On click returned the control to, when that
-    /// refusal is still true of the newest reading. `nil` otherwise.
+    /// How a cancelled On click ended and where it left the control, when that
+    /// cancel is still true of the newest reading. `nil` otherwise.
     ///
     /// Filtered ONCE in `refresh()`, against the same `suppression` above, so
-    /// the refusal claim has exactly the lifetime of the sentence that explains
-    /// it. The two can never appear apart.
+    /// the claim has exactly the lifetime of the sentence that explains it. The
+    /// two can never appear apart.
     ///
     /// Internal, not `public`, for the reason `desired` is: `suppressionAdvisory`
     /// is what the panel reads, and the test target reaches this through
     /// `@testable import CoffeeBarUI`. Design §5.4 asserts the reason on the
-    /// enum, so this stays a `UserIntent` and not a rendered string.
-    private(set) var refusedServeReturnedTo: UserIntent?
+    /// enum, so this stays a `ServeCancellation` and not a rendered string.
+    private(set) var cancelledServe: ServeCancellation?
 
     /// The state `refresh()` last reconciled to, or `nil` before the first
     /// `refresh()`.
@@ -254,31 +254,49 @@ public final class ServingModel {
     /// one — the battery keeps draining after a release, and the battery line in
     /// the panel carries the current value.
     ///
-    /// The second sentence exists because the first cannot separate these:
+    /// The second sentence exists because the first cannot separate THREE
+    /// histories that all reach it:
     ///
-    ///   A — the user clicked On, the floor refused it, and coffee-bar moved
-    ///       their control back to where it stood.
+    ///   A — the user clicked On, the floor refused it outright, and coffee-bar
+    ///       moved their control back to where it stood.
     ///   B — the user clicked nothing, and the floor is refusing a hold the
     ///       sessions asked for.
+    ///   C — the user clicked On, coffee-bar HONOURED it and held the machine,
+    ///       and the floor released that hold later as the battery drained.
     ///
-    /// Both used to render the identical line. In A the app changed a setting
-    /// for the user, the picker snaps back on its own, and nothing said so — so
-    /// a return to Auto reads as On being honoured. B adds NO sentence, and must
-    /// not: a user who touched nothing cannot be told their click was refused.
+    /// All three used to render the identical line. In A and C the app changed a
+    /// setting for the user, the picker snaps back on its own, and nothing said
+    /// so — so a return to Auto reads as On being honoured.
     ///
-    /// It names the position from `refusedServeReturnedTo` rather than a fixed
-    /// "Auto", because the standing position is not always Auto. A user who
-    /// vetoed serving lands back on Off, and `aRefusedOnClickFromOffNamesOffNotAuto`
-    /// goes red on the hard-coded word.
+    /// A and C get DIFFERENT sentences, and that separation is the point. `.serve`
+    /// holds unconditionally in `PowerBroker`, so C is the normal end of the On
+    /// position rather than an edge case, and calling it a refusal tells a user
+    /// whose click worked for hours that it did not.
+    /// `anHonouredOnClickReleasedByTheFloorNeverSaysItWasRefused` goes red on
+    /// exactly that, and it is the defect the first round of this task shipped.
+    ///
+    /// B adds NO sentence, and must not: a user who touched nothing cannot be
+    /// told their click was refused.
+    ///
+    /// Both sentences name the position from `cancelledServe` rather than a
+    /// fixed "Auto", because the standing position is not always Auto. A user
+    /// who vetoed serving lands back on Off, and
+    /// `aRefusedOnClickFromOffNamesOffNotAuto` goes red on the hard-coded word.
     public var suppressionAdvisory: String? {
         guard case .batteryFloor(let percent, let floor) = suppression else { return nil }
         let reason = "At \(percent)% — coffee-bar does not hold at or below \(floor)%."
 
-        // Situation B stops here, with the line it has always had.
-        guard let landed = refusedServeReturnedTo else { return reason }
-
-        return reason + " Your On click was refused, so the control is back on "
-             + "\(Self.label(for: landed))."
+        switch cancelledServe {
+        case nil:
+            // Situation B stops here, with the line it has always had.
+            return reason
+        case .refused(let landed):
+            return reason + " Your On click was refused, so the control is back on "
+                 + "\(Self.label(for: landed))."
+        case .released(let landed):
+            return reason + " coffee-bar released the hold from your On click, "
+                 + "so the control is back on \(Self.label(for: landed))."
+        }
     }
 
     /// What the three control positions are CALLED, in one place.
@@ -451,10 +469,10 @@ public final class ServingModel {
         desired = state
         suppression = Self.reason(controller.lastSuppression, stillTrueOf: reading)
         // Gated on the FILTERED value above, not on the controller alone, so the
-        // refusal claim dies with the sentence that explains it. A recovery
-        // above the floor drops both together —
+        // claim dies with the sentence that explains it. A recovery above the
+        // floor drops both together —
         // `theRefusalSentenceGoesWhenTheBatteryRecovers` measures that.
-        refusedServeReturnedTo = suppression == nil ? nil : controller.cancelledServeReturnedTo
+        cancelledServe = suppression == nil ? nil : controller.cancelledServe
 
         if state.idleSleepAssertion {
             isServing = holder.acquire()

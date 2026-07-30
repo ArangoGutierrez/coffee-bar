@@ -3,6 +3,28 @@
 
 import Foundation
 
+/// Why a `.serve` was cancelled, and where the control went.
+///
+/// The two cases are NOT the same event, and the panel must never word them
+/// alike. `PowerBroker` holds for `.serve` unconditionally, so a click above the
+/// floor is honoured and the machine really is held. Both histories end at the
+/// same suppression branch in `evaluate`, and a record that keeps only the
+/// position cannot tell them apart — which is exactly the ambiguity
+/// `lastSuppression` already has one level up.
+///
+/// Carrying the outcome and the position in ONE value keeps them from drifting.
+/// Two fields — "was it refused?" beside "where did it land?" — can be updated
+/// singly and then disagree.
+public enum ServeCancellation: Equatable, Sendable {
+    /// The floor refused the click. No hold ever existed.
+    case refused(returnedTo: UserIntent)
+
+    /// The click was honoured and the machine was held. The floor released it
+    /// later, as the battery drained. This is the normal end of the On
+    /// position, not an edge case.
+    case released(returnedTo: UserIntent)
+}
+
 /// Owns the user's intent and the rule that cancels a refused request.
 ///
 /// `PowerBroker` is a pure function with no memory, so "release once and do
@@ -18,15 +40,20 @@ public struct HoldController: Equatable, Sendable {
     public private(set) var intent: UserIntent
     public private(set) var lastSuppression: HoldSuppression?
 
-    /// The position a cancelled `.serve` returned to, for the suppression now
-    /// recorded in `lastSuppression`. `nil` when that suppression cancelled no
-    /// click.
+    /// How the `.serve` now cancelled ended, and where the control went, for the
+    /// suppression recorded in `lastSuppression`. `nil` when that suppression
+    /// cancelled no click.
     ///
-    /// `lastSuppression` alone cannot separate the two situations, and the
-    /// comment on `evaluate` says why: it is recorded for a refused CLICK and
-    /// for a hold nobody asked for. The panel needs the difference. In the first
-    /// case coffee-bar moved the user's control for them; in the second it did
-    /// not, and a sentence claiming it did would be false.
+    /// `lastSuppression` alone cannot separate the situations, and the comment
+    /// on `evaluate` says why: it is recorded for a refused CLICK and for a hold
+    /// nobody asked for. The panel needs the difference. In the first case
+    /// coffee-bar moved the user's control for them; in the second it did not,
+    /// and a sentence claiming it did would be false.
+    ///
+    /// It carries the OUTCOME as well as the position, and both are load
+    /// bearing. A cancelled `.serve` is reached from two histories — a click the
+    /// floor refused outright, and a click that was honoured for hours and then
+    /// released on a draining battery. `ServeCancellation` says which.
     ///
     /// Written in LOCKSTEP with `lastSuppression`, inside the same branch, so a
     /// NEW suppression that cancels nothing clears it. Without that a refused
@@ -34,12 +61,33 @@ public struct HoldController: Equatable, Sendable {
     /// `aSuppressionThatCancelsNoClickClearsAStaleCancel` goes red on exactly
     /// that.
     ///
-    /// It carries the POSITION rather than a `Bool`, so the panel names where
-    /// the control landed without reading `intent` as a second source that the
-    /// next toggle can put out of step. `standing` stays private: this is
-    /// non-`nil` only after a real cancel, so a check still reaches the position
-    /// through behaviour.
-    public private(set) var cancelledServeReturnedTo: UserIntent?
+    /// `standing` stays private: this is non-`nil` only after a real cancel, so
+    /// a check still reaches the position through behaviour.
+    public private(set) var cancelledServe: ServeCancellation?
+
+    /// Whether the `.serve` now in force has ever produced a hold.
+    ///
+    /// This is the ONLY thing that separates a refusal from a release, and
+    /// nothing else in reach can stand in for it. `lastSuppression` records no
+    /// success. `intent` is moved off `.serve` by the cancel itself. The model's
+    /// `isServing` is the CURRENT hold, so by the time the panel reads it the
+    /// hold is gone on BOTH paths and it says `false` either way.
+    ///
+    /// Set from the broker's own answer on each evaluate, never from a second
+    /// opinion. **`userToggled(to: .serve)` clearing it is the whole contract:**
+    /// a new click is a new request and is judged on its own outcome, and
+    /// `aFreshOnClickRefusedAfterAnEarlierHoldSaysRefusedNotReleased` goes red
+    /// when that clear goes away.
+    ///
+    /// It is deliberately NOT cleared by the cancel. Between a cancel and the
+    /// next click `intent` is never `.serve`, so nothing reads this — measured:
+    /// clearing it there survives the whole suite, which makes it a line no
+    /// check can justify. Any FUTURE path that puts `intent` back to `.serve`
+    /// without going through `userToggled` has to clear this itself.
+    ///
+    /// Private: it is an intermediate, and `cancelledServe` above is the answer
+    /// it exists to produce.
+    private var serveHasHeld = false
 
     /// The position a refused `.serve` returns to.
     ///
@@ -66,7 +114,7 @@ public struct HoldController: Equatable, Sendable {
         self.intent = intent
         self.standing = intent == .serve ? .stop : intent
         self.lastSuppression = nil
-        self.cancelledServeReturnedTo = nil
+        self.cancelledServe = nil
     }
 
     /// Records an explicit user action. Toggling to `.serve` clears any stale
@@ -76,18 +124,23 @@ public struct HoldController: Equatable, Sendable {
     /// The two other positions are STANDING instructions, so each one also
     /// becomes the position a later refused `.serve` returns to.
     ///
-    /// `cancelledServeReturnedTo` clears for EVERY position, unlike
-    /// `lastSuppression`. Once the user moves the control by hand, "coffee-bar
-    /// moved your control" is no longer the last thing that happened, and a
-    /// record naming the position they have just left states a move that did not
-    /// happen — `movingTheControlByHandClearsTheRefusalRecord` measures it from
-    /// the Off click, which `togglingOffStopsTheHoldAndKeepsTheReason` requires
+    /// `cancelledServe` clears for EVERY position, unlike `lastSuppression`.
+    /// Once the user moves the control by hand, "coffee-bar moved your control"
+    /// is no longer the last thing that happened, and a record naming the
+    /// position they have just left states a move that did not happen —
+    /// `movingTheControlByHandClearsTheRefusalRecord` measures it from the Off
+    /// click, which `togglingOffStopsTheHoldAndKeepsTheReason` requires
     /// `lastSuppression` to survive.
+    ///
+    /// A new `.serve` also clears `serveHasHeld`: this click has served nothing
+    /// yet, and inheriting the last one's success would report the next refusal
+    /// as a release.
     public mutating func userToggled(to intent: UserIntent) {
         self.intent = intent
-        cancelledServeReturnedTo = nil
+        cancelledServe = nil
         if self.intent == .serve {
             lastSuppression = nil
+            serveHasHeld = false
         } else {
             standing = intent
         }
@@ -151,15 +204,26 @@ public struct HoldController: Equatable, Sendable {
             holdAwakeWhileBlocked: holdAwakeWhileBlocked,
             batteryFloorPercent: batteryFloorPercent))
 
+        // Recorded BEFORE the cancel below, which moves `intent` off `.serve`.
+        // A suppression and a hold are mutually exclusive in `PowerBroker`, so
+        // this and the cancel never fire on the same call.
+        if intent == .serve, state.idleSleepAssertion { serveHasHeld = true }
+
         if let suppression = state.suppression {
             lastSuppression = suppression
             if intent == .serve {
                 intent = standing
-                cancelledServeReturnedTo = standing
+                // The SAME branch ends two different histories. A `.serve` that
+                // has held is being RELEASED; one that never held is being
+                // REFUSED. Calling both a refusal tells a user whose click
+                // worked for hours that it did not.
+                cancelledServe = serveHasHeld
+                    ? .released(returnedTo: standing)
+                    : .refused(returnedTo: standing)
             } else {
                 // Not an omission. This suppression cancelled no click, so any
                 // earlier cancel is no longer what the panel is explaining.
-                cancelledServeReturnedTo = nil
+                cancelledServe = nil
             }
         }
         return state
