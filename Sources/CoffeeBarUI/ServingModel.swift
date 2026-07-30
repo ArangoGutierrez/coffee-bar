@@ -279,9 +279,13 @@ public final class ServingModel {
     /// told their click was refused.
     ///
     /// Both sentences name the position from `cancelledServe` rather than a
-    /// fixed "Auto", because the standing position is not always Auto. A user
-    /// who vetoed serving lands back on Off, and
-    /// `aRefusedOnClickFromOffNamesOffNotAuto` goes red on the hard-coded word.
+    /// fixed "Auto", because the standing position is not always Auto: a user
+    /// who vetoed serving lands back on Off. Each wording carries its OWN check,
+    /// and that is not a formality — `aRefusedOnClickFromOffNamesOffNotAuto`
+    /// drives the refusal sentence only, so hard-coding the word in the release
+    /// sentence survived the whole suite until
+    /// `aReleasedHoldFromOffNamesOffNotAuto` was added. Measured, not assumed.
+    /// A third sentence here needs a third check.
     public var suppressionAdvisory: String? {
         guard case .batteryFloor(let percent, let floor) = suppression else { return nil }
         let reason = "At \(percent)% — coffee-bar does not hold at or below \(floor)%."
@@ -458,9 +462,15 @@ public final class ServingModel {
         // returned cleanly is not proof the socket is serving, and `stop()`
         // takes it away again.
         ingestListening = listener.isReady
+        // `isServing` still holds the previous reconcile's ACTUAL result here,
+        // because it is only reassigned below — and that is exactly the fact the
+        // controller needs. It decides what should happen; IOKit decided what
+        // did. A `.serve` whose `acquire()` was refused must never be reported
+        // as a released hold.
         let state = controller.evaluate(powerSource: reading.source,
                                         batteryPercent: reading.percent,
-                                        sessions: sessions)
+                                        sessions: sessions,
+                                        assertionIsHeld: isServing)
         // Derived from the SAME array handed to `evaluate` above, on purpose.
         // Design §14 forbids a second source here: a panel that disagrees with
         // the hold decision is worse than a panel with nothing on it.

@@ -73,9 +73,16 @@ public struct HoldController: Equatable, Sendable {
     /// `isServing` is the CURRENT hold, so by the time the panel reads it the
     /// hold is gone on BOTH paths and it says `false` either way.
     ///
-    /// Set from the broker's own answer on each evaluate, never from a second
-    /// opinion. **`userToggled(to: .serve)` clearing it is the whole contract:**
-    /// a new click is a new request and is judged on its own outcome, and
+    /// Set from the ACTUAL hold reported by the caller, never from the desired
+    /// state. A `PowerBroker` decision to hold is a request to IOKit, and IOKit
+    /// can refuse it: `AssertionHolder.acquire()` returns `false` and nothing is
+    /// ever held. Counting the desire as a hold makes the panel announce the
+    /// release of an assertion that never existed, beside its own line saying
+    /// nothing is held — `aHoldThatWasNeverTakenIsNotCalledAReleasedHold`
+    /// measures exactly that.
+    ///
+    /// **`userToggled(to: .serve)` clearing it is the whole contract:** a new
+    /// click is a new request and is judged on its own outcome, and
     /// `aFreshOnClickRefusedAfterAnEarlierHoldSaysRefusedNotReleased` goes red
     /// when that clear goes away.
     ///
@@ -88,6 +95,22 @@ public struct HoldController: Equatable, Sendable {
     /// Private: it is an intermediate, and `cancelledServe` above is the answer
     /// it exists to produce.
     private var serveHasHeld = false
+
+    /// Whether the PREVIOUS evaluate under this same request asked for a hold.
+    ///
+    /// This is the attribution half, and without it the confirmation half lies
+    /// in the other direction. `assertionIsHeld` describes the hold running when
+    /// `evaluate` is called, which may belong to the position the user was on
+    /// BEFORE they clicked: `.auto` holds for a working session, the battery
+    /// crosses the floor between ticks, and the click that follows is refused at
+    /// click time yet arrives while that older hold is still up. Crediting it to
+    /// the click names the wrong cause —
+    /// `aHoldInheritedFromAutoIsNotCreditedToALaterRefusedClick` goes red on it.
+    ///
+    /// The two signals arrive one tick apart, which is why both are needed: the
+    /// desire is recorded on the evaluate that asks, and the confirmation can
+    /// only arrive on the next one, after the caller has tried to acquire.
+    private var serveDesiredHold = false
 
     /// The position a refused `.serve` returns to.
     ///
@@ -132,7 +155,7 @@ public struct HoldController: Equatable, Sendable {
     /// click, which `togglingOffStopsTheHoldAndKeepsTheReason` requires
     /// `lastSuppression` to survive.
     ///
-    /// A new `.serve` also clears `serveHasHeld`: this click has served nothing
+    /// A new `.serve` also clears both hold flags: this click has served nothing
     /// yet, and inheriting the last one's success would report the next refusal
     /// as a release.
     public mutating func userToggled(to intent: UserIntent) {
@@ -141,6 +164,7 @@ public struct HoldController: Equatable, Sendable {
         if self.intent == .serve {
             lastSuppression = nil
             serveHasHeld = false
+            serveDesiredHold = false
         } else {
             standing = intent
         }
@@ -189,13 +213,20 @@ public struct HoldController: Equatable, Sendable {
     /// happened. A refused click and a hold nobody asked for reach the panel as
     /// the same value, so the panel renders one sentence for a user whose
     /// control coffee-bar just moved and for a user who touched nothing.
-    /// `cancelledServeReturnedTo` carries that difference, and is written here
-    /// in lockstep — set on the cancel, cleared on any other suppression.
+    /// `cancelledServe` carries that difference, and is written here in
+    /// lockstep — set on the cancel, cleared on any other suppression.
+    ///
+    /// `assertionIsHeld` is the caller's report of whether an assertion is
+    /// actually held RIGHT NOW, which only the caller can know: this type
+    /// decides what SHOULD happen, and IOKit decides what did. It defaults to
+    /// `false`, the safe direction — a caller that says nothing gets a refusal
+    /// rather than a claim about a hold that may never have existed.
     public mutating func evaluate(powerSource: PowerSource,
                                   batteryPercent: Int?,
                                   sessions: [AgentSession] = [],
                                   holdAwakeWhileBlocked: Bool = false,
-                                  batteryFloorPercent: Int = 20) -> DesiredPowerState {
+                                  batteryFloorPercent: Int = 20,
+                                  assertionIsHeld: Bool = false) -> DesiredPowerState {
         let state = PowerBroker.decide(PowerInputs(
             sessions: sessions,
             powerSource: powerSource,
@@ -205,9 +236,19 @@ public struct HoldController: Equatable, Sendable {
             batteryFloorPercent: batteryFloorPercent))
 
         // Recorded BEFORE the cancel below, which moves `intent` off `.serve`.
-        // A suppression and a hold are mutually exclusive in `PowerBroker`, so
-        // this and the cancel never fire on the same call.
-        if intent == .serve, state.idleSleepAssertion { serveHasHeld = true }
+        //
+        // TWO signals, one tick apart, and neither is enough alone.
+        // `serveDesiredHold` says the previous evaluate under THIS request asked
+        // for a hold, which is what stops an older `.auto` hold from being
+        // credited to a click that never held. `assertionIsHeld` says the caller
+        // really took it, which is what stops a refused `acquire()` from being
+        // announced as a release. The confirmation cannot arrive on the same
+        // call as the desire, because the caller acquires only after this
+        // returns.
+        if intent == .serve {
+            if serveDesiredHold, assertionIsHeld { serveHasHeld = true }
+            serveDesiredHold = state.idleSleepAssertion
+        }
 
         if let suppression = state.suppression {
             lastSuppression = suppression
