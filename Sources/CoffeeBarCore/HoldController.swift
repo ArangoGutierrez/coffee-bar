@@ -56,10 +56,20 @@ public struct HoldController: Equatable, Sendable {
     /// released on a draining battery. `ServeCancellation` says which.
     ///
     /// Its LIFETIME is the suppression EPISODE it explains. It is written when
-    /// the cancel happens and cleared when `lastSuppression` stops being true of
-    /// the reading — the same test `ServingModel.reason(_:stillTrueOf:)` applies
-    /// one layer up, so the record and the sentence explaining it cannot
-    /// disagree about when they end.
+    /// the cancel happens and cleared once the reading PROVES that suppression
+    /// is over — see `hasEnded`, which reads the record's own suppression before
+    /// `evaluate` records a new one over it.
+    ///
+    /// **That is not the same rule as `ServingModel.reason(_:stillTrueOf:)`, and
+    /// the difference is deliberate rather than an oversight.** The filter one
+    /// layer up HIDES a sentence and shows it again when the reading comes back;
+    /// this DESTROYS a record, and nothing brings it back. So the two use the
+    /// same comparison but not the same polarity: the filter may drop a line on
+    /// a reading it cannot interpret, because it costs a blank line for one
+    /// tick, while this must keep the record until something proves the episode
+    /// ended. The state can therefore outlive the sentence by a tick. It can
+    /// never be the other way round, which is the direction that would put a
+    /// false claim on screen.
     ///
     /// It was written in lockstep with `lastSuppression` INSIDE the same branch
     /// until audit findings 1 and 2, which are one defect with two faces.
@@ -243,8 +253,9 @@ public struct HoldController: Equatable, Sendable {
     /// the same value, so the panel renders one sentence for a user whose
     /// control coffee-bar just moved and for a user who touched nothing.
     /// `cancelledServe` carries that difference. It is set on the cancel and
-    /// cleared when the floor it names stops binding — see the rule at the end
-    /// of this method, which is the ONE place it dies.
+    /// cleared once the reading proves the floor it names has stopped binding —
+    /// see the rule ABOVE the suppression branch, which is the ONE place it
+    /// dies and which has to run before that branch moves `lastSuppression`.
     ///
     /// `assertionIsHeld` is the caller's report of whether an assertion is
     /// actually held RIGHT NOW, which only the caller can know: this type
@@ -280,6 +291,24 @@ public struct HoldController: Equatable, Sendable {
             serveDesiredHold = state.idleSleepAssertion
         }
 
+        // The ONE place the record dies, and it runs BEFORE the branch below.
+        // The order is load bearing: the branch overwrites `lastSuppression`,
+        // and the record belongs to the suppression that PRODUCED it rather
+        // than to the one this call is about to record. Reading it afterwards
+        // judges a refusal from a 20% floor against a 30% floor, so a record
+        // that ended survives into an episode it never met —
+        // `aRefusalUnderOneFloorDiesWhenTheFloorMoves` goes red on that.
+        //
+        // Outside the branch, not inside it, which is audit finding 2.
+        // `PowerBroker` returns early whenever nothing wants a hold, so with no
+        // session no suppression ever fires under `.auto`. A clear that runs
+        // only on a suppression therefore never runs, and the refusal replays
+        // onto the next drain days later.
+        if Self.hasEnded(lastSuppression, powerSource: powerSource,
+                         batteryPercent: batteryPercent) {
+            cancelledServe = nil
+        }
+
         if let suppression = state.suppression {
             lastSuppression = suppression
             if intent == .serve {
@@ -298,45 +327,45 @@ public struct HoldController: Equatable, Sendable {
             // asks for the same hold on every hook event, so that clear wiped
             // the user's own refusal sub-second after they read it.
         }
-
-        // The ONE place the record dies. It explains a single episode below the
-        // floor, so it lives exactly as long as that episode is still true of
-        // the reading — the test `ServingModel.reason(_:stillTrueOf:)` applies
-        // to the sentence one layer up, applied here to the state behind it.
-        //
-        // This cannot fight the branch above: a suppression is produced only for
-        // a reading at or below the floor, and `lastSuppression` carries that
-        // same floor, so a cancel recorded on this call always survives it.
-        //
-        // Placed OUTSIDE the branch on purpose. Audit finding 2 is what a clear
-        // that runs only on a suppression costs: `PowerBroker` returns early
-        // whenever nothing wants a hold, so with no session no suppression ever
-        // fires under `.auto`, nothing clears the record, and the refusal
-        // replays onto the next drain days later.
-        if !Self.stillTrue(lastSuppression, ofBattery: batteryPercent, on: powerSource) {
-            cancelledServe = nil
-        }
         return state
     }
 
-    /// Whether a recorded suppression is still true of the reading now being
-    /// evaluated.
+    /// Whether the recorded suppression has STOPPED being true of the reading
+    /// now being evaluated.
     ///
-    /// The same comparison `PowerBroker` suppresses on — `percent <= floor` on
-    /// battery — read from the RECORDED floor rather than from this call's
-    /// parameter, so a floor the user changes between calls cannot strand a
-    /// record that a different floor produced.
+    /// POSITIVE evidence only, and the polarity is the whole point. This clear
+    /// is TERMINAL where the filter it mirrors is reversible:
+    /// `ServingModel.reason(_:stillTrueOf:)` HIDES the sentence and shows it
+    /// again on the next reading, while this DESTROYS the record and no later
+    /// reading brings it back. So a rule that ends the episode whenever it
+    /// cannot see a reason to keep it throws the user's disclosure away for
+    /// good on one bad sample.
     ///
-    /// `nil` for either operand answers `false`: no reading and no record are
-    /// both states where nothing is being explained.
-    private static func stillTrue(_ suppression: HoldSuppression?,
-                                  ofBattery percent: Int?,
-                                  on source: PowerSource) -> Bool {
-        guard case .batteryFloor(_, let floor) = suppression,
-              source == .battery,
-              let percent
-        else { return false }
+    /// The three answers, and the evidence behind each:
+    ///
+    ///   - no record — nothing to end.
+    ///   - not on battery — the battery floor cannot bind while the machine is
+    ///     not on battery, so this IS evidence and the episode is over.
+    ///     `aReturnToACEndsTheEpisodeForGood` holds that line, and dropping it
+    ///     brings audit finding 2 back through a recharge.
+    ///   - on battery with no percentage — evidence of NOTHING, so the record
+    ///     stays. `SystemPowerReader.reading(from:providingType:)` returns
+    ///     exactly this whenever no internal-battery source reports a usable
+    ///     capacity, so it reaches the shipping app —
+    ///     `aReadingWithNoPercentageDoesNotKillALiveRefusal` measures it.
+    ///
+    /// The comparison is `PowerBroker`'s own, negated: it suppresses at
+    /// `percent <= floor`, so the episode ends at `percent > floor` and not one
+    /// point earlier. The floor comes from the RECORDED suppression rather than
+    /// from this call's parameter, which is only sound because the caller reads
+    /// this BEFORE overwriting that record.
+    private static func hasEnded(_ suppression: HoldSuppression?,
+                                 powerSource: PowerSource,
+                                 batteryPercent: Int?) -> Bool {
+        guard case .batteryFloor(_, let floor) = suppression else { return false }
+        guard powerSource == .battery else { return true }
+        guard let percent = batteryPercent else { return false }
 
-        return percent <= floor
+        return percent > floor
     }
 }
