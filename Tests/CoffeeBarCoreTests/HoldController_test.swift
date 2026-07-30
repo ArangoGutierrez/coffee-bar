@@ -441,14 +441,18 @@ private func session(_ state: SessionState) -> AgentSession {
     #expect(c.cancelledServe == .refused(returnedTo: .auto))
 }
 
-@Test func aSuppressionThatCancelsNoClickClearsAStaleCancel() {
-    // The record is written in lockstep with `lastSuppression`, so a NEW
-    // suppression that cancels nothing has to wipe the old cancel.
+@Test func aLaterSuppressionUnderAutoKeepsALiveRefusalOnRecord() {
+    // The record survives every evaluate that the floor it names is still true
+    // of. This is the half the first version of this check got backwards: it
+    // cleared on ANY suppression that cancelled no click, which is the commonest
+    // event there is under a live agent.
     //
-    // Named bug this catches: writing the record on the `.serve` branch only and
-    // never clearing it. One refused click then replays onto every later
-    // suppression under `.auto`, so a user who touched nothing is told their
-    // click was refused.
+    // Named bug this catches: clearing the record inside the non-`.serve`
+    // suppression branch. The user clicks On below the floor and reads the
+    // refusal; the working session asks for the same hold one hook event later,
+    // the same floor refuses it, and the sentence explaining THEIR click
+    // disappears. Audit finding 1, measured on the panel at 19% with one working
+    // session, where a hook event lands sub-second.
     var c = HoldController()
     c.userToggled(to: .serve)
     _ = c.evaluate(powerSource: .battery, batteryPercent: 19)
@@ -461,7 +465,79 @@ private func session(_ state: SessionState) -> AgentSession {
 
     #expect(c.lastSuppression == .batteryFloor(percent: 19, floor: 20),
             "precondition: that evaluate really did suppress")
+    #expect(c.cancelledServe == .refused(returnedTo: .auto))
+
+    // And it survives an evaluate that suppresses NOTHING, which is what the
+    // same panel does the moment that session goes idle: `PowerBroker` returns
+    // early with no suppression at all under `.auto` with nothing to hold for.
+    // The floor is still the reason the user's click was refused, and the
+    // battery has not moved.
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 19)
+    #expect(c.cancelledServe == .refused(returnedTo: .auto))
+}
+
+@Test func aRecoveryAboveTheFloorClearsTheCancelForGood() {
+    // The other half of the same lifetime rule, and the one that keeps the
+    // stale replay closed. The record explains ONE episode below the floor, so
+    // it dies with that episode rather than waiting for a later suppression to
+    // wipe it.
+    //
+    // Named bug this catches: leaving the clear on the suppression branch only.
+    // With no session there is nothing to hold for, `PowerBroker` returns early,
+    // that branch never runs, and the record survives for ever — so the refusal
+    // sentence returns days later at a reading it does not name.
+    // `aRefusalFromAnEarlierDrainNeverReturnsAtALaterOne` measures what the user
+    // then reads. Audit finding 2.
+    var c = HoldController()
+    c.userToggled(to: .serve)
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 5)
+    #expect(c.cancelledServe == .refused(returnedTo: .auto), "precondition: a cancel is on record")
+
+    // The battery recovers past the floor. Nothing else here would clear the
+    // record: the list is empty, so no suppression can fire.
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 21)
     #expect(c.cancelledServe == nil)
+
+    // Days later the battery drains under the floor again, with the control
+    // still standing where the cancel left it. The cancel must NOT come back.
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 19,
+                   sessions: [session(.working)])
+
+    #expect(c.lastSuppression == .batteryFloor(percent: 19, floor: 20),
+            "precondition: the later drain really did suppress")
+    #expect(c.cancelledServe == nil, "a refusal from an earlier episode replayed onto a later one")
+}
+
+@Test func aRepeatedOnClickKeepsTheHoldItAlreadyWon() {
+    // A second write of `.serve` while `.serve` is already in force is not a new
+    // request. A segmented SwiftUI picker writes its binding on a re-tap of the
+    // segment that is ALREADY selected — measured with a synthesised NSEvent —
+    // so the panel produces this with one click on a control that does not move.
+    //
+    // Named bug this catches: `userToggled` clearing the two hold flags on that
+    // write. The memory of a hold this same request really won is discarded, and
+    // the release that follows is announced as a refusal — so a user whose click
+    // held the Mac awake for hours is told it was refused. Audit finding 3.
+    var c = HoldController()
+    c.userToggled(to: .serve)
+    // Asked for above the floor, then confirmed by the caller: the request has
+    // genuinely held. The confirmation can only arrive on the NEXT evaluate.
+    #expect(c.evaluate(powerSource: .battery, batteryPercent: 25).idleSleepAssertion == true,
+            "precondition: the click was honoured")
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 25, assertionIsHeld: true)
+
+    // IOKit drops the assertion. The caller reports the truth, so the
+    // confirmation cannot arrive a second time and the memory of the hold is
+    // now the ONLY record that this request ever held.
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 25, assertionIsHeld: false)
+
+    // The re-tap.
+    c.userToggled(to: .serve)
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 19, assertionIsHeld: false)
+
+    #expect(c.intent == .auto)
+    #expect(c.cancelledServe == .released(returnedTo: .auto),
+            "a re-tap on the On segment turned a real hold into a refusal")
 }
 
 @Test func movingTheControlByHandClearsTheRefusalRecord() {
