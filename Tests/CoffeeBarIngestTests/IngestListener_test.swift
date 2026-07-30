@@ -205,6 +205,50 @@ private final class RawClient {
     func close() { Darwin.close(descriptor) }
 }
 
+/// Binds a raw `AF_UNIX` listening socket at `path`, the way a FOREIGN process
+/// would: it unlinks whatever is there and takes the path for itself.
+///
+/// Deliberately NOT a second `UnixSocketIngestListener`. `start()` refuses to
+/// steal a live node, so this listener can no longer reproduce the scenario the
+/// file documents at the `occupant` call site — a second instance that unlinked
+/// and rebound, leaving the first one `.ready` on an unlinked inode and deaf
+/// for ever. Another program under the same account is under no such rule.
+private final class ForeignListener {
+    private let descriptor: Int32
+
+    init?(takingOver path: String) {
+        let opened = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard opened >= 0 else { return nil }
+
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+        let bytes = Array(path.utf8)
+        guard bytes.count < MemoryLayout.size(ofValue: address.sun_path) else {
+            Darwin.close(opened)
+            return nil
+        }
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: bytes) }
+
+        // `bind` fails with EADDRINUSE on an existing node, so the path has to
+        // be cleared first. That unlink is the whole attack.
+        Darwin.unlink(path)
+
+        let bound = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(opened, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard bound == 0, Darwin.listen(opened, 1) == 0 else {
+            Darwin.close(opened)
+            return nil
+        }
+        descriptor = opened
+    }
+
+    func close() { Darwin.close(descriptor) }
+}
+
 /// Collects what the listener delivered, across the queue boundary.
 private final class Collected: @unchecked Sendable {
     private let lock = NSLock()
@@ -640,6 +684,56 @@ private func waitUntilNothingAnswers(at path: String) {
     #expect(collected.all.map(\.sessionID) == ["here"])
 }
 
+@Test func aDanglingSymlinkThatCannotBeRemovedIsRefusedRatherThanFollowed() throws {
+    // `removeItem` is called as `try?`, so its error is dropped. That is right
+    // — the node may legitimately have gone by itself between the probe and the
+    // delete — but it means the RETURN says nothing about what is at the path.
+    //
+    // Named bug this catches: the delete fails, nothing notices, and the bind
+    // goes THROUGH the surviving link. That is the relocation of finding I2
+    // again, reached by a different route. `UF_IMMUTABLE` is a USER flag: any
+    // process running as this account can set it on its own link, and no
+    // special privilege is needed.
+    //
+    // Refusing is the only honest answer here. Recovery is what makes `.stale`
+    // the right classification for a dangling link, and when the recovery
+    // cannot happen there is nothing left to prefer it for.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    try sandbox.makeDirectory()
+    let target = RelocationTarget()
+    defer { target.remove() }
+    try target.makeDirectory()
+
+    try FileManager.default.createSymbolicLink(atPath: sandbox.path,
+                                               withDestinationPath: target.path)
+    // Registered AFTER the directory cleanups, so it runs BEFORE them: an
+    // immutable link cannot be deleted, and the sandbox would outlive the run.
+    defer { lchflags(sandbox.path, 0) }
+    #expect(lchflags(sandbox.path, UInt32(UF_IMMUTABLE)) == 0,
+            "lchflags failed, errno \(errno); this test would prove nothing")
+
+    // The flag has to really stop the delete on this machine. Without this the
+    // refusal below could not be told apart from `lchflags` doing nothing.
+    try? FileManager.default.removeItem(atPath: sandbox.path)
+    #expect(fileType(ofItemAtPath: sandbox.path) == .typeSymbolicLink,
+            "UF_IMMUTABLE did not stop the delete; this test would prove nothing")
+
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+    #expect(throws: IngestError.socketPathBlocked(sandbox.path)) {
+        try listener.start { _ in }
+    }
+
+    // A short budget of its own, because this condition must NEVER hold.
+    // `start()` returning is not the bind: `NWListener` binds asynchronously,
+    // so reading the far end straight away would pass before a relocation had
+    // had time to appear, and the assertion would measure nothing.
+    pump(until: { FileManager.default.fileExists(atPath: target.path) }, seconds: 2)
+    #expect(!FileManager.default.fileExists(atPath: target.path),
+            "the bind went through the link that survived the delete")
+}
+
 @Test func aSymlinkToAnUnservedSocketIsClearedRatherThanFollowed() throws {
     // One of the three symlink cases that were already correct before I2 was
     // fixed. Connecting through the link reaches a bound node whose owner has
@@ -792,6 +886,77 @@ private func waitUntilNothingAnswers(at path: String) {
             "the path was still being served; this test would measure a different case")
     #expect(!listener.isReady,
             "isReady treats any node at the path as proof of serving")
+}
+
+@Test func isReadyIsFalseAfterAnotherProgramTakesThePath() throws {
+    // The most documented I3 case in this file, and the one a type check cannot
+    // see. The comment at the `occupant` call site records it as measured: a
+    // second binder unlinks the node and binds its own, and this listener stays
+    // `.ready` on an unlinked inode, deaf for ever and with no error to report.
+    //
+    // A socket IS at the path afterwards, and it answers connections, so
+    // "something of the right type is there" says healthy. Only the identity of
+    // the node can tell the two apart.
+    //
+    // Named bug this catches: the panel reports serving while every event goes
+    // to somebody else's socket.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+    try listener.start { _ in }
+    try requireReady(listener)
+
+    let foreign = try #require(ForeignListener(takingOver: sandbox.path),
+                               "the path could not be taken over; nothing below would be measured")
+    defer { foreign.close() }
+
+    // Both preconditions matter. The first proves a real socket node is at the
+    // path, and the second proves it ANSWERS — so no probe of any kind, not
+    // even a connection attempt, could report this path as dead.
+    #expect(fileType(ofItemAtPath: sandbox.path) == .typeSocket,
+            "the path holds \(fileType(ofItemAtPath: sandbox.path)?.rawValue ?? "nothing"), not a socket")
+    let probe = try #require(RawClient(path: sandbox.path),
+                             "the node at the path refuses connections; this is a different case")
+    probe.close()
+
+    #expect(!listener.isReady,
+            "isReady reports serving while the node at the path belongs to another program")
+}
+
+@Test func isReadyIsFalseWhenASymlinkTakesThePathToOurOwnSocket() throws {
+    // The guard for `lstat` over `stat` inside `isReady`, which nothing else
+    // measures. Every other case reads the same through either call: a removed
+    // node is absent both ways, and a regular file is the wrong type both ways.
+    //
+    // This case separates them. The live socket node is MOVED and a link is put
+    // in its place, so the path still resolves to the very same inode. `stat`
+    // follows the link and reports this listener's own socket, identity and
+    // all. `lstat` sees the link.
+    //
+    // False is the right answer even though the socket still serves through the
+    // link. The node has left the 0700 directory, which is the whole access
+    // control of design §4. Answering true would report a security property the
+    // app no longer has.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let target = RelocationTarget()
+    defer { target.remove() }
+    try target.makeDirectory()
+
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+    try listener.start { _ in }
+    try requireReady(listener)
+
+    try FileManager.default.moveItem(atPath: sandbox.path, toPath: target.path)
+    try FileManager.default.createSymbolicLink(atPath: sandbox.path,
+                                               withDestinationPath: target.path)
+    #expect(fileType(ofItemAtPath: target.path) == .typeSocket,
+            "the socket node did not move; this test would measure a different case")
+
+    #expect(!listener.isReady,
+            "isReady followed the link and answered for a node that is no longer at the path")
 }
 
 @Test func startingAListenerThatIsAlreadyServingThrows() throws {
