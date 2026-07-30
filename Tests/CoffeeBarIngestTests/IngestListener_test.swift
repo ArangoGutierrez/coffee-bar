@@ -40,9 +40,47 @@ private struct SocketSandbox {
     func remove() { try? FileManager.default.removeItem(at: directory) }
 }
 
+/// A second directory this test owns, OUTSIDE the socket's 0700 parent.
+///
+/// It is where a symlink at the socket path points, and where a relocated
+/// socket would land. 0755 on purpose: finding I2 is that the bind leaves the
+/// one directory no other user can traverse, so the far end has to be a place
+/// where that matters.
+///
+/// The same 104-byte `sun_path` budget applies. The per-user temporary
+/// directory is 49 bytes and `/cb-rt-XXXXXX/r.sock` adds 20, for 69.
+private struct RelocationTarget {
+    let directory: URL
+
+    init() {
+        let tag = String(UUID().uuidString.prefix(6)).lowercased()
+        directory = FileManager.default.temporaryDirectory.appending(path: "cb-rt-\(tag)")
+    }
+
+    var path: String { directory.appending(path: "r.sock").path }
+
+    func makeDirectory() throws {
+        try FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o755])
+    }
+
+    func remove() { try? FileManager.default.removeItem(at: directory) }
+}
+
 private func mode(ofItemAtPath path: String) -> Int16? {
     (try? FileManager.default.attributesOfItem(atPath: path)[.posixPermissions]
         as? NSNumber)??.int16Value
+}
+
+/// What kind of object sits at `path`, without following a symlink.
+///
+/// `attributesOfItem` is `lstat`-based, so a symlink answers
+/// `.typeSymbolicLink` and never the type of its target. That distinction is
+/// the whole of finding I2: a test that followed the link would report a socket
+/// and never see that the socket is somewhere else.
+private func fileType(ofItemAtPath path: String) -> FileAttributeType? {
+    (try? FileManager.default.attributesOfItem(atPath: path)[.type]) as? FileAttributeType
 }
 
 /// The longest a post may take before the test stops waiting for it.
@@ -551,6 +589,209 @@ private func waitUntilNothingAnswers(at path: String) {
     }
     #expect(FileManager.default.fileExists(atPath: witness),
             "start() deleted a directory it found at the socket path")
+}
+
+// MARK: - A symlink at the socket path (audit finding I2)
+
+@Test func aDanglingSymlinkAtTheSocketPathDoesNotRelocateTheLiveSocket() throws {
+    // Audit finding I2, measured deterministically over three runs of three.
+    // `fileExists` FOLLOWS a symlink, so a DANGLING one reads as nothing at
+    // all: the directory branch was skipped, `connect` gave ENOENT, and the
+    // probe answered `.absent`. `.absent` removes nothing, so `NWListener`
+    // bound THROUGH the link and the live socket was created at the link's
+    // TARGET. Every POST was then served from there, and `isReady` said yes.
+    //
+    // The harm is the loss of defence in depth, not a wide standing hole. The
+    // 0755 bind window is NOT created by the link: a control with no link shows
+    // the same two modes, and the window measured 0.2 ms. What the link does is
+    // move that known window OUT of the 0700 directory that closes it.
+    //
+    // `theParentDirectoryIsNotTraversableByOtherUsers` cannot catch this. It
+    // measures the CONFIGURED parent, which stays 0700 while the socket lives
+    // somewhere else entirely.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    try sandbox.makeDirectory()
+    let target = RelocationTarget()
+    defer { target.remove() }
+    try target.makeDirectory()
+
+    try FileManager.default.createSymbolicLink(atPath: sandbox.path,
+                                               withDestinationPath: target.path)
+    #expect(!FileManager.default.fileExists(atPath: target.path),
+            "the link is not dangling; this test would measure a different case")
+
+    let collected = Collected()
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+    try listener.start { event in collected.record(event, onMain: Thread.isMainThread) }
+    try requireReady(listener)
+
+    #expect(!FileManager.default.fileExists(atPath: target.path),
+            "the live socket was created at the link's target, outside the 0700 directory")
+    #expect(fileType(ofItemAtPath: sandbox.path) == .typeSocket,
+            "the configured path is \(fileType(ofItemAtPath: sandbox.path)?.rawValue ?? "absent"), not a socket")
+
+    // The recovery has to be complete, not merely safe. A fix that refused to
+    // start would also keep the socket out of the target directory.
+    #expect(try post(#"{"hook_event_name":"Stop","session_id":"here"}"#,
+                     to: sandbox.path) == 0)
+    pump(until: { !collected.all.isEmpty })
+    #expect(collected.all.map(\.sessionID) == ["here"])
+}
+
+@Test func aSymlinkToAnUnservedSocketIsClearedRatherThanFollowed() throws {
+    // One of the three symlink cases that were already correct before I2 was
+    // fixed. Connecting through the link reaches a bound node whose owner has
+    // gone, which gives ECONNREFUSED, so the probe says `.stale`. `removeItem`
+    // does not follow a symlink, so it takes the LINK and the far end survives.
+    //
+    // Named bug this catches: a fix for the dangling case that reclassifies
+    // EVERY symlink, leaving the app refusing to start on a path it used to
+    // reclaim without help.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let target = RelocationTarget()
+    defer { target.remove() }
+    try target.makeDirectory()
+
+    // An unserved socket node. `stop()` leaves one behind on purpose.
+    let dead = UnixSocketIngestListener(socketPath: target.path)
+    try dead.start { _ in }
+    try requireReady(dead)
+    dead.stop()
+    waitUntilNothingAnswers(at: target.path)
+    #expect(fileType(ofItemAtPath: target.path) == .typeSocket,
+            "no unserved socket node was left; this test would measure a different case")
+
+    try sandbox.makeDirectory()
+    try FileManager.default.createSymbolicLink(atPath: sandbox.path,
+                                               withDestinationPath: target.path)
+
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+    try listener.start { _ in }
+    try requireReady(listener)
+
+    #expect(fileType(ofItemAtPath: sandbox.path) == .typeSocket,
+            "the configured path is \(fileType(ofItemAtPath: sandbox.path)?.rawValue ?? "absent"), not a socket")
+    #expect(FileManager.default.fileExists(atPath: target.path),
+            "removeItem followed the link and deleted the node at the far end")
+}
+
+@Test func aSymlinkToARegularFileIsClearedRatherThanFollowed() throws {
+    // The second already-correct case. ENOTSOCK through the link, so `.stale`,
+    // and again `removeItem` takes the link. The file at the far end surviving
+    // is what proves the link was not followed.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let target = RelocationTarget()
+    defer { target.remove() }
+    try target.makeDirectory()
+    FileManager.default.createFile(atPath: target.path, contents: Data("keep".utf8))
+
+    try sandbox.makeDirectory()
+    try FileManager.default.createSymbolicLink(atPath: sandbox.path,
+                                               withDestinationPath: target.path)
+
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+    try listener.start { _ in }
+    try requireReady(listener)
+
+    #expect(fileType(ofItemAtPath: sandbox.path) == .typeSocket,
+            "the configured path is \(fileType(ofItemAtPath: sandbox.path)?.rawValue ?? "absent"), not a socket")
+    #expect(FileManager.default.contents(atPath: target.path) == Data("keep".utf8),
+            "removeItem followed the link and deleted the file at the far end")
+}
+
+@Test func aSymlinkToADirectoryAtTheSocketPathIsRefusedRatherThanDeleted() throws {
+    // The third already-correct case. `fileExists` FOLLOWS the link and reports
+    // a directory, so the probe says `.blocked` and `start()` throws.
+    //
+    // Named bug this catches: a fix for the dangling case placed BEFORE the
+    // directory branch, which would send a link to a directory to `removeItem`.
+    // The link itself would go, and on the next run the same path would be a
+    // plain directory the existing guard already refuses — but the app would
+    // have silently thrown away the user's link either way.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let target = RelocationTarget()
+    defer { target.remove() }
+    try target.makeDirectory()
+    let witness = target.directory.appending(path: "keep.txt").path
+    FileManager.default.createFile(atPath: witness, contents: Data("keep".utf8))
+
+    try sandbox.makeDirectory()
+    try FileManager.default.createSymbolicLink(atPath: sandbox.path,
+                                               withDestinationPath: target.directory.path)
+
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+    #expect(throws: IngestError.socketPathBlocked(sandbox.path)) {
+        try listener.start { _ in }
+    }
+    #expect(FileManager.default.fileExists(atPath: witness),
+            "start() reached a directory through the link and deleted what was under it")
+    #expect(fileType(ofItemAtPath: sandbox.path) == .typeSymbolicLink,
+            "start() deleted the link it refused to follow")
+}
+
+// MARK: - isReady answers for now (audit finding I3)
+
+@Test func isReadyIsFalseOnceTheSocketNodeIsGone() throws {
+    // Audit finding I3. `ready` is written at exactly three sites — the
+    // initialiser, the `.ready` state, and `stop()` — so `stop()` was the only
+    // thing that ever cleared it, and a vanished node left it true.
+    //
+    // Named bug this catches: the user deletes the node, `curl` fails at exit
+    // 7, every agent event is lost, and the panel reports NO problem, because
+    // `ServingModel` sets `ingestListening = listener.isReady` and
+    // `ingestAdvisory` then returns nil.
+    //
+    // Deleting it by hand is a plausible act, not a contrived one: `stop()`
+    // deliberately leaves stale nodes behind, so tidying one up is exactly what
+    // the app's own behaviour invites.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+    try listener.start { _ in }
+    try requireReady(listener)
+
+    try FileManager.default.removeItem(atPath: sandbox.path)
+
+    // Measured rather than assumed, and measured FIRST: if a post still
+    // succeeded, the answer below would be about nothing.
+    #expect(try post(#"{"hook_event_name":"Stop","session_id":"lost"}"#,
+                     to: sandbox.path) != 0,
+            "the node was still being served; this test would measure a different case")
+    #expect(!listener.isReady,
+            "isReady answered for a past start(); nothing can post and the panel shows no problem")
+}
+
+@Test func isReadyIsFalseWhenTheSocketPathHoldsSomethingThatIsNotASocket() throws {
+    // The node can be REPLACED as well as removed, and the replacement is what
+    // separates two candidate fixes. Named bug this catches: an `isReady` that
+    // asks only whether SOMETHING exists at the path. A regular file answers
+    // that question yes while no connection can be made through it.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+    try listener.start { _ in }
+    try requireReady(listener)
+
+    try FileManager.default.removeItem(atPath: sandbox.path)
+    FileManager.default.createFile(atPath: sandbox.path, contents: Data("not a socket".utf8))
+    #expect(FileManager.default.fileExists(atPath: sandbox.path),
+            "nothing took the path; this test would measure the removal case instead")
+
+    #expect(try post(#"{"hook_event_name":"Stop","session_id":"lost"}"#,
+                     to: sandbox.path) != 0,
+            "the path was still being served; this test would measure a different case")
+    #expect(!listener.isReady,
+            "isReady treats any node at the path as proof of serving")
 }
 
 @Test func startingAListenerThatIsAlreadyServingThrows() throws {
