@@ -69,15 +69,24 @@ import Foundation
 //     when a new one is found, and never read a pass as proof of absence.
 //   - It covers LOGGING only. Bytes written to a file, or posted somewhere, are
 //     a different sink and design §4 answers them by other means.
-//   - `loggerMessageRoutes` is matched on a RECEIVER — `log.error(`, or a
-//     newline chained off a `)`, `]` or `}` — and never as a bare word, because
-//     `error` is the name of every `NWConnection` completion parameter in the
-//     file this scans. The price is a space: `log .error(` reads as nothing,
-//     because stepping back over that space reaches `case .error:` too. Nobody
-//     writes the first; the second is ordinary Swift, and a guard that reports
-//     ordinary Swift gets deleted. It reads the METHOD, never the receiver's
-//     type, so `Darwin.log(x)` would be reported as well. The ingest path does
-//     no arithmetic, and a rule that had to resolve types would be a compiler.
+//   - `messageMethodRoutes` is matched on a RECEIVER — `log.error(`,
+//     `log?.error(`, or a newline chained off a `)`, `]` or `}` — and never as
+//     a bare word, because `error` is the name of every `NWConnection`
+//     completion parameter in the file this scans. The price is a space:
+//     `log .error(` reads as nothing, because stepping back over that space
+//     reaches `case .error:` too. Nobody writes the first; the second is
+//     ordinary Swift, and a guard that reports ordinary Swift gets deleted.
+//   - A member route must be CALLED. `task.error`, `Level.error` and
+//     `results[0].error` are member READS, and this rule reads the method name
+//     without the receiver's type, so it cannot tell one from a `Logger`. Eight
+//     such reads were measured as findings before that rule existed. The cost
+//     is the alias: `let write = log.error` escapes, where `let write = NSLog`
+//     does not. Two deliberate edits are needed to use it, and the alternative
+//     was a guard that reported ordinary Swift.
+//   - It reads the METHOD, never the receiver's type, so `Darwin.log(x)` and a
+//     qualified enum case built with a value — `Level.error(code)` — are
+//     reported as well. The ingest path does no arithmetic and declares no such
+//     case, and a rule that had to resolve types would be a compiler.
 //   - The lexer is small, not the Swift grammar. It handles `//`, nested
 //     `/* */`, escapes, interpolation, multi-line `"""` and raw `#"…"#`, which
 //     is what the scanned target contains. A bare regex literal (`/…/`) would
@@ -128,7 +137,9 @@ private let loggingRoutes = [
     "NSLog",
     "NSLogv",
     "os_log",
+    "os_signpost",
     "OSLog",
+    "OSSignposter",
     "Logger",
     "print",
     "debugPrint",
@@ -145,7 +156,7 @@ private let loggingRoutes = [
     "FileHandle.standardError",
 ]
 
-/// The `os.Logger` methods that take a message.
+/// The instance methods that take a message: `os.Logger`, then `OSSignposter`.
 ///
 /// A SECOND list, because these are reached by a different route and matched by
 /// a different rule. `Logger` is the sink that replaces `NSLog` on this
@@ -154,13 +165,18 @@ private let loggingRoutes = [
 /// which reads whole words — cannot see it. The receiver's name is the author's
 /// to pick, so the method is the only fixed part to match on.
 ///
+/// The 9 `Logger` methods are the whole message surface of that type. The 3
+/// `OSSignposter` methods carry an interpolated message to the SAME unified log,
+/// so leaving them out while `os_log` and `os_signpost` are both listed would be
+/// an inconsistency a reader trips over.
+///
 /// These CANNOT be read as bare words the way `loggingRoutes` are. `error` is
 /// what `NWConnection` calls the completion parameter, and
 /// `IngestListener.receive` takes that parameter and tests it twice; a bare-word
 /// rule reports those three lines, and none of them logs anything. `memberRoute`
-/// therefore asks for a receiver before the dot — see the LIMITS at the top of
-/// this file for what that costs.
-private let loggerMessageRoutes = [
+/// therefore asks for a receiver before the dot, and for an argument list after
+/// the name — see the LIMITS at the top of this file for what that costs.
+private let messageMethodRoutes = [
     "log",
     "trace",
     "debug",
@@ -170,6 +186,9 @@ private let loggerMessageRoutes = [
     "error",
     "critical",
     "fault",
+    "emitEvent",
+    "beginInterval",
+    "endInterval",
 ]
 
 private func isIdentifierCharacter(_ character: Character) -> Bool {
@@ -349,7 +368,21 @@ private func labelEnd(of text: String) -> String.Index? {
     return text.index(after: index)
 }
 
-/// Whether every argument is a string literal, with or without a label.
+/// Whether `text` is a leading-dot member reference, such as `.error`.
+///
+/// A leading dot resolves to a CASE or a static member of the inferred type, so
+/// it names a level and never a payload: `logger.log(level: .error, "…")` is the
+/// documented way to log a constant message, and reporting it would report
+/// correct code. `.error(payload)` is not one of these — it carries
+/// parentheses, so it still reads as a value.
+private func isLeadingDotMemberReference(_ text: String) -> Bool {
+    guard text.hasPrefix(".") else { return false }
+    let name = text.dropFirst()
+    return !name.isEmpty && name.allSatisfy(isIdentifierCharacter)
+}
+
+/// Whether every argument is a string literal or a level, with or without a
+/// label.
 ///
 /// Reads BLANKED code, so a literal is exactly `""` by then and anything else
 /// left standing names a value.
@@ -358,7 +391,9 @@ private func argumentsAreConstantText(_ arguments: String) -> Bool {
         var text = piece.trimmingCharacters(in: .whitespacesAndNewlines)
         if let end = labelEnd(of: text) { text = String(text[end...]) }
         text = text.replacingOccurrences(of: "\"\"", with: "")
-        if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return false }
+        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty || isLeadingDotMemberReference(text) { continue }
+        return false
     }
     return true
 }
@@ -406,12 +441,17 @@ private func loggingCallsCarryingAValue(in code: String) -> [String] {
 
     /// Whether a RECEIVER ends at the `.` sitting at `dot`.
     ///
-    /// The whole discriminator for `loggerMessageRoutes`. `log.error(` is a call
+    /// The whole discriminator for `messageMethodRoutes`. `log.error(` is a call
     /// on an instance and the dot follows the instance; `type: .error` and
     /// `case .error:` are leading-dot member references, where the dot follows a
     /// colon, a comma or a keyword and no receiver exists. A receiver ends in an
     /// identifier character, or in the `)`, `]` or `}` that closes a call, a
     /// subscript or a closure.
+    ///
+    /// A `?` or a `!` may sit between the receiver and the dot, and it is read
+    /// IMMEDIATELY, before any whitespace. `log?.error(…)` reaches exactly the
+    /// same sink as `log.error(…)`, and an optional `Logger` is ordinary Swift:
+    /// one character walked past this whole rule until this line existed.
     ///
     /// Whitespace before the dot is stepped over only back to a bracket, which
     /// is what reads `Logger(…)\n    .error(` — a chained call is the one thing
@@ -420,8 +460,13 @@ private func loggingCallsCarryingAValue(in code: String) -> [String] {
     /// guard gets deleted.
     func receiverEnds(before dot: Int) -> Bool {
         guard dot > 0 else { return false }
-        if isIdentifierCharacter(characters[dot - 1]) { return true }
-        var back = dot - 1
+        var end = dot
+        if characters[end - 1] == "?" || characters[end - 1] == "!" {
+            end -= 1
+            guard end > 0 else { return false }
+        }
+        if isIdentifierCharacter(characters[end - 1]) { return true }
+        var back = end - 1
         while back >= 0,
               characters[back] == " " || characters[back] == "\t" || characters[back] == "\n" {
             back -= 1
@@ -430,7 +475,7 @@ private func loggingCallsCarryingAValue(in code: String) -> [String] {
         return characters[back] == ")" || characters[back] == "]" || characters[back] == "}"
     }
 
-    /// The longest `Logger` message method called on a receiver at `index`.
+    /// The longest message method called on a receiver at `index`.
     ///
     /// The trailing check is what keeps `state.logging` from reading as `log`,
     /// and the receiver check is what keeps the `error` parameter of an
@@ -439,7 +484,7 @@ private func loggingCallsCarryingAValue(in code: String) -> [String] {
         guard index > 0, characters[index - 1] == ".", receiverEnds(before: index - 1) else {
             return nil
         }
-        return loggerMessageRoutes
+        return messageMethodRoutes
             .filter { name in
                 guard matches(Array(name), at: index) else { return false }
                 let after = index + name.count
@@ -451,9 +496,10 @@ private func loggingCallsCarryingAValue(in code: String) -> [String] {
     while index < characters.count {
         // `label` is how a finding names what it found: a message method is
         // reported as `.error(…)`, which is how it reads in the source.
-        let found: (name: String, label: String)? =
-            route(at: index).map { ($0, $0) } ?? memberRoute(at: index).map { ($0, ".\($0)") }
-        guard let (name, label) = found else {
+        let found: (name: String, label: String, isMember: Bool)? =
+            route(at: index).map { ($0, $0, false) }
+            ?? memberRoute(at: index).map { ($0, ".\($0)", true) }
+        guard let (name, label, isMember) = found else {
             index += 1
             continue
         }
@@ -468,7 +514,20 @@ private func loggingCallsCarryingAValue(in code: String) -> [String] {
             cursor += 1
         }
         guard cursor < characters.count, characters[cursor] == "(" else {
-            findings.append("\(label) — named, and this guard reads no arguments for it")
+            // A whole-word route with no call is still reported: `let write =
+            // NSLog` hands the sink to another name, and `NSLog` can be nothing
+            // else.
+            //
+            // A MEMBER is not. `self.error = err`, `task.error`,
+            // `results[0].error` and `Level.error` are ordinary Swift, and this
+            // rule reads the method name only — it cannot know the receiver's
+            // type, so it cannot tell a `Logger` from an error property. Eight
+            // such reads were MEASURED as findings before this branch existed.
+            // A guard that reports ordinary Swift is deleted by the next
+            // maintainer, and then it guards nothing at all.
+            if !isMember {
+                findings.append("\(label) — named, and this guard reads no arguments for it")
+            }
             index += name.count
             continue
         }
@@ -750,8 +809,48 @@ private func ingestPathEntriesFound() throws -> [String] {
         ("a Logger message chained over a newline is refused",
          "Logger(subsystem: \"\")\n    .critical(\"\"(body))", 1),
 
-        ("a Logger method handed to another name is refused",
-         "let write = log.error\nlet a = 1", 1),
+        // ONE CHARACTER used to walk past the whole rule. An optional `Logger`
+        // is ordinary Swift, and `log?.error(…)` reaches the same sink.
+        ("a Logger reached through an optional is refused",
+         "log?.error(\"\"(body))", 1),
+
+        ("a Logger reached through a force unwrap is refused",
+         "log!.error(\"\"(body))", 1),
+
+        // A member READ is not a call, and this rule cannot know the receiver's
+        // type. Reporting these would report ordinary Swift, which is how a
+        // guard gets deleted. The cost is stated in the LIMITS: the alias
+        // `let write = log.error` escapes.
+        ("a member read that is not a call is not a route",
+         "let write = log.error\nlet a = 1", 0),
+
+        ("ordinary member reads are not logging calls",
+         "self.error = err\nlet a = task.error\nlet b = response.info\n"
+         + "let c = settings.debug\nlet d = Level.error\nlet e = decode(data).error\n"
+         + "let f = self.notice\nlet g = results[0].error", 0),
+
+        // MEASURED with `swiftc -typecheck`: both spellings compile, so the
+        // space is not what makes a ternary safe. Not being a call is.
+        ("a ternary choosing a level is not a call, spaced or not",
+         "let a: Level = isBad ? .error : .info\nlet b: Level = isBad ?.error : .info", 0),
+
+        ("a level argument names a level, not a value",
+         "logger.log(level: .error, \"\")", 0),
+
+        // `os_signpost` is `os_log`'s sibling and carries the same interpolated
+        // message to the same unified log.
+        ("a signpost carrying a value is refused",
+         "os_signpost(.event, log: .default, name: \"\", \"\", text)", 1),
+
+        ("a signpost with a constant message is allowed",
+         "os_signpost(.event, log: .default, name: \"\", \"\")", 0),
+
+        ("every signposter method that takes a message is read",
+         "signposter.emitEvent(\"\", \"\"(body))\nsignposter.beginInterval(\"\", \"\"(body))\n"
+         + "signposter.endInterval(\"\", state, \"\"(body))", 3),
+
+        ("a signposter built from a value is refused",
+         "OSSignposter(logger: makeLogger(name))", 1),
 
         // The discriminator. These three lines are `IngestListener.receive`
         // verbatim: `error` is what `NWConnection` calls its completion
