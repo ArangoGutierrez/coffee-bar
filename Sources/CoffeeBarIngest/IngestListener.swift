@@ -113,12 +113,33 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
     ///
     /// `public` since it became an `IngestListening` requirement. It is the
     /// panel's answer to "is this process serving", which no read of the user's
-    /// settings file can give. `stop()` clears it, and a bind that never
-    /// reaches `.ready` never sets it, so a false answer here means the socket
-    /// really is not serving.
+    /// settings file can give.
+    ///
+    /// The stored flag alone answered for the PAST. It is written at exactly
+    /// three sites — the initialiser, the `.ready` state, and `stop()` — so
+    /// `stop()` was the only thing that ever cleared it, and a node that went
+    /// away while the process ran left it true. Measured: the user deletes the
+    /// node, `curl` fails at exit 7, every event is lost, and the panel reports
+    /// no problem at all, because `ingestListening` is this value.
+    ///
+    /// So the flag is now a precondition and the node is the proof. `lstat`
+    /// does not follow a symlink, which is deliberate: the question is whether
+    /// OUR node is still at the path, not whether the path resolves to some
+    /// socket elsewhere.
+    ///
+    /// The lock is released BEFORE the syscall. This is polled in tight loops,
+    /// not only on the 30 s refresh, and `accept` takes the same lock on every
+    /// connection.
+    ///
+    /// `stop()` still clears the flag, and that is still load-bearing: it
+    /// leaves the node in place on purpose, so the node alone cannot say that
+    /// this listener stopped.
     public var isReady: Bool {
-        lock.lock(); defer { lock.unlock() }
-        return ready
+        lock.lock()
+        let bound = ready
+        lock.unlock()
+        guard bound else { return false }
+        return Self.nodeType(atPath: socketPath) == mode_t(S_IFSOCK)
     }
 
     /// How many connections are being served right now.
@@ -291,10 +312,44 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
         // all, ECONNREFUSED for a bound node whose owner has gone, ENOTSOCK for
         // a plain file left at the path.
         switch errno {
-        case ENOENT: return .absent
+        case ENOENT:
+            // `connect` FOLLOWS a symlink, so a DANGLING one answers ENOENT —
+            // the same errno an empty path gives. `lstat` tells the two apart,
+            // because it does not follow the link.
+            //
+            // Answering `.absent` for both was measured to RELOCATE the live
+            // socket. `.absent` removes nothing, so `NWListener` bound through
+            // the link and created the node at the link's target. The 0700
+            // directory above then guarded a path nothing was serving on. The
+            // 0755 bind window documented there is not created by the link and
+            // measured 0.2 ms; what the link does is move that known window out
+            // of the directory that closes it. The loss is defence in depth.
+            //
+            // `.stale` rather than `.blocked`, deliberately. `removeItem` does
+            // not follow a symlink, so it takes the LINK, and a dangling link
+            // has no target left to take. A link to an unserved socket and a
+            // link to a regular file already resolve here, so all three
+            // removable link cases now follow one rule. It also DEFEATS a
+            // planted link instead of reporting it: refusing to start would
+            // turn an attempted relocation into a standing denial of service
+            // that the app cannot clear itself.
+            //
+            // A live node is never reached by this branch. It answers `connect`
+            // or gives ECONNREFUSED, and it is not a symlink either way.
+            return Self.nodeType(atPath: path) == mode_t(S_IFLNK) ? .stale : .absent
         case ECONNREFUSED, ENOTSOCK: return .stale
         default: return .live
         }
+    }
+
+    /// The type bits of the node AT `path`, or nil when there is nothing there.
+    ///
+    /// `lstat`, never `stat`. Both callers ask about the object at the path
+    /// itself rather than about what it resolves to.
+    private static func nodeType(atPath path: String) -> mode_t? {
+        var status = stat()
+        guard lstat(path, &status) == 0 else { return nil }
+        return status.st_mode & mode_t(S_IFMT)
     }
 
     // MARK: - Serving one connection
