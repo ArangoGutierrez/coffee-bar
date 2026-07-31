@@ -179,6 +179,11 @@ private struct ResolvedPackage: Sendable {
     let targets: [String: ResolvedTarget]
     /// The identity of every external package this one resolved.
     let packageDependencies: [String]
+    /// Product name -> the targets that product names directly.
+    ///
+    /// The linker takes a product's targets whether or not any dependency edge
+    /// reaches them, so a dependency walk alone cannot see this route.
+    let productTargets: [String: [String]]
 }
 
 /// The shape of `swift package describe --type json` that this file reads.
@@ -225,17 +230,29 @@ private struct ManifestDescription: Decodable {
         }
     }
 
+    /// One entry of the package-level `products` array.
+    ///
+    /// Only the name and the target list matter here. `type` distinguishes an
+    /// executable from a library and this check does not care: a target named by
+    /// ANY product is a target the linker can take.
+    struct Product: Decodable {
+        let name: String
+        let targets: [String]
+    }
+
     let targets: [Target]
     let dependencies: [Dependency]
+    let products: [Product]
 
     private enum CodingKeys: String, CodingKey {
-        case targets, dependencies
+        case targets, dependencies, products
     }
 
     init(from decoder: any Decoder) throws {
         let fields = try decoder.container(keyedBy: CodingKeys.self)
         targets = try fields.decode([Target].self, forKey: .targets)
         dependencies = try fields.decodeIfPresent([Dependency].self, forKey: .dependencies) ?? []
+        products = try fields.decodeIfPresent([Product].self, forKey: .products) ?? []
     }
 }
 
@@ -338,7 +355,10 @@ private func describePackage() throws -> ResolvedPackage {
     })
 
     return ResolvedPackage(targets: targets,
-                           packageDependencies: described.dependencies.map(\.summary))
+                           packageDependencies: described.dependencies.map(\.summary),
+                           productTargets: Dictionary(
+                               described.products.map { ($0.name, $0.targets) },
+                               uniquingKeysWith: { first, _ in first }))
 }
 
 /// Swift source with every COMMENT removed and every STRING LITERAL kept.
@@ -607,6 +627,31 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
         green suite — that is exactly how CoffeeBarPower went unread. Add each \
         new target to the tier matching what it may do, after reading it \
         against design §6.1.
+        """)
+}
+
+@Test func theCoffeeBarProductNamesOnlyTargetsTheGuardScans() throws {
+    // Named bug this catches: a target added to the `coffee-bar` product's
+    // `targets:` list and to NO dependency list. The linker takes it; the
+    // dependency walk in `linkedClosure` never reaches it; every content check
+    // in this file therefore skips it. That is the same class as finding B6,
+    // through the door B6's fix left open.
+    let productTargets = try resolvedPackage.get().productTargets
+
+    let named = try #require(productTargets["coffee-bar"],
+                             "no product named coffee-bar; the guard is reading the wrong package")
+
+    // Not decoration: a decode that produced an empty list would pass a subset
+    // check against anything.
+    #expect(named.isEmpty == false, "the coffee-bar product names no targets")
+
+    let scanned = Set(appLayerTargets + powerLayerTargets + coreLayerTargets)
+    let unscanned = Set(named).subtracting(scanned)
+
+    #expect(unscanned.isEmpty, """
+        the coffee-bar product names targets this guard never scans.
+          unscanned: \(unscanned.sorted())
+        Add each to a tier list, or take it out of the product.
         """)
 }
 
