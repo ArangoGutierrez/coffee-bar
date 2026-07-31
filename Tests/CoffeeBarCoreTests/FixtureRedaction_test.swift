@@ -99,6 +99,18 @@ private let syntheticReasonSentinel = "SYNTHETIC-FIXTURE-REASON-1f4a9c"
             "the fixture reason is \(reason.count) characters; SessionHub's 140-character cap can no longer be proved")
 }
 
+/// `git ls-files` did not run, so the tracked-file scan has no corpus.
+///
+/// Reported as a THROW and not as an empty list: outside a git checkout — a
+/// source tarball, for example — an empty list would fail the count assert with
+/// a message blaming the repo root, which sends the reader to the wrong place.
+private struct GitListingFailed: Error, CustomStringConvertible {
+    let status: Int32
+    var description: String {
+        "git ls-files exited \(status); this is not a git checkout, so the tracked-file scan cannot run"
+    }
+}
+
 /// Every file git TRACKS, as repo-relative paths.
 ///
 /// `git ls-files` and not a directory walk: the leak this catches reached a
@@ -121,7 +133,9 @@ private func trackedTextFiles() throws -> [String] {
     let data = out.fileHandleForReading.readDataToEndOfFile()
     git.waitUntilExit()
 
-    guard git.terminationStatus == 0 else { return [] }
+    guard git.terminationStatus == 0 else {
+        throw GitListingFailed(status: git.terminationStatus)
+    }
 
     let skip = [".png", ".jpg", ".jpeg", ".gif", ".icns", ".pdf", ".zip"]
     return String(decoding: data, as: UTF8.self)
@@ -146,12 +160,23 @@ private func trackedTextFiles() throws -> [String] {
     #expect(files.count >= 50,
             "scanned \(files.count) tracked files at \(repoRoot.path); this scan is weaker than it looks")
 
-    // This guard file NAMES the markers, so it must be exempt or it reports itself.
-    let selfPath = "Tests/CoffeeBarCoreTests/FixtureRedaction_test.swift"
+    // This guard file NAMES the markers, so it must be exempt or it reports
+    // itself. Derived from #filePath rather than written out, so moving or
+    // renaming this file cannot leave a stale literal behind. Both sides come
+    // from #filePath, so the prefix strip is exact.
+    let selfPath = String(#filePath.dropFirst(repoRoot.path.count + 1))
+
+    // A file the scan could not READ is a file the scan did not CHECK. Silently
+    // skipping it would shrink the corpus without shrinking the count, so the
+    // count assert above would not notice. Measured today: 0 files skip here.
+    var unreadable: [String] = []
 
     for name in files where name != selfPath {
         let url = repoRoot.appending(path: name)
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+            unreadable.append(name)
+            continue
+        }
         for (index, marker) in forbiddenContentMarkers.enumerated() {
             // Bind the result to a Bool BEFORE the expectation, and interpolate
             // NEITHER the file text NOR the marker into the message.
@@ -171,4 +196,11 @@ private func trackedTextFiles() throws -> [String] {
                     "\(name) carries forbidden content marker #\(index); that is live session content in a public repository")
         }
     }
+
+    #expect(unreadable.isEmpty, """
+        \(unreadable.count) tracked file(s) could not be read as UTF-8, so this \
+        scan never checked them: \(unreadable.sorted())
+        Add the extension to the skip list if the file is binary, or fix the \
+        encoding. An unread file is an unguarded file.
+        """)
 }
