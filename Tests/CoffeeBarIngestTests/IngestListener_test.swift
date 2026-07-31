@@ -565,6 +565,95 @@ private func waitUntilNothingAnswers(at path: String) {
             "the first listener stopped receiving after the second one started")
 }
 
+/// A released listener keeps the socket. Only `cancel()` gives it back.
+///
+/// This is the check behind the no-cleanup comment in `ServingModel.swift`.
+/// That comment used to claim the orphan's own `NWListener` "goes with it when
+/// the object does", which is FALSE, and the false claim was the entire stated
+/// justification for shipping `ServingModel` with no cleanup path.
+///
+/// The two halves have to be measured TOGETHER, and that is the whole design of
+/// this test. The wrapper really does deallocate. Only the `NWListener` inside
+/// it survives. A maintainer who checked the wrapper alone with a weak
+/// reference would watch it go away and conclude the comment was right — which
+/// is very probably how the false sentence came to be written.
+///
+/// This test PINS A LEAK. That is deliberate. It characterises behaviour that
+/// is intentional today but not desirable: `ServingModel` cannot own the
+/// listener's lifetime, because nothing can tell an orphaned model from the
+/// live one at release time — see `aModelThatGoesAwayLeavesTheListenerAlone`.
+/// If somebody lands a real fix (a self-owned-socket check in `occupant()`, or
+/// a cleanup path owned by whoever owns the lifetime), THIS TEST SHOULD GO RED.
+/// When it does, update the comment in `ServingModel.swift` in the same commit.
+/// Do not silence this test and leave the comment behind.
+///
+/// Named bug this catches: `deinit { stop() }` on `UnixSocketIngestListener`.
+/// The same mutant `aModelThatGoesAwayLeavesTheListenerAlone` kills from the
+/// model's side, killed here at the socket instead of at a stub's counter.
+@Test func aReleasedListenerNoLongerOwnsTheSocket() throws {
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    try sandbox.makeDirectory()
+
+    weak var observed: UnixSocketIngestListener?
+
+    do {
+        let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+        try listener.start { _ in }
+        try requireReady(listener)
+        // Precondition, not the point: the socket really was bound, so what the
+        // assertions below measure is a RELEASE and not a failed bind.
+        let bound = try #require(
+            RawClient(path: sandbox.path),
+            "the listener never accepted a connection, so nothing below measures a release")
+        bound.close()
+        observed = listener
+    }
+
+    // ASSERTION A — bullet 1. The wrapper DOES go away.
+    pump(until: { observed == nil })
+    #expect(observed == nil,
+            "the UnixSocketIngestListener itself outlived its last owner, which is not what was measured")
+
+    // ASSERTION B — bullet 2, and the load-bearing one. The NWListener does NOT.
+    // Closed rather than dropped: every probe in this file gives its descriptor
+    // back, and a leaked one would sit in the listen backlog of a listener no
+    // object owns any more.
+    let leaked = RawClient(path: sandbox.path)
+    #expect(leaked != nil,
+            "the socket stopped accepting once its owner was released — the comment in ServingModel.swift is now wrong and must be corrected with this test")
+    leaked?.close()
+
+    // ASSERTION C — bullet 2's second half. The leaked socket is not merely
+    // bound: it accepts a real hook post and drops it, so an external prober
+    // calls ingest healthy while every event is lost. 52 is "empty reply from
+    // server", which is what `newConnectionHandler`'s `guard let self else
+    // { connection.cancel() }` produces once the wrapper has gone.
+    let exit = try post(#"{"hook_event_name":"PreToolUse","session_id":"s1"}"#,
+                        to: sandbox.path)
+    #expect(exit == 52,
+            "a post to the leaked socket returned \(exit), not the measured 52 (accepted, then dropped)")
+
+    // ASSERTION D — bullet 3, and the control. Without it, a machine where
+    // nothing at that path ever refuses would pass A and B for the wrong
+    // reason. Same class, same path shape, stopped explicitly instead of
+    // dropped.
+    let control = SocketSandbox()
+    defer { control.remove() }
+    try control.makeDirectory()
+
+    let stopped = UnixSocketIngestListener(socketPath: control.path)
+    try stopped.start { _ in }
+    try requireReady(stopped)
+    let answering = try #require(RawClient(path: control.path), "the control never bound")
+    answering.close()
+
+    stopped.stop()
+    waitUntilNothingAnswers(at: control.path)
+    #expect(RawClient(path: control.path) == nil,
+            "stop() did not give the socket back, so this test cannot tell release from cancel and proves nothing")
+}
+
 @Test func aNodeLeftByAStoppedListenerIsReclaimedByTheNextStart() throws {
     // Because `stop()` no longer unlinks, the connect probe has to tell a dead
     // node from a live one. Named bug this catches: a probe that reads mere
