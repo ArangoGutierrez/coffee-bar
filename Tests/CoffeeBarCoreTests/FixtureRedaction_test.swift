@@ -98,3 +98,77 @@ private let syntheticReasonSentinel = "SYNTHETIC-FIXTURE-REASON-1f4a9c"
     #expect(reason.count > 140,
             "the fixture reason is \(reason.count) characters; SessionHub's 140-character cap can no longer be proved")
 }
+
+/// Every file git TRACKS, as repo-relative paths.
+///
+/// `git ls-files` and not a directory walk: the leak this catches reached a
+/// public repository by being COMMITTED, and an untracked scratch file with the
+/// same markers is nobody's problem. Binary files are excluded by extension
+/// rather than by sniffing, because the corpus is text.
+private func trackedTextFiles() throws -> [String] {
+    let repoRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()    // …/Tests/CoffeeBarCoreTests
+        .deletingLastPathComponent()    // …/Tests
+        .deletingLastPathComponent()    // repo root
+
+    let git = Process()
+    git.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    git.arguments = ["git", "-C", repoRoot.path, "ls-files"]
+    let out = Pipe()
+    git.standardOutput = out
+    git.standardError = FileHandle.nullDevice
+    try git.run()
+    let data = out.fileHandleForReading.readDataToEndOfFile()
+    git.waitUntilExit()
+
+    guard git.terminationStatus == 0 else { return [] }
+
+    let skip = [".png", ".jpg", ".jpeg", ".gif", ".icns", ".pdf", ".zip"]
+    return String(decoding: data, as: UTF8.self)
+        .split(separator: "\n")
+        .map(String.init)
+        .filter { name in !skip.contains(where: { name.hasSuffix($0) }) }
+        .sorted()
+}
+
+@Test func noTrackedFileCarriesLiveSessionProse() throws {
+    // Named bug this catches: the leaked prose being re-published somewhere the
+    // fixtures-only scan cannot see. That is exactly what commit f419de0 did —
+    // it put the session path, a description of its contents, and a verbatim
+    // user quote into a TRACKED plan document while the fixture guard stayed
+    // green.
+    let repoRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    let files = try trackedTextFiles()
+
+    // The count guard is not decoration. A scan that resolved the wrong root
+    // finds zero files and reads as success.
+    #expect(files.count >= 50,
+            "scanned \(files.count) tracked files at \(repoRoot.path); this scan is weaker than it looks")
+
+    // This guard file NAMES the markers, so it must be exempt or it reports itself.
+    let selfPath = "Tests/CoffeeBarCoreTests/FixtureRedaction_test.swift"
+
+    for name in files where name != selfPath {
+        let url = repoRoot.appending(path: name)
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+        for (index, marker) in forbiddenContentMarkers.enumerated() {
+            // Bind the result to a Bool BEFORE the expectation, and interpolate
+            // NEITHER the file text NOR the marker into the message.
+            //
+            // swift-testing captures and prints every subexpression inside
+            // `#expect`, so the obvious `#expect(!text.contains(marker))` dumps
+            // the ENTIRE offending file — and the marker itself — into the test
+            // log, and from there into a public CI build log. A guard against
+            // re-publishing live session content must not re-publish it while
+            // reporting. Measured: that form printed all 979 lines of the
+            // offending document, four times over.
+            //
+            // The index names the offender without quoting it. `forbiddenContentMarkers`
+            // is right here in this file for anyone who needs to look it up.
+            let carriesMarker = text.contains(marker)
+            #expect(carriesMarker == false,
+                    "\(name) carries forbidden content marker #\(index); that is live session content in a public repository")
+        }
+    }
+}
