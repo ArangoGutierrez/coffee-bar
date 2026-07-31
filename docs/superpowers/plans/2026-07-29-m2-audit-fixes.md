@@ -121,9 +121,9 @@ import Testing
         var offenders: [String] = []
         for url in try Self.fixtureURLs() {
             let text = try String(contentsOf: url, encoding: .utf8)
-            for marker in forbiddenContentMarkers
+            for (index, marker) in forbiddenContentMarkers.enumerated()
             where text.contains(marker) {
-                offenders.append("\(url.lastPathComponent) contains \"\(marker)\"")
+                offenders.append("\(url.lastPathComponent) carries marker #\(index)")
             }
         }
         #expect(offenders.isEmpty, "fixtures name private material: \(offenders.joined(separator: "; "))")
@@ -180,10 +180,11 @@ Put the prose back temporarily, confirm RED, then restore. A guard that never fl
 
 ```bash
 cp Tests/Fixtures/claude-hooks/permission-denied.json /tmp/pd-good.json
-# Substitute a reason that carries the forbidden content markers. This
-# document does not reprint the prose they came from; read the markers from
-# `forbiddenContentMarkers` in Tests/CoffeeBarCoreTests/FixtureRedaction_test.swift.
-jq '.reason = "<prose captured from a live session, deliberately not recorded here>"' /tmp/pd-good.json > Tests/Fixtures/claude-hooks/permission-denied.json
+# Derive the reason from the guard instead of reprinting the prose here. Marker 0
+# is enough to trip the check, and reading it from the source keeps this block
+# executable without putting live session content back into a public document.
+LEAK=$(python3 -c 'import re; s=open("Tests/CoffeeBarCoreTests/FixtureRedaction_test.swift").read(); b=re.search(r"forbiddenContentMarkers = \[(.*?)\]", s, re.S).group(1); print(re.findall(r"\"([^\"]+)\"", b)[0])')
+jq --arg r "$LEAK" '.reason = $r' /tmp/pd-good.json > Tests/Fixtures/claude-hooks/permission-denied.json
 swift test > /tmp/t1c.log 2>&1; echo "expect FAIL: rc=$?"
 cp /tmp/pd-good.json Tests/Fixtures/claude-hooks/permission-denied.json
 cmp /tmp/pd-good.json Tests/Fixtures/claude-hooks/permission-denied.json && echo "restored"
