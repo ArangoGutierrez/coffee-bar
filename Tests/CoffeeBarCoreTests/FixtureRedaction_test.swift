@@ -147,10 +147,12 @@ private func trackedTextFiles() throws -> [String] {
 
 @Test func noTrackedFileCarriesLiveSessionProse() throws {
     // Named bug this catches: the leaked prose being re-published somewhere the
-    // fixtures-only scan cannot see. That is exactly what commit f419de0 did —
-    // it put the session path, a description of its contents, and a verbatim
+    // fixtures-only scan cannot see. That is exactly what happened once — a
+    // commit put the session path, a description of its contents, and a verbatim
     // user quote into a TRACKED plan document while the fixture guard stayed
-    // green.
+    // green. That commit was rewritten out of this branch. It is deliberately
+    // not cited: its SHA does not resolve in a clone, and the commit that
+    // replaced it carries the redacted file, so naming that one would be false.
     let repoRoot = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     let files = try trackedTextFiles()
