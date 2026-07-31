@@ -78,6 +78,86 @@ present, and the app launches. So the signing work that blocks a downloadable
 `.dmg` does not block this path. A cask becomes the better route once
 notarisation lands, for people who would rather not build.
 
+## Claude Code hooks
+
+coffee-bar learns what your agent sessions are doing from Claude Code hooks and
+from nothing else. It never writes your settings file for you. Until these five
+hooks exist the app runs, but no session event ever reaches it.
+
+Add them to `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+          }
+        ]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The two tool events take `"matcher": "*"`; the other three take no matcher.
+**If your settings file already has a `hooks` key, merge these entries into it.**
+Pasting the block whole replaces whatever hooks you already run.
+
+The app creates that socket, so start coffee-bar before the next Claude Code
+session. If the socket is missing the `curl` fails and Claude Code reports a
+hook error on every event. Check it is there:
+
+    ls -l "$HOME/Library/Application Support/coffee-bar/ingest.sock"
+
+That tells you the app is listening. It says nothing about whether your
+settings file parses — Claude Code reports that itself, at session start.
+
 ## Engineering notes
 
 - [`docs/ACCEPTED-RISKS.md`](docs/ACCEPTED-RISKS.md) — behaviour we chose to keep, with the reason and the guard.
