@@ -8,10 +8,13 @@
 
 A macOS menu-bar app that binds the sleep assertion to agent session state.
 
-**Status:** M1. The menu-bar app exists and holds the assertion from a manual
-toggle, with a 20% battery floor. It does not read agent sessions yet — that
-ingest is M2 — so the line above states what coffee-bar is for, not what it
-does today. Nothing is released.
+**Status:** M2. The line above now describes what coffee-bar does, not only what
+it is for. The app reads Claude Code session events through five hooks, tracks
+which sessions need attention, and holds the sleep assertion on a Serving switch
+with Off, Auto and On positions, over a 20% battery floor. See
+[Claude Code hooks](#claude-code-hooks) for the configuration it needs.
+
+Nothing is tagged yet. Build from source until the first release.
 
 ## M0: capability probe
 
@@ -43,9 +46,8 @@ The bundle is unsigned. Signing and notarisation arrive with M4.
 
 ## Install
 
-Nothing is released yet: there is no tag, so there is nothing to
-`brew install` today. Build from source as above. That needs macOS 14 or
-later and a Swift 6 toolchain (Xcode 16 or later).
+The first release is not tagged yet, so build from source as above. That needs
+macOS 14 or later and a Swift 6 toolchain (Xcode 16 or later).
 
 The formula lives in a dedicated tap repository,
 [`ArangoGutierrez/homebrew-coffee-bar`](https://github.com/ArangoGutierrez/homebrew-coffee-bar),
@@ -53,16 +55,14 @@ because `brew tap user/repo` resolves to `github.com/user/homebrew-repo` — a
 `Formula/` directory in this repository is not tappable by the conventional
 one-argument command.
 
-The tap exists and carries the formula. The install will be:
+Once that tap is published and the first release is tagged, the install is:
 
     brew tap ArangoGutierrez/coffee-bar
     brew install coffee-bar
 
-**Neither command succeeds yet.** The formula pins a release tarball by tag and
-SHA-256, and no release is tagged, so `url` points at a tag that does not exist
-and `sha256` is still a placeholder. Both are pinned when the first release is
-cut. Until then the formula carries a `head` block, so it can be exercised with
-`brew install --HEAD ArangoGutierrez/coffee-bar/coffee-bar`.
+**Neither command succeeds yet.** The tap repository does not exist, and the
+formula pins a release tarball by tag and SHA-256 that no release has produced.
+Both land together with the first release.
 
 The formula installs **both** the `coffee-bar-probe` capability probe and the
 `CoffeeBar.app` menu-bar app. Homebrew formulae do not write to `/Applications`,
