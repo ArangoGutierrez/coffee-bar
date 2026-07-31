@@ -15,8 +15,13 @@ SRC = pathlib.Path(sys.argv[1])
 DST = pathlib.Path(sys.argv[2])
 
 # Values replaced wholesale: they carry conversation or command content.
+# `reason` carries free prose on BOTH PermissionDenied and SessionEnd, and they
+# mean unrelated things: 599 characters of panel text on one, the code `other`
+# on the other. It is the field that leaked. `last_assistant_message` is already
+# here; this closes the sibling that was missed. A key-based scrubber cannot
+# tell the two meanings apart, and losing the short code is the cheaper error.
 CONTENT_KEYS = {"last_assistant_message", "tool_input", "tool_response",
-                "prompt", "message", "background_tasks"}
+                "prompt", "message", "background_tasks", "reason"}
 # Identifiers replaced with stable fakes so tests can assert on them.
 ID_MAP = {
     "session_id": "11111111-2222-3333-4444-555555555555",
