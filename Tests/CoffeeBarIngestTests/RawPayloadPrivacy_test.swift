@@ -453,11 +453,17 @@ private func loggingCallsCarryingAValue(in code: String) -> [String] {
     /// same sink as `log.error(…)`, and an optional `Logger` is ordinary Swift:
     /// one character walked past this whole rule until this line existed.
     ///
-    /// Whitespace before the dot is stepped over only back to a bracket, which
-    /// is what reads `Logger(…)\n    .error(` — a chained call is the one thing
-    /// that can be meant there. It is NOT stepped over back to an identifier:
-    /// `case .error:` reaches `case` that way, and reporting a switch is how a
-    /// guard gets deleted.
+    /// Whitespace before the dot is stepped over only back to a bracket, or to
+    /// a `?` or `!` that itself follows a receiver. The bracket reads
+    /// `Logger(…)\n    .error(`; the `?` reads `log?\n    .error(`. Both are
+    /// chained calls, which is the one thing that can be meant there. It is NOT
+    /// stepped over back to an identifier: `case .error:` reaches `case` that
+    /// way, and reporting a switch is how a guard gets deleted.
+    ///
+    /// A `?` reached ACROSS whitespace needs the extra test, where one touching
+    /// the dot does not. `isBad ? .error : .info` puts a space on both sides of
+    /// the `?`, so demanding a receiver immediately before it refuses the
+    /// ternary and keeps the chain.
     func receiverEnds(before dot: Int) -> Bool {
         guard dot > 0 else { return false }
         var end = dot
@@ -472,7 +478,21 @@ private func loggingCallsCarryingAValue(in code: String) -> [String] {
             back -= 1
         }
         guard back >= 0 else { return false }
-        return characters[back] == ")" || characters[back] == "]" || characters[back] == "}"
+        if characters[back] == ")" || characters[back] == "]" || characters[back] == "}" {
+            return true
+        }
+        // `log?\n    .error(` — the same optional chain, broken across a line.
+        // Reading `?` only where it touches the dot walked past this spelling.
+        // The `?` counts only when a receiver ends IMMEDIATELY before it: a
+        // ternary writes a space there (`isBad ? .error : .info`), so this
+        // refuses the ternary while accepting the chain.
+        if characters[back] == "?" || characters[back] == "!" {
+            guard back > 0 else { return false }
+            let prior = characters[back - 1]
+            return isIdentifierCharacter(prior)
+                || prior == ")" || prior == "]" || prior == "}"
+        }
+        return false
     }
 
     /// The longest message method called on a receiver at `index`.
@@ -816,6 +836,12 @@ private func ingestPathEntriesFound() throws -> [String] {
 
         ("a Logger reached through a force unwrap is refused",
          "log!.error(\"\"(body))", 1),
+
+        // The same sink again, with the chain broken across a line. A formatter
+        // handling a long chain writes this, and reading `?` only when it
+        // touches the dot walked past it.
+        ("an optional chain broken across a line is refused",
+         "log?\n    .error(\"\"(body))", 1),
 
         // A member READ is not a call, and this rule cannot know the receiver's
         // type. Reporting these would report ordinary Swift, which is how a
