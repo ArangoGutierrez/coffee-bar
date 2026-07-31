@@ -1,5 +1,15 @@
 # Handoff — walking to v0.1
 
+> **SUPERSEDED 2026-07-31. Do not plan from this file.**
+> Section 1 says the whole-branch review is NOT DONE. It ran on 2026-07-29 as
+> workflow `wf_b4c8efd5-8de` — 39 agents, 23 confirmed findings — and the
+> findings are in `.superpowers/sdd/m2-audit-findings.md`. A verification pass on
+> 2026-07-31 measured 15 CLOSED, 4 PARTIAL, 4 OPEN.
+> Section B says a downloadable app is blocked on Apple Developer membership.
+> Signing was never the blocker for the Homebrew path: `com.apple.quarantine` is
+> applied by the DOWNLOADER, so a build-from-source formula sidesteps Gatekeeper.
+> **The current state lives in `.superpowers/sdd/progress.md`.** Read that first.
+
 Written 2026-07-29. Supersedes `docs/HANDOFF-M2.md` for current state; that file
 keeps the M1 history.
 
