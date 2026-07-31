@@ -78,6 +78,10 @@ present, and the app launches. So the signing work that blocks a downloadable
 `.dmg` does not block this path. A cask becomes the better route once
 notarisation lands, for people who would rather not build.
 
+## Engineering notes
+
+- [`docs/ACCEPTED-RISKS.md`](docs/ACCEPTED-RISKS.md) — behaviour we chose to keep, with the reason and the guard.
+
 ## Licence
 
 Apache-2.0. "Claude Code" is a third-party mark used nominatively; coffee-bar is
