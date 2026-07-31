@@ -156,8 +156,9 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
     ///
     /// The lock is released BEFORE the syscall. This is polled in tight loops,
     /// not only on the 30 s refresh, and `accept` takes the same lock on every
-    /// connection. Measured at 1.3 µs per call against 11.9 ns for the bare
-    /// flag: 113 times the cost, and 0.0067 % of a core at one call per 20 ms.
+    /// connection. Measured at 1.3 µs per call, which is 0.0067 % of a core at
+    /// one call per 20 ms. No ratio against the bare flag is quoted: that
+    /// multiplier moves with machine load, where both absolutes reproduce.
     ///
     /// `stop()` still clears the identity, and that is still load-bearing: it
     /// leaves the node in place on purpose, so the node alone cannot say that
