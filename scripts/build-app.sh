@@ -237,11 +237,23 @@ Built ${APP} (version ${VERSION}, unsigned)
 Launch it:
 
     open "${APP}"
+DONE
+
+# The checklist lives under .superpowers/, which git does not track, so a build
+# from a release tarball has no such file — and this was the last thing every
+# `brew install` user saw: a path into a directory that is not there. Guard it
+# rather than drop it, so a maintainer building a full checkout keeps the
+# pointer.
+CHECKLIST=".superpowers/sdd/2026-07-28-coffee-bar-m1/task6-acceptance-checklist.md"
+
+if [ -f "${REPO_ROOT}/${CHECKLIST}" ]; then
+    cat <<DONE
 
 Then run the manual acceptance checklist:
 
-    .superpowers/sdd/2026-07-28-coffee-bar-m1/task6-acceptance-checklist.md
+    ${CHECKLIST}
 DONE
+fi
 
 # Read the process table again: the build takes minutes, and an instance can
 # start or stop inside that window.
