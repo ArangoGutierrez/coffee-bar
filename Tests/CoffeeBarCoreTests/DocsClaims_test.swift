@@ -5,7 +5,8 @@ import Foundation
 import Testing
 @testable import CoffeeBarCore
 
-/// Guards the README's factual claims against the constants that settle them.
+/// Guards the user-facing documents' factual claims against the constants that
+/// settle them.
 ///
 /// **Why this file exists.** On 2026-08-01 an audit found that no test in this
 /// repository could see documentation prose — `git grep README Tests` returned
@@ -40,14 +41,6 @@ private func repoRoot() -> URL {
         .deletingLastPathComponent()    // repo root
 }
 
-private func readmeText() throws -> String {
-    let url = repoRoot().appending(path: "README.md")
-    guard let text = try? String(contentsOf: url, encoding: .utf8) else {
-        throw ReadmeUnreadable(path: url.path)
-    }
-    return text
-}
-
 /// The README with fenced blocks and inline code removed.
 ///
 /// Claims live in PROSE. A `--max-time 5` inside the hook command is not a claim
@@ -65,7 +58,18 @@ private func readmeProse(_ text: String) -> String {
 ///
 /// `site/index.html` is the higher-risk of the two: it is what a stranger reads
 /// first, and until this file existed nothing in the suite could see it.
-private let documentedSurfaces = ["README.md", "site/index.html"]
+/// The page that carries the required-hook JSON block.
+///
+/// It moved from README.md to the quick start on 2026-08-01. When the block
+/// moves again, change THIS and `theHookBlockIsExactlyTheRequiredEvents`
+/// follows. Leaving it pointed at a page that no longer holds the block does
+/// not fail loudly on its own — the block check would report "no json block" —
+/// but `theGuardStillMatchesRealClaims` is what stops coverage vanishing
+/// quietly, so keep both in step.
+private let hookBlockSurface = "docs/QUICKSTART.md"
+
+private let documentedSurfaces = ["README.md", "docs/QUICKSTART.md",
+                                  "docs/BUILDING.md", "site/index.html"]
 
 /// An HTML page reduced to prose.
 ///
@@ -86,6 +90,14 @@ private func htmlProse(_ text: String) -> String {
 }
 
 /// The prose of one documented surface, with code and markup removed.
+private func surfaceText(_ name: String) throws -> String {
+    let url = repoRoot().appending(path: name)
+    guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+        throw ReadmeUnreadable(path: url.path)
+    }
+    return text
+}
+
 private func surfaceProse(_ name: String) throws -> String {
     let url = repoRoot().appending(path: name)
     guard let text = try? String(contentsOf: url, encoding: .utf8) else {
@@ -132,24 +144,69 @@ func everyDocumentedSurfaceIsReadableAndSubstantial(_ name: String) throws {
 
 // MARK: - Claim 1: the hook count
 
-@Test func theReadmeHookBlockIsExactlyTheRequiredEvents() throws {
-    let text = try readmeText()
+@Test func theHookBlockIsExactlyTheRequiredEvents() throws {
+    let text = try surfaceText(hookBlockSurface)
 
     // The FIRST fenced json block is the required-hook block. The optional
     // SessionEnd snippet is a separate, later block on purpose.
     let blocks = try matches("```json\\n([\\s\\S]*?)\\n```", in: text).map { $0[1] }
-    #expect(!blocks.isEmpty, "no json block found in README; the guard cannot run")
+    #expect(!blocks.isEmpty, "no json block in \(hookBlockSurface); the guard cannot run")
     guard let first = blocks.first else { return }
 
     let parsed = try JSONSerialization.jsonObject(with: Data(first.utf8))
     let hooks = (parsed as? [String: Any])?["hooks"] as? [String: Any]
-    #expect(hooks != nil, "the README's first json block has no `hooks` object")
+    #expect(hooks != nil, "the first json block in \(hookBlockSurface) has no `hooks` object")
     guard let hooks else { return }
 
     let documented = Set(hooks.keys)
     let required = Set(HookHealth.requiredEvents)
     #expect(documented == required,
-            "README hook block documents \(documented.sorted()); HookHealth.requiredEvents is \(required.sorted())")
+            "\(hookBlockSurface) documents \(documented.sorted()); HookHealth.requiredEvents is \(required.sorted())")
+}
+
+/// "The two tool events take `"matcher": "*"`; the other three take no matcher."
+///
+/// Both halves are claims about the block printed directly above them, and a
+/// mutation check found neither was guarded: the hook-count pattern needs the
+/// word "hooks" within 25 characters, and this sentence says "matcher". The
+/// numbers are read back out of the block itself, so the sentence cannot drift
+/// away from what the page tells a user to paste.
+@Test func theMatcherSplitTheProseStatesMatchesTheBlock() throws {
+    let text = try surfaceText(hookBlockSurface)
+    let words = ["one": 1, "two": 2, "three": 3, "four": 4, "five": 5]
+
+    let blocks = try matches("```json\\n([\\s\\S]*?)\\n```", in: text).map { $0[1] }
+    guard let first = blocks.first,
+          let parsed = try? JSONSerialization.jsonObject(with: Data(first.utf8)),
+          let hooks = (parsed as? [String: Any])?["hooks"] as? [String: Any]
+    else {
+        Issue.record("cannot parse the hook block in \(hookBlockSurface)")
+        return
+    }
+
+    var withMatcher = 0
+    var without = 0
+    for (_, value) in hooks {
+        guard let groups = value as? [[String: Any]], let group = groups.first else { continue }
+        if group["matcher"] == nil { without += 1 } else { withMatcher += 1 }
+    }
+
+    // RAW text, not prose. The first half of the sentence spells the word inside
+    // backticks — "take `"matcher": "*"`" — and `readmeProse` strips inline code,
+    // which deleted the very word this pattern looks for. Measured: prose gave 1
+    // match where raw gives 2, and the single match was the SECOND half, so the
+    // check compared "three" against the with-matcher count and failed
+    // misleadingly rather than not at all.
+    let found = try matches(
+        "\\b(one|two|three|four|five)\\b[^.\\n]{0,40}?matcher", in: text)
+    #expect(found.count >= 2,
+            "expected both halves of the matcher sentence in \(hookBlockSurface), found \(found.count)")
+
+    let stated = found.compactMap { words[$0[1].lowercased()] }
+    #expect(stated.first == withMatcher,
+            "\(hookBlockSurface) says \(found.first?[1] ?? "?") events take a matcher; the block has \(withMatcher)")
+    #expect(stated.last == without,
+            "\(hookBlockSurface) says \(found.last?[1] ?? "?") take no matcher; the block has \(without)")
 }
 
 /// The patterns below still match live claims.
@@ -160,10 +217,20 @@ func everyDocumentedSurfaceIsReadableAndSubstantial(_ name: String) throws {
 /// README, which is known to carry one of each. If a pattern rots, this goes red
 /// instead of every other check silently scanning nothing.
 @Test func theGuardStillMatchesRealClaims() throws {
-    let prose = try surfaceProse("README.md")
-    #expect(try !matches(hookCountPattern, in: prose).isEmpty, "no '<number> hooks' phrase found")
-    #expect(try !matches(durationPattern, in: prose).isEmpty, "no duration found")
-    #expect(try !matches(percentPattern, in: prose).isEmpty, "no percentage found")
+    // Each claim type is pinned against the surface that actually carries it.
+    // These pairings are the coverage map: if the docs are reorganised again and
+    // this is not updated, this test goes red rather than every other check
+    // silently scanning a page that no longer holds the claim.
+    let quickstart = try surfaceProse("docs/QUICKSTART.md")
+    #expect(try !matches(hookCountPattern, in: quickstart).isEmpty,
+            "no '<number> hooks' phrase in the quick start")
+    #expect(try !matches(durationPattern, in: quickstart).isEmpty,
+            "no duration in the quick start")
+    #expect(try !matches("`blockedTimeout`", in: try surfaceText("docs/QUICKSTART.md")).isEmpty,
+            "the quick start no longer names blockedTimeout")
+
+    let readme = try surfaceProse("README.md")
+    #expect(try !matches(percentPattern, in: readme).isEmpty, "no percentage in the README")
 
     let site = try surfaceProse("site/index.html")
     #expect(try !matches(hookCountPattern, in: site).isEmpty, "no '<number> hooks' phrase on the site")
@@ -212,14 +279,15 @@ func everyDurationStatedIsARealProductConstant(_ name: String) throws {
     }
 }
 
-@Test func everyNamedConstantMatchesTheNumberBesideIt() throws {
-    let text = try readmeText()
+@Test(arguments: documentedSurfaces)
+func everyNamedConstantMatchesTheNumberBesideIt(_ name: String) throws {
+    let text = try surfaceText(name)
 
     // `blockedTimeout` — 14400 seconds  ->  the number must be THAT constant,
     // not merely some real constant. This is the check that catches quoting a
     // genuine value against the wrong path.
-    for (name, expected) in productConstants {
-        let found = try matches("`\(name)`[^\\n]{0,40}?(\\d[\\d,_]*)\\s*(second|minute|hour)s?",
+    for (constant, expected) in productConstants {
+        let found = try matches("`\(constant)`[^\\n]{0,40}?(\\d[\\d,_]*)\\s*(second|minute|hour)s?",
                             in: text)
         for m in found {
             let digits = m[1].replacingOccurrences(of: ",", with: "")
@@ -227,7 +295,7 @@ func everyDurationStatedIsARealProductConstant(_ name: String) throws {
             guard let value = Double(digits),
                   let scale = secondsPerUnit[m[2].lowercased()] else { continue }
             #expect(value * scale == expected,
-                    "README puts \(m[1]) \(m[2])s beside `\(name)`, but that constant is \(Int(expected)) s")
+                    "\(name) puts \(m[1]) \(m[2])s beside `\(constant)`, but that constant is \(Int(expected)) s")
         }
     }
 }
