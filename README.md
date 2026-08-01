@@ -55,14 +55,16 @@ because `brew tap user/repo` resolves to `github.com/user/homebrew-repo` — a
 `Formula/` directory in this repository is not tappable by the conventional
 one-argument command.
 
-Once that tap is published and the first release is tagged, the install is:
+Once the first release is tagged, the install is:
 
     brew tap ArangoGutierrez/coffee-bar
     brew install coffee-bar
 
-**Neither command succeeds yet.** The tap repository does not exist, and the
-formula pins a release tarball by tag and SHA-256 that no release has produced.
-Both land together with the first release.
+**The second command does not succeed yet.** The tap exists and the first
+command works. Its formula still pins a release tarball by tag and SHA-256 that
+no release has produced, so the install fails on the checksum. That formula also
+installs the probe alone; the version that installs `CoffeeBar.app` lands with
+the first release.
 
 The formula installs **both** the `coffee-bar-probe` capability probe and the
 `CoffeeBar.app` menu-bar app. Homebrew formulae do not write to `/Applications`,
