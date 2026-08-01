@@ -72,10 +72,10 @@ machine is free to sleep — and it wakes into work when you answer.
   <li>Holds <code>PreventUserIdleSystemSleep</code>, bound to live agent session state.</li>
   <li><strong>Never holds a display assertion.</strong> The screen still sleeps while the work continues.</li>
   <li>Releases when every agent is blocked on input, not when a timer expires.</li>
-  <li>Shows which sessions are working and which are waiting on you.</li>
+  <li>Shows how many sessions are working, and which ones are waiting on you.</li>
   <li>Retires a session whose agent crashed, so a dead process cannot pin the machine awake for ever.</li>
   <li>Three positions — Off, Auto, On. <strong>Off is an absolute veto</strong> and outranks everything.</li>
-  <li>A battery floor: below 20% on battery, it does not hold.</li>
+  <li>A battery floor: at or below 20% on battery, it does not hold.</li>
 </ul>
 
 <div class="note">
