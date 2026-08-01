@@ -151,6 +151,28 @@ The two tool events take `"matcher": "*"`; the other three take no matcher.
 **If your settings file already has a `hooks` key, merge these entries into it.**
 Pasting the block whole replaces whatever hooks you already run.
 
+### Optional: retire a session as soon as it ends
+
+The five hooks above are what the app checks for. `SessionEnd` is optional and
+it removes a delay. Add this entry beside them:
+
+```json
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+          }
+        ]
+      }
+    ]
+```
+
+Without it, a finished session stays in the list until the staleness timeout
+expires, which takes 15 minutes or more. The timeout runs either way, so a
+missing `SessionEnd` costs you that delay and nothing else.
+
 The app creates that socket, so start coffee-bar before the next Claude Code
 session. If the socket is missing the `curl` fails and Claude Code reports a
 hook error on every event. Check it is there:
