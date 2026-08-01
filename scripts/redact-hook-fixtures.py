@@ -1,4 +1,6 @@
 #!/usr/bin/env python3.12
+# Copyright 2026 Carlos Eduardo Arango Gutierrez
+# SPDX-License-Identifier: Apache-2.0
 """Turn captured hook payloads into public-safe fixtures.
 
 Keeps SHAPE — every key, every type, nesting — because that is what the decode
