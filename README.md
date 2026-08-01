@@ -173,9 +173,9 @@ Without it, a finished session stays in the list for **4 hours**. Its last event
 is `Stop`, which leaves the session waiting on you, and a waiting session takes
 `blockedTimeout` — 14400 seconds — not the 900-second working timeout.
 
-That session does not hold the assertion while it waits, because a blocked
-session holds nothing unless you turn on "stay awake while blocked". So the cost
-is a stale row in the list, not a Mac that will not sleep.
+That session does not hold the assertion while it waits. A session that waits on
+you holds nothing. So the cost is a stale row in the list, not a Mac that will
+not sleep.
 
 The app creates that socket, so start coffee-bar before the next Claude Code
 session. If the socket is missing the `curl` fails and Claude Code reports a
