@@ -65,7 +65,7 @@ Closes **B1 (blocking)**. 599 characters of unredacted live-session prose sit in
 - [ ] **Step 1: See exactly what is exposed**
 
 ```bash
-cd /Users/eduardoa/src/github/ArangoGutierrez/coffee-bar
+cd $HOME/src/github/ArangoGutierrez/coffee-bar
 jq -r '.reason' Tests/Fixtures/claude-hooks/permission-denied.json | wc -c
 jq -r 'keys[]' Tests/Fixtures/claude-hooks/permission-denied.json
 ```
@@ -157,7 +157,7 @@ Expected: both tests FAIL, naming `permission-denied.json`. If `theFixtureScanAc
 Replace the `reason` value with a synthetic string that keeps the SHAPE the decoder needs and carries no real content. Preserve every other key and the field's type.
 
 ```bash
-cd /Users/eduardoa/src/github/ArangoGutierrez/coffee-bar
+cd $HOME/src/github/ArangoGutierrez/coffee-bar
 jq '.reason = "Permission denied by policy: the tool call was refused."' \
   Tests/Fixtures/claude-hooks/permission-denied.json > /tmp/pd.json
 mv /tmp/pd.json Tests/Fixtures/claude-hooks/permission-denied.json
@@ -917,7 +917,7 @@ The leak line does not exist yet. A green guard here is correct.
 Plant the exact leak the audit described, confirm RED, then remove it.
 
 ```bash
-cd /Users/eduardoa/src/github/ArangoGutierrez/coffee-bar
+cd $HOME/src/github/ArangoGutierrez/coffee-bar
 cp Sources/CoffeeBarIngest/IngestListener.swift /tmp/il-good.swift
 # Insert the NSLog immediately before the decode in receive(), then:
 git diff --stat Sources/CoffeeBarIngest/IngestListener.swift   # prove the mutant applied

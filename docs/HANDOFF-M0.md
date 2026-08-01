@@ -6,7 +6,7 @@ reviewed, merged. 152 tests (3 suites), zero warnings, acceptance green.
 
 ## Context
 
-- Repo: `/Users/eduardoa/src/github/ArangoGutierrez/coffee-bar`
+- Repo: `$HOME/src/github/ArangoGutierrez/coffee-bar`
 - Branch: `feat/m0-capability-probe` @ (see `git log -1`) — all four branches merged
 - Nothing pushed. `origin` has no branches. Repo is public and empty.
 - Working tree clean except the untracked `Coffee-bar menu bar identity.zip` (leave it — assets are already vendored under `assets/art/`)
@@ -135,7 +135,7 @@ execution checklists live in `docs/ROADMAP.md`. Summary:
 ## Verification before claiming done
 
 ```
-cd /Users/eduardoa/src/github/ArangoGutierrez/coffee-bar
+cd $HOME/src/github/ArangoGutierrez/coffee-bar
 D=$TMPDIR/cbv-$$; rm -rf "$D"; mkdir -p "$D"; git archive HEAD | tar -x -C "$D"
 swift build --package-path "$D"
 swift build --package-path "$D" -c release

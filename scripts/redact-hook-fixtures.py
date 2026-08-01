@@ -11,6 +11,12 @@ missed field fails loudly instead of shipping.
 import json, sys, pathlib, re
 
 HOME = str(pathlib.Path.home())
+# Derived, never written out. This file is TRACKED, and the tree-wide guard in
+# Tests/CoffeeBarCoreTests/FixtureRedaction_test.swift refuses to let the real
+# username sit in a tracked file — a literal here would make this script the one
+# file that fails its own rule. Deriving it also makes the refusal below work
+# for whoever runs this next.
+USERNAME = pathlib.Path(HOME).name
 SRC = pathlib.Path(sys.argv[1])
 DST = pathlib.Path(sys.argv[2])
 
@@ -34,7 +40,7 @@ def scrub_path(s: str) -> str:
 
     Claude Code slugifies a project path into the transcript filename, turning
     every '/' into '-'. So one string can carry the same home directory twice in
-    two alphabets: '/Users/eduardoa/src/...' and '-Users-eduardoa-src-...'. A
+    two alphabets: '/Users/<you>/src/...' and '-Users-<you>-src-...'. A
     literal replace fixes the first and sails past the second — which is exactly
     what happened, and what the guard below caught.
     """
@@ -86,7 +92,7 @@ for kind, doc in sorted(seen.items()):
     # Fail loudly rather than ship a leak.
     if HOME in text:
         sys.exit(f"REFUSING: {kind} still contains the real home directory")
-    if "eduardoa" in text:
+    if USERNAME in text:
         sys.exit(f"REFUSING: {kind} still contains the real username")
     name = re.sub(r"(?<!^)(?=[A-Z])", "-", kind).lower() + ".json"
     (DST / name).write_text(text)

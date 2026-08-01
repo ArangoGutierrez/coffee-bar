@@ -51,7 +51,12 @@ private let forbiddenContentMarkers = [
 ]
 
 /// The real username. `scripts/redact-hook-fixtures.py` refuses to emit a
-/// fixture containing it; this guard refuses to let one sit in the tree.
+/// fixture containing it; the two guards below refuse to let it sit in a
+/// fixture, or anywhere else git tracks.
+///
+/// This is the only place in the tree that writes the name out. That is load
+/// bearing, not incidental: `noTrackedFileCarriesLiveSessionProse` scans every
+/// tracked file for this string and exempts exactly one path, its own.
 private let forbiddenUsername = "eduardoa"
 
 /// The marker that says `permission-denied.json` carries the synthetic reason
@@ -197,6 +202,21 @@ private func trackedTextFiles() throws -> [String] {
             #expect(carriesMarker == false,
                     "\(name) carries forbidden content marker #\(index); that is live session content in a public repository")
         }
+
+        // The username scan is deliberately the BARE name and not "/Users/<name>".
+        // The leak this repository actually suffered arrived in the slugified
+        // alphabet — `-Users-<name>-src-` inside a transcript filename — which a
+        // "/Users/" form sails past. `scripts/redact-hook-fixtures.py` documents
+        // that same pair of alphabets, and its own refusal check is the bare name
+        // for the same reason.
+        //
+        // Bound to a Bool before the expectation, and neither the text nor the
+        // name is interpolated into the message, exactly as above: a guard
+        // against re-publishing an identifier must not re-publish it in a public
+        // CI log while reporting.
+        let carriesUsername = text.contains(forbiddenUsername)
+        #expect(carriesUsername == false,
+                "\(name) carries the real username; write $HOME or ~ instead of the absolute home path")
     }
 
     #expect(unreadable.isEmpty, """
