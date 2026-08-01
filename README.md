@@ -42,7 +42,10 @@ schedule — that is the difference from `caffeinate -d`. Check both with:
 
     pmset -g assertions | grep coffee-bar
 
-The bundle is unsigned. Signing and notarisation arrive with M4.
+The bundle is ad-hoc signed, not notarised. `codesign -dv` reports
+`Signature=adhoc`. That is enough to run on the machine that built it, and not
+enough for Gatekeeper to accept a copy handed to another Mac. Developer ID
+signing and notarisation are planned release work.
 
 ## Install
 
@@ -61,15 +64,14 @@ Once the first release is tagged, the install is:
     brew install coffee-bar
 
 **The second command does not succeed yet.** The tap exists and the first
-command works. Its formula still pins a release tarball by tag and SHA-256 that
-no release has produced, so the install fails on the checksum. That formula also
-installs the probe alone; the version that installs `CoffeeBar.app` lands with
-the first release.
+command works. Its formula pins a release tarball by tag, and no tag has produced
+one, so the download returns HTTP 404 and the install stops there. It does not
+reach the checksum. The published formula also installs the probe alone.
 
-The formula installs **both** the `coffee-bar-probe` capability probe and the
-`CoffeeBar.app` menu-bar app. Homebrew formulae do not write to `/Applications`,
-so the app lands in the Homebrew prefix and the install prints the one command
-that links it there.
+The formula that ships with the first release installs **both** the
+`coffee-bar-probe` capability probe and the `CoffeeBar.app` menu-bar app.
+Homebrew formulae do not write to `/Applications`, so the app lands in the
+Homebrew prefix and the install prints the one command that links it there.
 
 **Why a formula and not a cask, while the app is unsigned.** A cask distributes
 a *downloaded* binary, and anything downloaded arrives carrying
@@ -83,8 +85,10 @@ notarisation lands, for people who would rather not build.
 ## Claude Code hooks
 
 coffee-bar learns what your agent sessions are doing from Claude Code hooks and
-from nothing else. It never writes your settings file for you. Until these five
-hooks exist the app runs, but no session event ever reaches it.
+from nothing else. It never writes your settings file for you. Until you add
+them, the app runs but no session event reaches it. Each hook you add starts
+delivering its own events; the health check asks for all five before it reports
+the install as complete.
 
 Add them to `~/.claude/settings.json`:
 
