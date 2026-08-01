@@ -1,4 +1,6 @@
 #!/usr/bin/env python3.12
+# Copyright 2026 Carlos Eduardo Arango Gutierrez
+# SPDX-License-Identifier: Apache-2.0
 """Turn captured hook payloads into public-safe fixtures.
 
 Keeps SHAPE — every key, every type, nesting — because that is what the decode
@@ -11,12 +13,23 @@ missed field fails loudly instead of shipping.
 import json, sys, pathlib, re
 
 HOME = str(pathlib.Path.home())
+# Derived, never written out. This file is TRACKED, and the tree-wide guard in
+# Tests/CoffeeBarCoreTests/FixtureRedaction_test.swift refuses to let the real
+# username sit in a tracked file — a literal here would make this script the one
+# file that fails its own rule. Deriving it also makes the refusal below work
+# for whoever runs this next.
+USERNAME = pathlib.Path(HOME).name
 SRC = pathlib.Path(sys.argv[1])
 DST = pathlib.Path(sys.argv[2])
 
 # Values replaced wholesale: they carry conversation or command content.
+# `reason` carries free prose on BOTH PermissionDenied and SessionEnd, and they
+# mean unrelated things: 599 characters of panel text on one, the code `other`
+# on the other. It is the field that leaked. `last_assistant_message` is already
+# here; this closes the sibling that was missed. A key-based scrubber cannot
+# tell the two meanings apart, and losing the short code is the cheaper error.
 CONTENT_KEYS = {"last_assistant_message", "tool_input", "tool_response",
-                "prompt", "message", "background_tasks"}
+                "prompt", "message", "background_tasks", "reason"}
 # Identifiers replaced with stable fakes so tests can assert on them.
 ID_MAP = {
     "session_id": "11111111-2222-3333-4444-555555555555",
@@ -29,7 +42,7 @@ def scrub_path(s: str) -> str:
 
     Claude Code slugifies a project path into the transcript filename, turning
     every '/' into '-'. So one string can carry the same home directory twice in
-    two alphabets: '/Users/eduardoa/src/...' and '-Users-eduardoa-src-...'. A
+    two alphabets: '/Users/<you>/src/...' and '-Users-<you>-src-...'. A
     literal replace fixes the first and sails past the second — which is exactly
     what happened, and what the guard below caught.
     """
@@ -81,7 +94,7 @@ for kind, doc in sorted(seen.items()):
     # Fail loudly rather than ship a leak.
     if HOME in text:
         sys.exit(f"REFUSING: {kind} still contains the real home directory")
-    if "eduardoa" in text:
+    if USERNAME in text:
         sys.exit(f"REFUSING: {kind} still contains the real username")
     name = re.sub(r"(?<!^)(?=[A-Z])", "-", kind).lower() + ".json"
     (DST / name).write_text(text)

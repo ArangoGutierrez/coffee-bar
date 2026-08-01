@@ -36,6 +36,26 @@ struct AssertionHolderTests {
         return (byProcess[pid] ?? []).filter { $0["AssertName"] as? String == name }
     }
 
+    /// Every assertion TYPE this process owns, whatever each assertion is
+    /// CALLED.
+    ///
+    /// `liveAssertions(named:)` filters by `AssertName`, and that filter is
+    /// finding B6. An assertion raised under any other name is invisible to it,
+    /// so six lines inside `acquire()` could pin the display awake with this
+    /// whole suite green. The type is what IOKit acts on; the name is only what
+    /// `pmset -g assertions` prints, and nothing stops a second assertion from
+    /// choosing a different one.
+    private func liveAssertionTypes() -> [String] {
+        var unmanaged: Unmanaged<CFDictionary>?
+        guard IOPMCopyAssertionsByProcess(&unmanaged) == kIOReturnSuccess,
+            let byProcess = unmanaged?.takeRetainedValue() as? [NSNumber: [[String: Any]]]
+        else {
+            return []
+        }
+        let pid = NSNumber(value: ProcessInfo.processInfo.processIdentifier)
+        return (byProcess[pid] ?? []).compactMap { $0["AssertType"] as? String }
+    }
+
     // MARK: - Naming
 
     @Test func assertionNameIdentifiesCoffeeBarToPmset() {
@@ -138,11 +158,55 @@ struct AssertionHolderTests {
 
         // The product's whole point versus `caffeinate -d` / KeepingYouAwake is
         // that the screen is still allowed to sleep. Holding
-        // PreventUserIdleDisplaySleep — under our name or any other — would
-        // destroy that.
+        // PreventUserIdleDisplaySleep would destroy that.
+        //
+        // SCOPE, corrected: this reads only assertions carrying OUR name, so it
+        // proves the named assertion is the system-sleep one. It does NOT see an
+        // assertion raised under a different name — that is finding B6, and
+        // `noDisplayAssertionIsHeldUnderAnyNameWhileServing` below is what
+        // covers it.
         let types = liveAssertions(named: AssertionHolder.assertionName)
             .compactMap { $0["AssertType"] as? String }
         #expect(types == ["PreventUserIdleSystemSleep"])
         #expect(types.contains("PreventUserIdleDisplaySleep") == false)
+    }
+
+    @Test func noDisplayAssertionIsHeldUnderAnyNameWhileServing() {
+        // Finding B6, the behavioural half, and the audit's exact escape: six
+        // lines inside `acquire()` raising
+        // `kIOPMAssertionTypePreventUserIdleDisplaySleep` under any name other
+        // than `AssertionHolder.assertionName`. Every other check in this file
+        // filters by name and stays green while the display is pinned awake.
+        //
+        // So this asserts on the TYPES the PROCESS owns and never mentions a
+        // name. Reading the process rather than the holder also catches a
+        // display assertion raised anywhere else in CoffeeBarPower during
+        // `acquire()`, which no name filter could reach.
+        let holder = AssertionHolder()
+        defer { holder.release() }
+
+        #expect(holder.acquire() == true)
+
+        let types = liveAssertionTypes()
+
+        // Proves the read WORKED. `IOPMCopyAssertionsByProcess` failing returns
+        // an empty list, which would make the check below vacuously true — the
+        // exact theater this test exists to remove. Serving means this process
+        // owns a system-sleep assertion, so its absence is a broken read.
+        #expect(types.contains("PreventUserIdleSystemSleep"), """
+            the process owns no PreventUserIdleSystemSleep assertion while \
+            serving, so this read found nothing and proves nothing: \(types)
+            """)
+
+        // Both documented display-holding types. `kIOPMAssertionTypeNoDisplay\
+        // Sleep` is the legacy spelling and its value is "NoDisplaySleepAssertion".
+        for displayType in ["PreventUserIdleDisplaySleep", "NoDisplaySleepAssertion"] {
+            #expect(types.contains(displayType) == false, """
+                this process holds a \(displayType) assertion while serving. \
+                Letting the display sleep while the machine stays awake is the \
+                product's whole difference from caffeinate -d (design §6.1). \
+                Live types: \(types)
+                """)
+        }
     }
 }

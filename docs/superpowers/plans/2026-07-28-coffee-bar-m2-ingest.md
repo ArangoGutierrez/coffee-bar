@@ -1506,7 +1506,7 @@ arm64-apple-macos14.0` and run against `/usr/bin/curl 8.7.1`:
 
 ```
 === socket node ===
-srw-------@ 1 eduardoa  wheel  0 Jul 28 19:40 /tmp/claude/cbspike.sock
+srw-------@ 1 <user>  wheel  0 Jul 28 19:40 /tmp/claude/cbspike.sock
 === curl ===
 http_code=204
 === stderr ===
@@ -1558,7 +1558,7 @@ $ grep -n "sun_path\[" .../MacOSX26.5.sdk/usr/include/sys/un.h
 ```
 
 The production path is 66 bytes on this machine
-(`/Users/eduardoa/Library/Application Support/coffee-bar/ingest.sock`), which
+(`$HOME/Library/Application Support/coffee-bar/ingest.sock`), which
 clears it. A longer user name does not necessarily. The listener therefore
 refuses an over-long path rather than failing obscurely, and **the tests must use
 a SHORT temporary path**: `FileManager.default.temporaryDirectory` is 48 bytes

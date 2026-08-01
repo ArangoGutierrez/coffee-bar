@@ -105,6 +105,21 @@ private func stateAfterExpiry(_ state: SessionState,
     #expect(SessionHub.expiring([busy], now: now, policy: policy).first?.state == .working)
 }
 
+@Test func aBackwardClockDoesNotRetireAWorkingSession() {
+    // `expiring` measures with `Date`, a WALL clock. An NTP correction, a manual
+    // change or a VM restore steps it backwards, which leaves `lastEventAt`
+    // future-dated and the elapsed time negative. Named bug this catches: an
+    // `abs()` around the elapsed time — the obvious wrong way to "handle" clock
+    // skew. It reads a one-hour backward step as an hour of silence and retires
+    // a session whose agent is still running, which is the exact failure this
+    // product exists to prevent. Staying alive is the fail-safe direction: a
+    // backward step suspends expiry until the clock catches up, and a suspended
+    // backstop is survivable where a dropped assertion is not.
+    let live = session(.working, lastEventAt: t0)
+    let now = t0.addingTimeInterval(-3600)
+    #expect(SessionHub.expiring([live], now: now, policy: policy).first?.state == .working)
+}
+
 // MARK: - Ordering and identity survive expiry
 
 @Test func expiryKeepsTheListOrderAndTouchesOnlyTheStaleOnes() {
@@ -194,9 +209,17 @@ private func stateAfterExpiry(_ state: SessionState,
     // shipped numbers: changing them leaves the file green. Design §10.2 marks
     // these as provisional, which is exactly why they need a test that sees
     // them. Pinned to literals, not to the type's own properties.
-    #expect(StalePolicy.standard.workingTimeout == 300)
+    #expect(StalePolicy.standard.workingTimeout == 900)
     #expect(StalePolicy.standard.blockedTimeout == 14_400)
-    #expect(StalePolicy.standard.timeout(for: .starting) == 300)
+    #expect(StalePolicy.standard.timeout(for: .starting) == 900)
     #expect(StalePolicy.standard.timeout(for: .awaitingPermission) == 14_400)
     #expect(StalePolicy.standard.timeout(for: .stale) == nil)
+}
+
+@Test func theWorkingTimeoutOutlivesTheLongestLegalToolCall() {
+    // Claude Code documents Bash timeout max = 600_000 ms. Nothing fires
+    // between PreToolUse and PostToolUse, so a working session must survive a
+    // tool call of that length or the assertion drops mid-build.
+    let longestDocumentedToolCall: TimeInterval = 600
+    #expect(StalePolicy.standard.workingTimeout > longestDocumentedToolCall)
 }

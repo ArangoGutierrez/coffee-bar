@@ -1,0 +1,94 @@
+# Copyright 2026 Carlos Eduardo Arango Gutierrez
+# SPDX-License-Identifier: Apache-2.0
+
+# Publishes site/ to GitHub Pages.
+#
+# WHY A WORKFLOW AND NOT THE `docs/` FOLDER SETTING. GitHub Pages can serve the
+# repository root or `docs/` on a branch. `docs/` here holds engineering
+# material — specs, plans, the acceptance run, handoffs — none of which should
+# be a published web surface. A workflow lets `site/` be the only thing served
+# and keeps the engineering docs unpublished but still in the repository.
+#
+# ONE SETTING IS STILL MANUAL: Settings -> Pages -> Source must be set to
+# "GitHub Actions". Until then this workflow runs and the deploy step fails.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - ".github/workflows/pages.yml"
+  # So the site can be republished without a content change, e.g. after the
+  # Pages source setting is switched on for the first time.
+  workflow_dispatch:
+
+# Least privilege: read the tree, mint the Pages token, nothing else.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time. `cancel-in-progress: false` because cancelling a
+# half-finished deploy can leave the live site on a partial upload.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # Pinned to a 40-hex SHA, like every other `uses:` in this repo. This is
+      # the ONLY workflow holding `pages: write` and `id-token: write`, so a
+      # mutable tag here is the highest-value supply-chain target in the tree.
+      # `persist-credentials: false` matches ci.yml and release.yml: nothing in
+      # this job pushes, so it has no reason to hold a token.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      # Fail loudly rather than publishing an empty site. A deploy that
+      # succeeds while serving nothing is the worst outcome here: the URL
+      # resolves, so nobody investigates.
+      - name: Verify the site directory has content
+        run: |
+          test -f site/index.html || { echo "site/index.html is missing"; exit 1; }
+          test -s site/index.html || { echo "site/index.html is empty"; exit 1; }
+          echo "site/index.html: $(wc -c < site/index.html) bytes"
+
+      # The install block is commented DO-NOT-PUBLISH until the tap carries the
+      # formula that installs the app AND a release is tagged. Publishing an
+      # install command that does not work is worse than publishing none.
+      #
+      # This SKIPS rather than FAILS. "Not ready to publish" is not the same as
+      # "broken", and a permanently red check on main teaches people to ignore
+      # red checks. The skip is loud in the log and the job still goes green.
+      - id: gate
+        name: Check whether the site is cleared to publish
+        run: |
+          if grep -q "DO NOT PUBLISH THIS SECTION" site/index.html; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::NOT PUBLISHING. site/index.html still carries the DO-NOT-PUBLISH marker."
+            echo "Remove it only once BOTH are true, verified by running them:"
+            echo "  1. the tap installs CoffeeBar.app, not only coffee-bar-probe"
+            echo "  2. a release is tagged, so the formula url and sha256 resolve"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "Marker absent. Publishing."
+          fi
+
+      - if: steps.gate.outputs.publish == 'true'
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+
+      - if: steps.gate.outputs.publish == 'true'
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
+        with:
+          path: site
+
+      - id: deployment
+        if: steps.gate.outputs.publish == 'true'
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

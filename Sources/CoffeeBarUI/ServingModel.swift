@@ -87,6 +87,19 @@ public final class ServingModel {
     /// newest reading. `nil` otherwise — see `refresh()`.
     public private(set) var suppression: HoldSuppression?
 
+    /// How a cancelled On click ended and where it left the control, when that
+    /// cancel is still true of the newest reading. `nil` otherwise.
+    ///
+    /// Filtered ONCE in `refresh()`, against the same `suppression` above, so
+    /// the claim has exactly the lifetime of the sentence that explains it. The
+    /// two can never appear apart.
+    ///
+    /// Internal, not `public`, for the reason `desired` is: `suppressionAdvisory`
+    /// is what the panel reads, and the test target reaches this through
+    /// `@testable import CoffeeBarUI`. Design §5.4 asserts the reason on the
+    /// enum, so this stays a `ServeCancellation` and not a rendered string.
+    private(set) var cancelledServe: ServeCancellation?
+
     /// The state `refresh()` last reconciled to, or `nil` before the first
     /// `refresh()`.
     ///
@@ -216,6 +229,94 @@ public final class ServingModel {
         return "\(opening) \(refusal)"
     }
 
+    /// The one line the panel shows about the battery floor, or `nil` for no
+    /// line.
+    ///
+    /// Built HERE and not in `PanelView`, for the reason `hookAdvisory` is: M1
+    /// design §5.4 forbids asserting on rendered AppKit text, so a sentence
+    /// composed in the view is a sentence no check reads. `PanelView` built this
+    /// one until now, and that is exactly why the defect below stayed invisible.
+    ///
+    /// **The two sentences are ONE property, never two.** They answer the same
+    /// question from the same evidence, and the refusal half is meaningless
+    /// without the reason half. Split across two properties the view can render
+    /// one and drop the other, and no check can see it do that. Merged, that
+    /// mistake cannot be made.
+    ///
+    /// The first sentence is unchanged, and both halves of its wording are load
+    /// bearing. It has to be true in BOTH cases that reach it: spec §5.3 refuses
+    /// a toggle-on that starts below the floor, and `evaluate` records the same
+    /// `lastSuppression` for that refusal as for a real release, so "Released at
+    /// N%" would announce a release that never happened. "at or below" matches
+    /// `PowerBroker`, which suppresses at `percent <= floor`, so at exactly 20%
+    /// a line reading "below 20%" states the opposite of what the product did.
+    /// The percentage is the reading the DECISION was made on, not the newest
+    /// one — the battery keeps draining after a release, and the battery line in
+    /// the panel carries the current value.
+    ///
+    /// The second sentence exists because the first cannot separate THREE
+    /// histories that all reach it:
+    ///
+    ///   A — the user clicked On, the floor refused it outright, and coffee-bar
+    ///       moved their control back to where it stood.
+    ///   B — the user clicked nothing, and the floor is refusing a hold the
+    ///       sessions asked for.
+    ///   C — the user clicked On, coffee-bar HONOURED it and held the machine,
+    ///       and the floor released that hold later as the battery drained.
+    ///
+    /// All three used to render the identical line. In A and C the app changed a
+    /// setting for the user, the picker snaps back on its own, and nothing said
+    /// so — so a return to Auto reads as On being honoured.
+    ///
+    /// A and C get DIFFERENT sentences, and that separation is the point. `.serve`
+    /// holds unconditionally in `PowerBroker`, so C is the normal end of the On
+    /// position rather than an edge case, and calling it a refusal tells a user
+    /// whose click worked for hours that it did not.
+    /// `anHonouredOnClickReleasedByTheFloorNeverSaysItWasRefused` goes red on
+    /// exactly that, and it is the defect the first round of this task shipped.
+    ///
+    /// B adds NO sentence, and must not: a user who touched nothing cannot be
+    /// told their click was refused.
+    ///
+    /// Both sentences name the position from `cancelledServe` rather than a
+    /// fixed "Auto", because the standing position is not always Auto: a user
+    /// who vetoed serving lands back on Off. Each wording carries its OWN check,
+    /// and that is not a formality — `aRefusedOnClickFromOffNamesOffNotAuto`
+    /// drives the refusal sentence only, so hard-coding the word in the release
+    /// sentence survived the whole suite until
+    /// `aReleasedHoldFromOffNamesOffNotAuto` was added. Measured, not assumed.
+    /// A third sentence here needs a third check.
+    public var suppressionAdvisory: String? {
+        guard case .batteryFloor(let percent, let floor) = suppression else { return nil }
+        let reason = "At \(percent)% — coffee-bar does not hold at or below \(floor)%."
+
+        switch cancelledServe {
+        case nil:
+            // Situation B stops here, with the line it has always had.
+            return reason
+        case .refused(let landed):
+            return reason + " Your On click was refused, so the control is back on "
+                 + "\(Self.label(for: landed))."
+        case .released(let landed):
+            return reason + " coffee-bar released the hold from your On click, "
+                 + "so the control is back on \(Self.label(for: landed))."
+        }
+    }
+
+    /// What the three control positions are CALLED, in one place.
+    ///
+    /// `PanelView`'s picker reads this too. The sentence above names a position
+    /// the user has to find on that picker, so a second list of labels in the
+    /// view is a list that can drift — and the drift is invisible, because
+    /// design §5.4 rules out asserting on the rendered control.
+    static func label(for intent: UserIntent) -> String {
+        switch intent {
+        case .stop: return "Off"
+        case .auto: return "Auto"
+        case .serve: return "On"
+        }
+    }
+
     /// Turns a `start()` failure into something the user can act on.
     ///
     /// Each case names the path and the next step, because "ingest is not
@@ -305,10 +406,33 @@ public final class ServingModel {
     // the listener takes ingest down for the LIVE instance while the panel
     // still reports the hooks wired.
     //
-    // Nothing is lost by leaving it out. An orphan's `startMonitoring` cannot
-    // steal the socket — `UnixSocketIngestListener.start` connect-probes first
-    // and throws `alreadyServing` — and the orphan's own `NWListener` goes with
-    // it when the object does.
+    // What leaving it out costs, stated exactly, because the sentence that used
+    // to sit here was FALSE. An orphan's `startMonitoring` cannot steal the
+    // socket — `UnixSocketIngestListener` connect-probes first and throws
+    // `alreadyServing` — but this then claimed the orphan's own `NWListener`
+    // went with it when the object did. It does not. Measured against this
+    // repo's own class, with a control at each step:
+    //
+    //   - the `UnixSocketIngestListener` DOES deallocate — a weak reference to
+    //     it goes nil — which is what made the claim look right;
+    //   - the `NWListener` it started does NOT. The socket still accepts
+    //     connections two seconds after the last owning reference goes away,
+    //     and a real `curl` post to it exits 52: accepted, then dropped;
+    //   - only `cancel()` frees it. The same class stopped through `stop()`
+    //     refuses the next connection.
+    //
+    // So an orphan that DID bind leaks its socket for the life of the process.
+    // Nothing reaches that today, so this is LATENT and not a live defect:
+    // `startMonitoring` runs once per model from `App.init`, and a second
+    // model's `start()` throws off the FIRST model's still-live listener rather
+    // than binding a second one. The instrumented bundle ran `App.init` exactly
+    // once over 122 s and five real hook events.
+    //
+    // A bind RETRY is what would wake it up, and `main.swift` carries that
+    // decision. `occupant()` cannot tell a socket this process leaked from one
+    // another process owns, so a retry finds the leak `.live` and throws
+    // `alreadyServing` for ever — measured — while the panel blames a second
+    // instance that does not exist.
 
     /// Bound to the panel's 3-way control. What the user ASKED FOR.
     ///
@@ -325,8 +449,11 @@ public final class ServingModel {
     ///     selected again.
     ///
     /// The getter reads the controller, not a copy held here, so the `.serve`
-    /// latch is visible to the panel: a hold the battery floor refuses moves
-    /// the control to Off, which is exactly what has happened to the intent.
+    /// cancel is visible to the panel: a hold the battery floor refuses moves
+    /// the control off On, which is exactly what has happened to the intent.
+    /// It moves back to the STANDING position — Auto or Off — rather than to
+    /// Off every time, so a click that FAILED never leaves the user more
+    /// restricted than before they made it. See `HoldController.evaluate`.
     ///
     /// `isServing` stays as the read-only ACTUAL state and stays on screen
     /// beside this. The two answer different questions and the panel shows
@@ -358,9 +485,15 @@ public final class ServingModel {
         // returned cleanly is not proof the socket is serving, and `stop()`
         // takes it away again.
         ingestListening = listener.isReady
+        // `isServing` still holds the previous reconcile's ACTUAL result here,
+        // because it is only reassigned below — and that is exactly the fact the
+        // controller needs. It decides what should happen; IOKit decided what
+        // did. A `.serve` whose `acquire()` was refused must never be reported
+        // as a released hold.
         let state = controller.evaluate(powerSource: reading.source,
                                         batteryPercent: reading.percent,
-                                        sessions: sessions)
+                                        sessions: sessions,
+                                        assertionIsHeld: isServing)
         // Derived from the SAME array handed to `evaluate` above, on purpose.
         // Design §14 forbids a second source here: a panel that disagrees with
         // the hold decision is worse than a panel with nothing on it.
@@ -368,6 +501,21 @@ public final class ServingModel {
         working = AttentionList.working(from: sessions)
         desired = state
         suppression = Self.reason(controller.lastSuppression, stillTrueOf: reading)
+        // Gated on the FILTERED value above, not on the controller alone, so the
+        // claim dies with the sentence that explains it. A recovery above the
+        // floor drops both together —
+        // `theRefusalSentenceGoesWhenTheBatteryRecovers` measures that.
+        //
+        // This gate HIDES a stale claim; it does not end one, and audit finding
+        // 2 is the difference. The controller kept a cancel that no suppression
+        // followed, this line hid it while the battery was above the floor, and
+        // the next drain handed the same record back — so the record's own
+        // lifetime had to be fixed in `HoldController.evaluate`. The gate stays:
+        // it is what keeps the claim and the sentence from ever appearing apart,
+        // and two independent mechanisms are what
+        // `aRefusalFromAnEarlierDrainNeverReturnsAtALaterOne` asserts on
+        // separately, one on the state and one on the wording.
+        cancelledServe = suppression == nil ? nil : controller.cancelledServe
 
         if state.idleSleepAssertion {
             isServing = holder.acquire()
@@ -500,6 +648,24 @@ public final class ServingModel {
     /// latch still unconditional, this filter would be actively harmful: it
     /// would hide the reason a permanently disabled app gave for disabling
     /// itself.
+    ///
+    /// **It reads the newest READING and never asks whether anything currently
+    /// wants a hold**, so with no sessions at all the panel still names the
+    /// battery. That is measured, and it stays. With the control back on its
+    /// standing position the floor is the binding constraint on whatever happens
+    /// next, so the sentence predicts the next working agent exactly, and
+    /// lifting the floor is enough to make the hold arrive —
+    /// `theBatteryLineLeftOnScreenIsTrueOfWhatHappensNext` puts the line to that
+    /// test. The case where it misled was a refused `.serve` landing on `.stop`:
+    /// the battery was then not the operative reason at all, and no recharge
+    /// could change the outcome. `HoldController` no longer lands there.
+    ///
+    /// Narrowing this to the CURRENT decision's suppression stays rejected. It
+    /// would drop the line the moment the last session went idle, which is the
+    /// stale-percent defect `theSuppressionLineNamesTheMeasuredPercent` and
+    /// `theSuppressionLineSurvivesARecoveryToExactlyTheFloor` exist to catch,
+    /// and it would leave a user who clicked On with no session running looking
+    /// at a refusal and no reason for it.
     private static func reason(_ suppression: HoldSuppression?,
                                stillTrueOf reading: PowerReading) -> HoldSuppression? {
         guard case .batteryFloor(_, let floor) = suppression,

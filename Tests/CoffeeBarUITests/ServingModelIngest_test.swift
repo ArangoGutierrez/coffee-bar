@@ -347,6 +347,91 @@ private func makeModel(listener: any IngestListening,
     #expect(model.suppression == nil, "the panel still explains a refusal that has stopped")
 }
 
+@MainActor
+@Test func aRefusedOnClickDoesNotVetoTheAgentSessionsThatFollow() throws {
+    // Audit finding I4, as the five steps it reports, at the layer the user
+    // touches. `HoldController_test` reaches the controller directly; this drives
+    // the SAME two seams a real user and a real hook use — the control setter and
+    // the listener callback.
+    //
+    // Named bug this catches: `intent = .stop` on a refused `.serve`. The Mac
+    // then sleeps under a working agent, which is the single failure this product
+    // exists to prevent, and the cause is a click that ASKED for more holding.
+    let listener = StubListener()
+    let reader = StubReader(source: .battery, percent: 15)
+    let holder = CountingHolder()
+    let model = makeModel(listener: listener, reader: reader, holder: holder)
+    try model.startMonitoring(interval: 3600)
+
+    // 1. The shipping default, untouched.
+    #expect(model.intent == .auto)
+
+    // 2. An agent works while the battery sits under the floor. Precondition:
+    //    nothing is held yet, so the hold at the end comes from the recovery.
+    listener.deliver(HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
+    #expect(model.isServing == false)
+    #expect(model.workingSummary == "1 session working")
+    #expect(holder.acquireCount == 0)
+
+    // 3. The user clicks On. The floor refuses the hold and says why.
+    model.intent = .serve
+    #expect(model.isServing == false)
+    #expect(model.suppression == .batteryFloor(percent: 15, floor: 20))
+    #expect(model.intent == .auto,
+            "a refused click left the control on a position the user never picked")
+
+    // 4-5. The battery recovers to 100% on AC, with the agent still working.
+    reader.set(source: .ac, percent: 100)
+    model.refresh()
+
+    #expect(model.isServing == true,
+            "the Mac sleeps under a working agent because one refused click vetoed .auto")
+    #expect(holder.acquireCount == 1)
+    #expect(model.suppression == nil,
+            "the panel still explains a refusal that has stopped happening")
+}
+
+@MainActor
+@Test func theBatteryLineLeftOnScreenIsTrueOfWhatHappensNext() throws {
+    // The minor finding at `ServingModel.reason(_:stillTrueOf:)`. The filter
+    // compares the latched reason against the newest READING only. It never asks
+    // whether anything is currently requesting a hold, so with no sessions at all
+    // the panel still names the battery.
+    //
+    // The observation is correct, and the line is still honest — but only once
+    // the control is back on `.auto`. The floor is then the binding constraint on
+    // whatever happens next, so the sentence on screen predicts the next event
+    // exactly, and lifting the floor is enough to make the hold arrive.
+    //
+    // Named bug this catches: leaving the control on `.stop` after the refusal.
+    // The battery is then NOT the operative reason — an absolute veto is — so the
+    // agent below is refused for a reason the panel never shows, and going back
+    // on AC power changes nothing.
+    let listener = StubListener()
+    let reader = StubReader(source: .battery, percent: 15)
+    let model = makeModel(listener: listener, reader: reader)
+    try model.startMonitoring(interval: 3600)
+
+    // No sessions at all: nothing is asking for a hold. The user clicks On and
+    // the floor refuses.
+    model.intent = .serve
+    #expect(model.sessions.isEmpty)
+    #expect(model.suppression == .batteryFloor(percent: 15, floor: 20))
+
+    // The claim that line makes, put to the next thing that happens.
+    listener.deliver(HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
+    #expect(model.isServing == false)
+    #expect(model.suppression == .batteryFloor(percent: 15, floor: 20))
+
+    // And the floor is the ONLY thing refusing. Lift it and the hold arrives
+    // with no further action from the user.
+    reader.set(source: .ac, percent: 100)
+    model.refresh()
+    #expect(model.isServing == true,
+            "the panel named the battery while something else was refusing the hold")
+    #expect(model.suppression == nil)
+}
+
 // MARK: - The stale timeout runs on the existing ticker
 
 @MainActor

@@ -99,7 +99,9 @@ private func rawPayload(_ name: String) throws -> [String: Any] {
     #expect(event.kind == .permissionDenied)
     #expect(raw["message"] == nil, "the corpus grew a `message` field; design §3 may be right after all")
     #expect(event.reason == raw["reason"] as? String)
-    #expect(event.reason?.contains("Sensitive-Source Provenance") == true)
+    // The marker moved: the recorded prose was live session content and was
+    // replaced with synthetic text. FixtureRedaction_test owns that contract.
+    #expect(event.reason?.contains("SYNTHETIC-FIXTURE-REASON-1f4a9c") == true)
 }
 
 @Test func onlySessionStartCarriesASource() throws {

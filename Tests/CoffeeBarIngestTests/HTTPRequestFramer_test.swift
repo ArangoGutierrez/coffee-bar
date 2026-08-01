@@ -19,6 +19,30 @@ private func request(body: String, contentLength: Int? = nil) -> Data {
         """.utf8)
 }
 
+/// Builds a well-formed request whose TOTAL wire size is exactly `total` bytes.
+///
+/// Solved by iteration rather than by a hand-computed constant. The header block
+/// carries `Content-Length`, so its own size depends on how many digits the body
+/// length needs, and a constant would rot the moment a header changed. Each
+/// round measures the request it just built and corrects the body by the error,
+/// which converges in two passes.
+///
+/// It returns the body as well as the bytes, so the caller can assert what the
+/// framer hands back. Every caller also asserts `raw.count` against `total`: if
+/// this ever stops converging, the test fails loudly instead of quietly testing
+/// a smaller request. That is the failure the previous cap test shipped with.
+private func requestOfExactSize(_ total: Int) -> (raw: Data, body: String) {
+    var bodyCount = total
+    for _ in 0..<8 {
+        let body = String(repeating: "x", count: bodyCount)
+        let raw = request(body: body)
+        if raw.count == total { return (raw, body) }
+        bodyCount -= raw.count - total
+    }
+    let body = String(repeating: "x", count: bodyCount)
+    return (request(body: body), body)
+}
+
 /// Builds a request whose `Content-Length` is not a number this type can use.
 ///
 /// Separate from `request(body:contentLength:)` because that one takes an `Int`,
@@ -94,14 +118,39 @@ private func requestWithRawContentLength(_ raw: String, body: String = "") -> Da
 }
 
 @Test func aRequestExactlyAtTheCapIsAccepted() {
-    // The other side of the cap. Named bug this catches: `>=` where `>` belongs,
-    // which refuses a legal request one byte under the limit.
-    let filler = String(repeating: "x", count: 100)
-    let payload = #"{"hook_event_name":"Stop","session_id":"\#(filler)"}"#
+    // The other side of the cap. Named bug this catches: `>=` where `>` belongs
+    // at the buffer check, which refuses the largest legal request.
+    //
+    // The fixture MUST be the cap exactly. The version this replaces built a
+    // 237-byte request against a 65,536-byte cap, so it asserted nothing about
+    // the boundary its own comment named, and flipping `>` to `>=` left all 372
+    // tests green. The size assertion below is what stops that coming back.
+    let (raw, payload) = requestOfExactSize(HTTPRequestFramer.maximumBytes)
+    #expect(raw.count == HTTPRequestFramer.maximumBytes,
+            "fixture is \(raw.count) bytes; it must be exactly the cap or this does not test the cap")
     var framer = HTTPRequestFramer()
-    let raw = request(body: payload)
-    #expect(raw.count < HTTPRequestFramer.maximumBytes)
     #expect(framer.append(raw) == .body(Data(payload.utf8)))
+}
+
+@Test func aWellFormedRequestOneByteOverTheCapIsRefused() {
+    // The partner of the test above, and NOT a duplicate of
+    // `anOversizedRequestIsRefusedRatherThanBuffered`. That one appends a
+    // headerless blob of 0x41: it carries no `\r\n\r\n`, so deleting the buffer
+    // check leaves it on `.needMore` and it can never tell a missing cap from a
+    // missing terminator.
+    //
+    // This one is a COMPLETE, parseable request whose declared `Content-Length`
+    // sits well under the cap. Only the buffer check can refuse it — delete that
+    // check and this returns `.body`.
+    //
+    // It also pins that the cap counts HEADERS. The body alone is inside the
+    // limit and the request is still refused, which is why the measured wire
+    // threshold sits about 150 bytes under the cap rather than on it.
+    let (raw, _) = requestOfExactSize(HTTPRequestFramer.maximumBytes + 1)
+    #expect(raw.count == HTTPRequestFramer.maximumBytes + 1,
+            "fixture is \(raw.count) bytes; it must be exactly one byte over the cap")
+    var framer = HTTPRequestFramer()
+    #expect(framer.append(raw) == .tooLarge)
 }
 
 // MARK: - The declared length itself (PE finding B1)

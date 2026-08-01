@@ -26,7 +26,28 @@ import Foundation
 public enum SessionHub {
 
     /// Design §7 caps the rendered message. It is attacker-influenced text.
+    ///
+    /// Counts `Character`s — Swift grapheme clusters. It bounds how LONG the
+    /// message reads, not how LARGE it is. `messageByteCap` bounds the size.
     public static let messageCap = 140
+
+    /// The other half of the cap, in UTF-8 bytes.
+    ///
+    /// A `Character` is a grapheme cluster, and a cluster is a base scalar plus
+    /// ANY number of combining marks, so one `Character` has no upper bound in
+    /// bytes. 140 clusters of `a` plus 150 U+0301 marks are 42,140 bytes, and
+    /// the request carrying them is about 42 KB — small enough to clear every
+    /// layer above and arrive here as a fully conforming payload.
+    ///
+    /// Why 1 KiB. It is the smallest round bound that no ordinary message
+    /// reaches. 140 characters of Latin prose are at most 280 bytes. 140
+    /// characters of the densest scripts the panel plausibly shows — CJK,
+    /// Cyrillic, Greek, Devanagari — are at most about 420. 1 KiB leaves about
+    /// 7 bytes per character of headroom above that, and it cuts the measured
+    /// attack by a factor of 41. What does exceed 1 KiB is text built from long
+    /// multi-scalar clusters, and 140 of those do not read as a sentence in a
+    /// menu-bar row. Such text gets shorter here. It never gets corrupted.
+    public static let messageByteCap = 1024
 
     /// Applies one event and returns the new session list.
     ///
@@ -137,7 +158,31 @@ public enum SessionHub {
     /// the first exactly when the user looks to see what happened.
     private static func message(from event: HookEvent, kind: HookEventKind) -> String? {
         guard kind == .permissionDenied, let reason = event.reason else { return nil }
-        return String(reason.prefix(messageCap))
+        return capped(reason)
+    }
+
+    /// Truncates to whichever cap binds first, always on a `Character` boundary.
+    ///
+    /// Walking `Character`s is what keeps the result well formed. Cutting the
+    /// UTF-8 view at `messageByteCap` would sever a multi-scalar cluster and
+    /// leave the panel a half scalar or a dangling ZWJ.
+    ///
+    /// The walk visits at most `messageCap` clusters, so a large `reason` costs
+    /// a bounded number of steps rather than one per byte.
+    ///
+    /// A single cluster wider than `messageByteCap` returns the empty string.
+    /// The panel then shows nothing, which is the right answer: the only thing
+    /// it could show instead is the payload this cap exists to keep out.
+    private static func capped(_ text: String) -> String {
+        var out = ""
+        var bytes = 0
+        for character in text.prefix(messageCap) {
+            let width = character.utf8.count
+            guard bytes + width <= messageByteCap else { break }
+            out.append(character)
+            bytes += width
+        }
+        return out
     }
 }
 

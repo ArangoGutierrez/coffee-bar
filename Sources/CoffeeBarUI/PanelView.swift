@@ -37,30 +37,6 @@ public struct PanelView: View {
         return "\(charge) · \(model.reading.source == .ac ? "AC power" : "battery")"
     }
 
-    /// Rendered from the enum, never from free text, so the reason the panel
-    /// shows is the reason the controller decided.
-    ///
-    /// The sentence has to be true in BOTH cases that reach it. Spec §5.3
-    /// refuses a toggle-on that starts below the floor, and `evaluate` records
-    /// the same `lastSuppression` for that refusal as for a real release, so
-    /// "Released at N%" would announce a release that never happened.
-    ///
-    /// "at or below" is deliberate, not padding: `PowerBroker` suppresses at
-    /// `percent <= floor`, so at exactly 20% a line reading "below 20%" states
-    /// the opposite of what the product just did.
-    ///
-    /// The percentage is the reading the decision was made on, which is not
-    /// always the newest one — the battery keeps draining after a release. The
-    /// battery line below carries the current value.
-    private var suppressionLine: String? {
-        switch model.suppression {
-        case .batteryFloor(let percent, let floor):
-            return "At \(percent)% — coffee-bar does not hold at or below \(floor)%."
-        case nil:
-            return nil
-        }
-    }
-
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             // Three positions, not a switch, and bound to the INTENT rather
@@ -77,10 +53,15 @@ public struct PanelView: View {
             // policy: a new `UserIntent` case is a compile-time decision here.
             Text("Serving").font(.headline)
 
+            // The labels come from the model, not from three literals here.
+            // `suppressionAdvisory` names one of these positions in a sentence
+            // the user then has to find on this picker, and a second list of
+            // labels can drift from it silently — design §5.4 rules out
+            // asserting on this control, so nothing would catch the drift.
             Picker("Serving", selection: $model.intent) {
-                Text("Off").tag(UserIntent.stop)
-                Text("Auto").tag(UserIntent.auto)
-                Text("On").tag(UserIntent.serve)
+                Text(ServingModel.label(for: .stop)).tag(UserIntent.stop)
+                Text(ServingModel.label(for: .auto)).tag(UserIntent.auto)
+                Text(ServingModel.label(for: .serve)).tag(UserIntent.serve)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
@@ -95,7 +76,14 @@ public struct PanelView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            if let line = suppressionLine {
+            // Rendered verbatim from the model, with no text built here. This
+            // view composed the sentence until now, and that is how it came to
+            // read the same for a refused On click as for a hold nobody asked
+            // for: a sentence built here is a sentence no check reads, because
+            // M1 design §5.4 rules out asserting on this view. The wording and
+            // both situations now live on `ServingModel.suppressionAdvisory`
+            // and are asserted there.
+            if let line = model.suppressionAdvisory {
                 Text(line)
                     .font(.caption)
                     .foregroundStyle(.orange)

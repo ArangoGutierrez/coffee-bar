@@ -92,6 +92,19 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     }
 }
 
+/// An assertion holder that always refuses.
+///
+/// `AssertionHolder.acquire()` returns `false` when IOKit refuses the
+/// assertion, and `ServingModel` then leaves `isServing` false. Without a
+/// double for that, every check here runs against a holder that never fails,
+/// and the panel's claims about a hold go untested on the path where no hold
+/// exists.
+private final class FailingHolder: AssertionHolding, @unchecked Sendable {
+    @discardableResult
+    func acquire() -> Bool { false }
+    func release() {}
+}
+
 /// A hook-health reader pointed at a committed fixture.
 ///
 /// EVERY `ServingModel` built in this file is handed one. `refresh()` reads the
@@ -163,8 +176,9 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // Named bug 1: a setter that stores the value on the MODEL instead of
     // forwarding it to `HoldController`. The controller then decides against a
     // stale intent forever. The latch proves the forwarding: a `.serve` that
-    // the floor refuses drops the CONTROLLER's intent to `.stop`, so a model
-    // holding its own copy still reports `.serve` at the end.
+    // the floor refuses drops the CONTROLLER's intent back to the standing
+    // position — `.auto` here — so a model holding its own copy still reports
+    // `.serve` at the end.
     //
     // Named bug 2: a setter that forwards but never calls `refresh()`. The
     // control moves, IOKit is never told, and nothing happens until the
@@ -187,7 +201,7 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     reader.set(source: .battery, percent: 19)
     model.refresh()
     #expect(model.isServing == false)
-    #expect(model.intent == .stop,
+    #expect(model.intent == .auto,
             "the model reported its own copy of the intent, not the controller's")
 }
 
@@ -803,4 +817,404 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
             "the advisory must name the file it actually inspected")
     #expect(advisory.lowercased().contains("not receiving") == false,
             "claims events are not arriving, which a file read cannot establish: \(advisory)")
+}
+
+// MARK: - A refused On click says so, and says where the control landed
+
+// M1 design §5.4 rules out asserting on rendered AppKit text, so the wording
+// lives on the model and is asserted here. `PanelView` renders it verbatim. A
+// sentence composed in the view would be a sentence no check reads, which is
+// how this defect stayed invisible: `suppressionLine` used to be built there.
+
+@MainActor
+@Test func aRefusedOnClickSaysItWasRefusedAndWhereTheControlLanded() {
+    // Situation A. The user stood on Auto, clicked On, and the floor refused.
+    // The app moved their control for them.
+    //
+    // Named bug this catches: rendering the battery sentence alone. The picker
+    // snaps back to Auto and no sentence says the app moved it, so a user who
+    // clicked On reads a line about the battery and believes On is honoured.
+    let reader = FakeReader(source: .battery, percent: 19)
+    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+
+    model.intent = .serve
+
+    #expect(model.intent == .auto, "the I4 fix must still return the control to the standing position")
+    #expect(model.suppressionAdvisory == """
+        At 19% — coffee-bar does not hold at or below 20%. Your On click was \
+        refused, so the control is back on Auto.
+        """)
+}
+
+@MainActor
+@Test func aSuppressedAutoHoldNeverClaimsAClickWasRefused() {
+    // Situation B. The user clicked NOTHING. A working session asks for the
+    // hold, the floor refuses it, and the control has not moved.
+    //
+    // Named bug this catches: situation B borrowing situation A's sentence. The
+    // panel tells a user who touched nothing that their click was refused, and
+    // points at a control that is exactly where they left it.
+    let reader = FakeReader(source: .battery, percent: 19)
+    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+
+    model.ingest(HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
+
+    #expect(model.intent == .auto, "no click happened")
+    #expect(model.suppression == .batteryFloor(percent: 19, floor: 20),
+            "precondition: without a live suppression there is no sentence to get wrong")
+    #expect(model.suppressionAdvisory == "At 19% — coffee-bar does not hold at or below 20%.")
+}
+
+@MainActor
+@Test func theRefusalSentenceGoesWhenTheBatteryRecovers() {
+    // The refusal claim must not outlive the condition. It goes exactly when the
+    // orange line goes.
+    //
+    // Named bug this catches: latching the refusal outside the filter in
+    // `reason(_:stillTrueOf:)`. The battery recovers, the floor stops refusing
+    // anything, and the panel goes on telling the user their click was refused.
+    let reader = FakeReader(source: .battery, percent: 19)
+    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+
+    model.intent = .serve
+    #expect(model.suppressionAdvisory?.contains("was refused") == true,
+            "precondition: the refusal reached the panel at all")
+
+    reader.set(source: .battery, percent: 25)
+    model.refresh()
+
+    #expect(model.suppressionAdvisory == nil)
+    // The STATE behind the sentence, not the sentence alone. Two mechanisms
+    // drop the line — the filter in `refresh()` and the `suppression` guard in
+    // `suppressionAdvisory` — so asserting the string only is green with either
+    // one broken, and a refusal latched past its condition sits there waiting
+    // for the first reader that does not guard. Measured: deleting the filter
+    // leaves the string assertion above passing.
+    #expect(model.cancelledServe == nil)
+}
+
+@MainActor
+@Test func anHonouredOnClickReleasedByTheFloorNeverSaysItWasRefused() {
+    // `PowerBroker` holds for `.serve` unconditionally, so a click at 50% is
+    // HONOURED and the Mac stays awake. The battery then drains under it and the
+    // floor releases the hold. That is the normal end of the On position.
+    //
+    // Named bug this catches: calling that a refusal. The panel tells a user
+    // whose click worked for hours that it was refused — a sentence that is
+    // simply false, and false on the commonest exit from On rather than on an
+    // edge case. Shipped in round 1 of this task and measured before this fix.
+    let reader = FakeReader(source: .battery, percent: 50)
+    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+
+    model.intent = .serve
+    // The two preconditions that make this the RELEASE path and not the refusal
+    // path. Without them the check passes for a click that was never served.
+    #expect(model.isServing == true, "precondition: the click was honoured and the Mac is held")
+    #expect(model.suppressionAdvisory == nil, "precondition: nothing is refusing anything yet")
+
+    reader.set(source: .battery, percent: 19)
+    model.refresh()
+
+    #expect(model.isServing == false, "precondition: the floor released the hold")
+    #expect(model.intent == .auto)
+    #expect(model.suppressionAdvisory == """
+        At 19% — coffee-bar does not hold at or below 20%. coffee-bar released \
+        the hold from your On click, so the control is back on Auto.
+        """)
+}
+
+@MainActor
+@Test func aReleasedHoldFromOffNamesOffNotAuto() {
+    // The RELEASE sentence names a position too, and the standing position is
+    // not always Auto. `aRefusedOnClickFromOffNamesOffNotAuto` drives only the
+    // REFUSED wording, so without this the release half is unguarded.
+    //
+    // Named bug this catches: hard-coding "Auto" in the release sentence, or
+    // returning `.auto` instead of `standing` from the release branch. Both
+    // survive the whole suite otherwise — measured. A user who vetoed serving
+    // reads that they are back on Auto while the control shows Off, so the one
+    // sentence explaining the move describes a move that did not happen.
+    let reader = FakeReader(source: .battery, percent: 50)
+    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+
+    model.intent = .stop
+    model.intent = .serve
+    #expect(model.isServing == true, "precondition: the click was honoured from the Off position")
+
+    reader.set(source: .battery, percent: 19)
+    model.refresh()
+
+    #expect(model.intent == .stop, "the veto survives a released hold")
+    #expect(model.suppressionAdvisory == """
+        At 19% — coffee-bar does not hold at or below 20%. coffee-bar released \
+        the hold from your On click, so the control is back on Off.
+        """)
+}
+
+@MainActor
+@Test func aHoldThatWasNeverTakenIsNotCalledAReleasedHold() {
+    // `holder.acquire()` can fail: IOKit refuses, and `isServing` stays false.
+    // Nothing is ever held, so nothing can be released.
+    //
+    // Named bug this catches: sourcing "this request has held" from the DESIRED
+    // state rather than the actual acquisition. The panel then reads "coffee-bar
+    // released the hold from your On click" directly beside its own line "Not
+    // holding any assertion." — two sentences that contradict each other on one
+    // screen. The word "released" is new, so this falsehood is new.
+    let reader = FakeReader(source: .battery, percent: 50)
+    let model = ServingModel(holder: FailingHolder(), reader: reader, health: fixtureHealth())
+
+    model.intent = .serve
+    // The precondition that makes this the failing-holder path. Without it the
+    // check passes for a click that was simply never honoured.
+    #expect(model.isServing == false, "precondition: acquire() refused, so NO hold exists")
+    #expect(model.desired?.idleSleepAssertion == true,
+            "precondition: the hold was DESIRED, so only the acquisition failed")
+
+    reader.set(source: .battery, percent: 19)
+    model.refresh()
+
+    #expect(model.suppressionAdvisory?.contains("released the hold") == false,
+            "claims a hold was released when none was ever taken: \(model.suppressionAdvisory ?? "nil")")
+    #expect(model.suppressionAdvisory == """
+        At 19% — coffee-bar does not hold at or below 20%. Your On click was \
+        refused, so the control is back on Auto.
+        """)
+}
+
+@MainActor
+@Test func aHoldInheritedFromAutoIsNotCreditedToALaterRefusedClick() {
+    // The battery can cross the floor between ticks. `.auto` is holding for a
+    // working session, the reading drops, and the user clicks On before the next
+    // refresh — a click that is refused AT CLICK TIME and never holds.
+    //
+    // Named bug this catches: reading "is a hold active?" off the previous tick
+    // and crediting it to this request. The hold belonged to `.auto`, not to the
+    // click, so "coffee-bar released the hold from your On click" names the
+    // wrong cause. This is the case a naive fix for the failing holder breaks.
+    // The user has served before, so BOTH stale signals are live: an earlier
+    // request that asked for a hold, and a hold that is still up when the next
+    // click lands. Without the earlier On click this check misses the case
+    // where the "did this request ask for a hold?" flag survives the new click.
+    let reader = FakeReader(source: .battery, percent: 50)
+    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+
+    model.ingest(HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
+    model.intent = .serve
+    #expect(model.isServing == true, "precondition: an earlier On click asked for, and got, a hold")
+
+    // Back to Auto. The working session keeps the machine held, so the hold
+    // that outlives this click belongs to `.auto` and not to the click.
+    model.intent = .auto
+    #expect(model.isServing == true, "precondition: .auto holds the machine for the session")
+
+    // The reading falls, and the user clicks On before any refresh sees it.
+    reader.set(source: .battery, percent: 19)
+    model.intent = .serve
+
+    #expect(model.isServing == false)
+    #expect(model.suppressionAdvisory?.contains("released the hold") == false,
+            "credits .auto's hold to a click that never held: \(model.suppressionAdvisory ?? "nil")")
+    #expect(model.suppressionAdvisory == """
+        At 19% — coffee-bar does not hold at or below 20%. Your On click was \
+        refused, so the control is back on Auto.
+        """)
+}
+
+@MainActor
+@Test func aSecondRefusedOnClickStillReportsTheRefusal() {
+    // The user tries again. The floor has not moved, so the answer is the same
+    // — and it has to be SAID again.
+    //
+    // Named bug this catches: a one-shot flag that is consumed on the first
+    // read, or one that `userToggled(to: .serve)` clears and nothing re-arms.
+    // The second refusal is then silent, which is the failure this whole task
+    // exists to remove.
+    let reader = FakeReader(source: .battery, percent: 19)
+    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+
+    model.intent = .serve
+    #expect(model.suppressionAdvisory?.contains("was refused") == true,
+            "precondition: the first refusal reached the panel")
+
+    model.intent = .serve
+
+    #expect(model.intent == .auto)
+    #expect(model.suppressionAdvisory == """
+        At 19% — coffee-bar does not hold at or below 20%. Your On click was \
+        refused, so the control is back on Auto.
+        """)
+}
+
+@MainActor
+@Test func aRefusedOnClickFromOffNamesOffNotAuto() {
+    // The standing position is not always Auto. A user who vetoed serving
+    // outright, then clicked On, lands back on the veto — and the sentence has
+    // to name the position they actually landed on.
+    //
+    // Named bug this catches: hard-coding "Auto" in the sentence. The control
+    // reads Off and the panel says Auto, so the one line that exists to explain
+    // the move describes a move that did not happen.
+    let reader = FakeReader(source: .battery, percent: 15)
+    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+
+    model.intent = .stop
+    model.intent = .serve
+
+    #expect(model.intent == .stop)
+    #expect(model.suppressionAdvisory == """
+        At 15% — coffee-bar does not hold at or below 20%. Your On click was \
+        refused, so the control is back on Off.
+        """)
+}
+
+// MARK: - The refusal sentence lives exactly as long as the episode it explains
+
+// The checks above prove the sentence ARRIVES. These prove it stays for as long
+// as it is true and never comes back afterwards, which is where audit findings 1
+// and 2 landed. Both run through `refresh()` — the one path every wipe and every
+// replay goes through — because the record they are about is filtered there,
+// against `reason(_:stillTrueOf:)`. A check one layer down at `HoldController`
+// cannot see either: nothing in the controller changes during the replay.
+
+@MainActor
+@Test func theRefusalSentenceSurvivesTheNextIngestEvent() {
+    // Audit finding 1, in the situation it targets. The user clicks On precisely
+    // when an agent is running, and under a live agent the next hook event
+    // arrives sub-second — so a sentence that dies on the next refresh is a
+    // sentence nobody reads.
+    //
+    // Named bug this catches: clearing the cancel record on any suppression that
+    // cancels no click. The working session asks for the hold, the same floor
+    // refuses it, and the user is left with the battery line alone — the line a
+    // user who touched NOTHING gets. The disclosure is then inoperative in
+    // exactly the case it exists for.
+    let reader = FakeReader(source: .battery, percent: 19)
+    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+
+    model.ingest(HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
+    model.intent = .serve
+
+    let refusal = """
+        At 19% — coffee-bar does not hold at or below 20%. Your On click was \
+        refused, so the control is back on Auto.
+        """
+    #expect(model.suppressionAdvisory == refusal, "precondition: the refusal reached the panel")
+
+    // The next hook event. The session is still working, so the floor refuses a
+    // hold this user never asked for — and that must not speak for their click.
+    model.ingest(HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
+    #expect(model.suppression == .batteryFloor(percent: 19, floor: 20),
+            "precondition: that refresh really did suppress")
+    #expect(model.suppressionAdvisory == refusal)
+
+    // The 30-second ticker and `PanelView.onAppear` reach the same `refresh()`,
+    // and the panel is opened by the user who wants to read this sentence.
+    model.refresh()
+    #expect(model.suppressionAdvisory == refusal)
+}
+
+@MainActor
+@Test func aRefusalAtExactlyTheFloorStillSaysItWasRefused() {
+    // The boundary of that lifetime rule, and the mirror of
+    // `theSuppressionLineSurvivesAtExactlyTheFloor` for the record rather than
+    // for the reason. `PowerBroker` suppresses at `percent <= floor`, so 20%
+    // refuses the click, and the rule that decides how long the record lives has
+    // to use the same comparison.
+    //
+    // Named bug this catches: `percent < floor` in that rule. It throws the
+    // record away in the very call that wrote it, so the user clicks On at
+    // exactly 20%, the control snaps back to Auto on its own, and the one
+    // sentence that says why is missing — while every check at 19% stays green.
+    let reader = FakeReader(source: .battery, percent: 20)
+    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+
+    model.intent = .serve
+
+    let refusal = """
+        At 20% — coffee-bar does not hold at or below 20%. Your On click was \
+        refused, so the control is back on Auto.
+        """
+    #expect(model.intent == .auto)
+    #expect(model.suppressionAdvisory == refusal)
+
+    // And it survives the next refresh at that same reading. The click itself
+    // cannot test the boundary: `userToggled` clears `lastSuppression`, so the
+    // rule that ends the episode has no record to judge on the very call that
+    // writes one. Only a LATER reading puts `percent > floor` to the test, and
+    // 20% is the one value where `>` and `>=` disagree.
+    model.refresh()
+    #expect(model.suppressionAdvisory == refusal)
+}
+
+@MainActor
+@Test func aRefusalFromAnEarlierDrainNeverReturnsAtALaterOne() {
+    // Audit finding 2, and the mirror of the check above: the same record that
+    // must survive a refresh must STAY GONE once its episode ends.
+    //
+    // Named bug this catches: clearing the record inside the suppression branch
+    // only. With no session there is nothing to hold for, `PowerBroker` returns
+    // early, and no suppression ever fires under `.auto` — so nothing clears the
+    // record and `reason(_:stillTrueOf:)` re-admits the old suppression the
+    // moment the reading is at or below the floor again. The user reads "Your On
+    // click was refused" for a click they made days ago, at a reading that is
+    // not the one on screen, with the control back on Auto and no session
+    // running.
+    let reader = FakeReader(source: .battery, percent: 5)
+    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+
+    model.intent = .serve
+    #expect(model.suppressionAdvisory?.contains("was refused") == true,
+            "precondition: the refusal reached the panel")
+    #expect(model.intent == .auto, "precondition: the control is back on the standing position")
+
+    // The battery recovers past the floor, on battery power throughout. The line
+    // goes, and the record behind it has to go with it.
+    reader.set(source: .battery, percent: 21)
+    model.refresh()
+    #expect(model.suppressionAdvisory == nil, "precondition: the episode ended")
+
+    // A later drain, days on. Nothing was clicked in between.
+    reader.set(source: .battery, percent: 19)
+    model.refresh()
+
+    #expect(model.cancelledServe == nil)
+    // The battery half of the line returns, and that half is correct: it names
+    // the reading the DECISION was made on, which is what
+    // `theSuppressionLineNamesTheMeasuredPercent` pins. Only the claim about the
+    // user's click is stale, so only that claim goes.
+    #expect(model.suppressionAdvisory == "At 5% — coffee-bar does not hold at or below 20%.")
+}
+
+@MainActor
+@Test func aRepeatedOnClickNeverTurnsAReleaseIntoARefusal() {
+    // Audit finding 3, at the layer the panel reads. A segmented SwiftUI picker
+    // writes its binding on a re-tap of the segment that is ALREADY selected, so
+    // one click on a control that does not move reaches this setter.
+    //
+    // Named bug this catches: `userToggled` treating that write as a NEW request
+    // and clearing the two hold flags. The re-tap lands after the reading falls
+    // and before any refresh has seen it — the battery crosses the floor between
+    // 30-second ticks — so the flag that says "this request asked for a hold" is
+    // gone by the time the floor releases it. The panel then tells a user whose
+    // click held the Mac awake that it was refused, which is the exact falsehood
+    // `anHonouredOnClickReleasedByTheFloorNeverSaysItWasRefused` exists to stop,
+    // reached through a different door.
+    let reader = FakeReader(source: .battery, percent: 25)
+    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+
+    model.intent = .serve
+    #expect(model.isServing == true, "precondition: the click was honoured and the Mac is held")
+
+    // The reading falls between ticks. The user, seeing nothing yet, taps the On
+    // segment again — and that write arrives before any refresh sees 19%.
+    reader.set(source: .battery, percent: 19)
+    model.intent = .serve
+
+    #expect(model.isServing == false, "precondition: the floor released the hold")
+    #expect(model.intent == .auto)
+    #expect(model.suppressionAdvisory == """
+        At 19% — coffee-bar does not hold at or below 20%. coffee-bar released \
+        the hold from your On click, so the control is back on Auto.
+        """)
 }

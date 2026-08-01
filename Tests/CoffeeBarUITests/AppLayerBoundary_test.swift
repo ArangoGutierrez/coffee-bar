@@ -79,6 +79,41 @@ private let appLayerTargets = [
     "CoffeeBarIngest",
 ]
 
+/// The assertion layer: linked into `coffee-bar`, and NOT part of the app layer.
+///
+/// A fifth escape, and the reason this list exists. `CoffeeBarPower` compiles
+/// into the same binary as everything above and no content check had ever read
+/// one line of it. Six lines inside `AssertionHolder.acquire()` could raise
+/// `kIOPMAssertionTypePreventUserIdleDisplaySleep` with the whole suite green.
+///
+/// It cannot simply join `appLayerTargets`. The app layer's denylist forbids
+/// `import IOKit`, `IOPMAssertion` and the word `PreventUserIdleDisplaySleep`
+/// outright, and this target is the assertion layer: it MUST import IOKit, it
+/// MUST call `IOPMAssertionCreateWithName`, and `AssertionHolder.swift` MUST
+/// keep the doc comment naming the assertion it deliberately does not hold.
+/// Appending the name to `appLayerTargets` turns a CORRECT tree red, and a
+/// guard that is red on correct code is deleted rather than obeyed.
+///
+/// So this list is held to a different rule, one that separates NAMING the
+/// constant from CREATING the assertion. See
+/// `theLayersBelowTheAppNeverCreateADisplaySleepAssertion`.
+///
+/// Unlike `appLayerTargets`, the files here are not pinned to a literal list. A
+/// new file in this target is scanned the moment SwiftPM compiles it, which is
+/// strictly safer than a list a human has to remember to extend.
+private let powerLayerTargets = [
+    "CoffeeBarPower",
+]
+
+/// The decision layer: what a session MEANS, and nothing about hardware.
+///
+/// Linked into `coffee-bar` and, like the power layer, never content-scanned
+/// until now. It is held to the power layer's rule AND to a stricter one: it
+/// reaches no IOKit at all. It needs none — it holds no assertion.
+private let coreLayerTargets = [
+    "CoffeeBarCore",
+]
+
 /// Every file the app layer is allowed to compile, package-root relative and
 /// sorted.
 ///
@@ -134,19 +169,49 @@ private struct ResolvedTarget: Sendable {
     /// `path`-relative, and only the files that reach the compiler.
     let sources: [String]
     let dependencies: [String]
+    /// Products this target takes from ANOTHER package. Code that links in
+    /// from outside this repository, where no scan below can read it.
+    let productDependencies: [String]
+}
+
+/// Everything the guard reads out of one `swift package describe`.
+private struct ResolvedPackage: Sendable {
+    let targets: [String: ResolvedTarget]
+    /// The identity of every external package this one resolved.
+    let packageDependencies: [String]
+    /// Product name -> the targets that product names directly.
+    ///
+    /// The linker takes a product's targets whether or not any dependency edge
+    /// reaches them, so a dependency walk alone cannot see this route.
+    let productTargets: [String: [String]]
 }
 
 /// The shape of `swift package describe --type json` that this file reads.
 private struct ManifestDescription: Decodable {
+    /// One entry of the package-level `dependencies` array.
+    ///
+    /// Every field is optional on purpose. The keys differ by dependency kind —
+    /// a `fileSystem` entry carries `path`, a `sourceControl` entry carries a
+    /// location — and this decoder must not fail on a shape it has not seen.
+    /// The COUNT is what the check asserts; these fields only name the offender.
+    struct Dependency: Decodable {
+        let identity: String?
+        let type: String?
+
+        var summary: String { identity ?? type ?? "(unnamed)" }
+    }
+
     struct Target: Decodable {
         let name: String
         let path: String
         let sources: [String]
         let dependencies: [String]
+        let productDependencies: [String]
 
         private enum CodingKeys: String, CodingKey {
             case name, path, sources
             case dependencies = "target_dependencies"
+            case productDependencies = "product_dependencies"
         }
 
         init(from decoder: any Decoder) throws {
@@ -156,13 +221,42 @@ private struct ManifestDescription: Decodable {
             sources = try fields.decode([String].self, forKey: .sources)
             // Absent, not empty, for a target that depends on nothing.
             dependencies = try fields.decodeIfPresent([String].self, forKey: .dependencies) ?? []
+            // Absent for every target today. SwiftPM emits the key only for a
+            // target that takes a product from another package, so its absence
+            // is the PASSING state and not a missing field. Measured against a
+            // two-package fixture: the key appears, holding `["Dep"]`.
+            productDependencies =
+                try fields.decodeIfPresent([String].self, forKey: .productDependencies) ?? []
         }
     }
 
+    /// One entry of the package-level `products` array.
+    ///
+    /// Only the name and the target list matter here. `type` distinguishes an
+    /// executable from a library and this check does not care: a target named by
+    /// ANY product is a target the linker can take.
+    struct Product: Decodable {
+        let name: String
+        let targets: [String]
+    }
+
     let targets: [Target]
+    let dependencies: [Dependency]
+    let products: [Product]
+
+    private enum CodingKeys: String, CodingKey {
+        case targets, dependencies, products
+    }
+
+    init(from decoder: any Decoder) throws {
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        targets = try fields.decode([Target].self, forKey: .targets)
+        dependencies = try fields.decodeIfPresent([Dependency].self, forKey: .dependencies) ?? []
+        products = try fields.decodeIfPresent([Product].self, forKey: .products) ?? []
+    }
 }
 
-/// Every target SwiftPM resolved, keyed by name — or the failure to ask.
+/// What SwiftPM resolved — or the failure to ask.
 ///
 /// A global `let`, so SwiftPM is spawned ONCE however many checks read it.
 /// Swift initialises a global lazily and exactly once, which is the whole
@@ -172,7 +266,7 @@ private struct ManifestDescription: Decodable {
 /// It holds a `Result` rather than throwing because a global initialiser
 /// cannot throw. Every check calls `.get()`, so a failure to ask still fails
 /// the check.
-private let resolvedTargets: Result<[String: ResolvedTarget], BoundaryScanError> = {
+private let resolvedPackage: Result<ResolvedPackage, BoundaryScanError> = {
     do { return .success(try describePackage()) }
     catch let error as BoundaryScanError { return .failure(error) }
     catch { return .failure(.describeFailed("\(error)")) }
@@ -183,7 +277,7 @@ private let resolvedTargets: Result<[String: ResolvedTarget], BoundaryScanError>
 /// Runs with a SCRATCH PATH of its own and a manifest cache inside it. This
 /// runs from inside `swift test`, which holds the package's own `.build`; a
 /// second SwiftPM sharing that directory would contend for the same lock.
-private func describePackage() throws -> [String: ResolvedTarget] {
+private func describePackage() throws -> ResolvedPackage {
     let files = FileManager.default
     let scratch = URL(fileURLWithPath: NSTemporaryDirectory())
         .appending(path: "coffee-bar-boundary-\(UUID().uuidString)")
@@ -248,7 +342,7 @@ private func describePackage() throws -> [String: ResolvedTarget] {
     }
 
     let rootPrefix = packageRoot.path + "/"
-    return Dictionary(uniqueKeysWithValues: described.targets.map { target in
+    let targets = Dictionary(uniqueKeysWithValues: described.targets.map { target in
         // SwiftPM reports a package-root relative path today. Normalise anyway,
         // so an absolute one would not silently miss `expectedAppLayerEntries`.
         let relative = target.path.hasPrefix(rootPrefix)
@@ -256,14 +350,129 @@ private func describePackage() throws -> [String: ResolvedTarget] {
             : target.path
         return (target.name, ResolvedTarget(path: relative,
                                             sources: target.sources,
-                                            dependencies: target.dependencies))
+                                            dependencies: target.dependencies,
+                                            productDependencies: target.productDependencies))
     })
+
+    return ResolvedPackage(targets: targets,
+                           packageDependencies: described.dependencies.map(\.summary),
+                           productTargets: Dictionary(
+                               described.products.map { ($0.name, $0.targets) },
+                               uniquingKeysWith: { first, _ in first }))
+}
+
+/// Swift source with every COMMENT removed and every STRING LITERAL kept.
+///
+/// This is the discriminator the whole below-app scan rests on. A doc comment
+/// that names `PreventUserIdleDisplaySleep` is exactly what
+/// `AssertionHolder.swift` must keep saying; the same word in CODE raises the
+/// assertion this product exists not to hold. A plain `contains` cannot tell
+/// the two apart, so the comments go first and the check reads what is left.
+///
+/// String literals are KEPT, deliberately. `kIOPMAssertionTypePreventUserIdle`
+/// `DisplaySleep` is a `String` constant whose value is the plain text
+/// `"PreventUserIdleDisplaySleep"`, so
+/// `IOPMAssertionCreateWithName("PreventUserIdleDisplaySleep" as CFString, …)`
+/// raises a live display assertion while naming no constant anywhere. Stripping
+/// literals would open that route.
+///
+/// LIMIT, stated rather than hidden: this is a small lexer, not the Swift
+/// grammar. It handles `//`, nested `/* */`, escapes, multi-line `"""` and raw
+/// `#"…"#` strings, all of which are what the scanned targets contain today. A
+/// BARE REGEX LITERAL (`/…/`) would confuse it; the package uses none, and
+/// `swiftCodeWithoutCommentsKeepsCodeAndDropsComments` pins the behaviour.
+private func swiftCodeWithoutComments(_ source: String) -> String {
+    let characters = Array(source)
+    var kept: [Character] = []
+    kept.reserveCapacity(characters.count)
+    var index = 0
+
+    /// Whether `text` sits at `start`.
+    func matches(_ text: [Character], at start: Int) -> Bool {
+        guard start >= 0, start + text.count <= characters.count else { return false }
+        for (offset, character) in text.enumerated() where characters[start + offset] != character {
+            return false
+        }
+        return true
+    }
+
+    while index < characters.count {
+        // A raw string opens with a run of `#` immediately before the quote.
+        var hashes = 0
+        while index + hashes < characters.count && characters[index + hashes] == "#" { hashes += 1 }
+        let pounds = Array(repeating: Character("#"), count: hashes)
+
+        if index + hashes < characters.count && characters[index + hashes] == "\"" {
+            // A string literal. Copy it VERBATIM, delimiters and contents.
+            let multiline = matches(["\"", "\"", "\""], at: index + hashes)
+            let closing = Array(repeating: Character("\""), count: multiline ? 3 : 1) + pounds
+            let opening = hashes + (multiline ? 3 : 1)
+            kept.append(contentsOf: characters[index ..< index + opening])
+            index += opening
+
+            while index < characters.count {
+                // `\` escapes the next character — in a raw string only when a
+                // matching run of `#` follows it.
+                if characters[index] == "\\" && matches(pounds, at: index + 1) {
+                    let width = min(hashes + 2, characters.count - index)
+                    kept.append(contentsOf: characters[index ..< index + width])
+                    index += width
+                    continue
+                }
+                if matches(closing, at: index) {
+                    kept.append(contentsOf: characters[index ..< index + closing.count])
+                    index += closing.count
+                    break
+                }
+                kept.append(characters[index])
+                index += 1
+            }
+            continue
+        }
+
+        if hashes > 0 {
+            // A `#` that opens no string: an attribute, a macro, `#filePath`.
+            kept.append(contentsOf: characters[index ..< index + hashes])
+            index += hashes
+            continue
+        }
+
+        if matches(["/", "/"], at: index) {
+            // To the end of the line. The newline itself is kept next turn, so
+            // the stripped text keeps its line structure.
+            while index < characters.count && characters[index] != "\n" { index += 1 }
+            continue
+        }
+
+        if matches(["/", "*"], at: index) {
+            // Swift nests block comments, so this counts rather than scanning
+            // for the first `*/`.
+            var depth = 0
+            while index < characters.count {
+                if matches(["/", "*"], at: index) { depth += 1; index += 2; continue }
+                if matches(["*", "/"], at: index) {
+                    depth -= 1
+                    index += 2
+                    if depth == 0 { break }
+                    continue
+                }
+                if characters[index] == "\n" { kept.append("\n") }
+                index += 1
+            }
+            continue
+        }
+
+        kept.append(characters[index])
+        index += 1
+    }
+
+    return String(kept)
 }
 
 /// Every file the app layer's targets compile, package-root relative and
 /// sorted.
 private func appLayerEntries() throws -> [String] {
-    let targets = try resolvedTargets.get()
+    let targets = try resolvedPackage.get().targets
     var found: [String] = []
 
     for name in appLayerTargets {
@@ -286,9 +495,51 @@ private func appLayerSources() throws -> [URL] {
 
 /// The `dependencies:` SwiftPM resolved for one target.
 private func resolvedDependencies(ofTarget name: String) throws -> [String] {
-    let targets = try resolvedTargets.get()
+    let targets = try resolvedPackage.get().targets
     guard let target = targets[name] else { throw BoundaryScanError.unknownTarget(name) }
     return target.dependencies
+}
+
+/// Every target that reaches the `coffee-bar` binary, walked from the resolved
+/// build graph rather than from the manifest text.
+///
+/// This is what `appLayerTargets` alone cannot express: a NAMED list says what
+/// the guard looks at, and this says what the LINKER takes. The gap between the
+/// two is finding B6.
+private func linkedClosure(fromTarget root: String) throws -> Set<String> {
+    let targets = try resolvedPackage.get().targets
+    var reached: Set<String> = []
+    var pending = [root]
+
+    while let name = pending.popLast() {
+        guard reached.insert(name).inserted else { continue }
+        guard let target = targets[name] else { throw BoundaryScanError.unknownTarget(name) }
+        pending.append(contentsOf: target.dependencies)
+    }
+
+    return reached
+}
+
+/// The `.swift` files a named group of targets compiles, sorted.
+///
+/// Kept apart from `appLayerEntries()` on purpose: that one answers the exact
+/// pinned file set the app layer is allowed to compile, and no check below the
+/// app layer pins a literal list.
+private func sources(ofTargets names: [String]) throws -> [URL] {
+    let targets = try resolvedPackage.get().targets
+    var found: [String] = []
+
+    for name in names {
+        guard let target = targets[name] else { throw BoundaryScanError.unknownTarget(name) }
+        guard target.sources.isEmpty == false else {
+            throw BoundaryScanError.compilesNothing(name)
+        }
+        found.append(contentsOf: target.sources.map { "\(target.path)/\($0)" })
+    }
+
+    return found.sorted()
+        .filter { $0.hasSuffix(".swift") }
+        .map { packageRoot.appending(path: $0) }
 }
 
 // MARK: - The scanned set itself
@@ -341,6 +592,67 @@ private func resolvedDependencies(ofTarget name: String) throws -> [String] {
             "CoffeeBarUI gained a dependency; a new app-layer target is unscanned")
     #expect(try resolvedDependencies(ofTarget: "CoffeeBarIngest") == ["CoffeeBarCore"],
             "CoffeeBarIngest gained a dependency; a new app-layer target is unscanned")
+}
+
+@Test func everyTargetLinkedIntoTheBinaryIsContentScanned() throws {
+    // Finding B6, the structural half. Named bug this catches, and it was LIVE:
+    // `CoffeeBarPower` and `CoffeeBarCore` link into `coffee-bar` and no content
+    // check in this package had ever read one line of either. The audit's six
+    // lines inside `AssertionHolder.acquire()`, raising
+    // `kIOPMAssertionTypePreventUserIdleDisplaySleep` under any name other than
+    // `AssertionHolder.assertionName`, shipped with all 372 checks green.
+    //
+    // `theAppLayerGainsNoUnscannedTargetInTheBuildGraph` does NOT cover this. It
+    // pins the dependency EDGES of three targets, so it catches a NEW dependency
+    // appearing. Both targets here were already linked when it was written; a
+    // pinned edge is satisfied by the dependency it pins.
+    //
+    // So this asserts COVERAGE instead of edges: every target the linker reaches
+    // from the executable belongs to exactly one tier, and every tier is read by
+    // a content check in this file. A new target cannot be linked in without
+    // landing in a tier, and choosing the tier is the moment somebody decides
+    // what that code is allowed to do.
+    let linked = try linkedClosure(fromTarget: "CoffeeBarApp")
+    let scanned = Set(appLayerTargets + powerLayerTargets + coreLayerTargets)
+
+    // A walk that reached nothing would equal an empty tier set and pass.
+    #expect(linked.isEmpty == false,
+            "the closure walk reached no target at \(packageRoot.path)")
+
+    #expect(linked == scanned, """
+        the targets linked into coffee-bar are not the targets this guard scans.
+          linked but unscanned: \(linked.subtracting(scanned).sorted())
+          scanned but unlinked: \(scanned.subtracting(linked).sorted())
+        A linked target that no check reads can hold a display assertion under a \
+        green suite — that is exactly how CoffeeBarPower went unread. Add each \
+        new target to the tier matching what it may do, after reading it \
+        against design §6.1.
+        """)
+}
+
+@Test func theCoffeeBarProductNamesOnlyTargetsTheGuardScans() throws {
+    // Named bug this catches: a target added to the `coffee-bar` product's
+    // `targets:` list and to NO dependency list. The linker takes it; the
+    // dependency walk in `linkedClosure` never reaches it; every content check
+    // in this file therefore skips it. That is the same class as finding B6,
+    // through the door B6's fix left open.
+    let productTargets = try resolvedPackage.get().productTargets
+
+    let named = try #require(productTargets["coffee-bar"],
+                             "no product named coffee-bar; the guard is reading the wrong package")
+
+    // Not decoration: a decode that produced an empty list would pass a subset
+    // check against anything.
+    #expect(named.isEmpty == false, "the coffee-bar product names no targets")
+
+    let scanned = Set(appLayerTargets + powerLayerTargets + coreLayerTargets)
+    let unscanned = Set(named).subtracting(scanned)
+
+    #expect(unscanned.isEmpty, """
+        the coffee-bar product names targets this guard never scans.
+          unscanned: \(unscanned.sorted())
+        Add each to a tier list, or take it out of the product.
+        """)
 }
 
 @Test func swiftPMResolvesExactlyOneManifest() throws {
@@ -431,6 +743,226 @@ private func resolvedDependencies(ofTarget name: String) throws -> [String] {
             #expect(!source.contains(name),
                     "\(file.lastPathComponent) names \(name); the app layer holds no assertion of its own")
         }
+    }
+}
+
+// MARK: - What the layers BELOW the app may do
+
+@Test func theLayersBelowTheAppNeverCreateADisplaySleepAssertion() throws {
+    // Finding B6, the content half, and design §6.1 again — one layer down.
+    //
+    // The app layer's denylist cannot be pointed at these targets.
+    // `CoffeeBarPower` IS the assertion layer: `import IOKit.pwr_mgt` and
+    // `IOPMAssertionCreateWithName` are its job, and `AssertionHolder.swift`
+    // carries the doc comment explaining which assertion it deliberately does
+    // NOT hold. `CoffeeBarCore/PowerTypes.swift` explains the product against
+    // `caffeinate -d` in prose. Every one of those is CORRECT code that the
+    // app-layer denylist would reject.
+    //
+    // The discriminator is therefore comments, not words: a comment may NAME
+    // the constant, code may not CREATE the assertion. `swiftCodeWithoutComments`
+    // draws that line, and keeps string literals so a raw
+    // `IOPMAssertionCreateWithName("PreventUserIdleDisplaySleep" as CFString, …)`
+    // is still caught.
+    //
+    // Named bug this catches: the audit's exact escape, six lines inside
+    // `AssertionHolder.acquire()` raising the display assertion under a name
+    // other than `AssertionHolder.assertionName`. The holder's own live-IOKit
+    // check filtered assertions by NAME, so an assertion raised under a
+    // different name was invisible to it — fixed in `AssertionHolder_test.swift`
+    // by reading the process's assertion TYPES, which is the behavioural half of
+    // the same finding.
+    let files = try sources(ofTargets: powerLayerTargets + coreLayerTargets)
+
+    // A scan that reached nothing, or reached the wrong directory, satisfies
+    // every `contains` below. Anchor on the file the finding is about.
+    #expect(files.contains { $0.lastPathComponent == "AssertionHolder.swift" }, """
+        the below-app scan never reached AssertionHolder.swift; it read \
+        \(files.count) files under \(packageRoot.path)
+        """)
+
+    // Every documented route to pinning the DISPLAY awake.
+    //
+    // `IOPMAssertion` and `import IOKit` are deliberately ABSENT: this layer
+    // owns the system-sleep assertion and must keep both. That is the whole
+    // difference between this list and the app layer's.
+    //
+    // `NoDisplaySleep` covers `kIOPMAssertionTypeNoDisplaySleep`, whose value is
+    // `"NoDisplaySleepAssertion"`. `beginActivity` and `performActivity` raise a
+    // live display assertion through Foundation with no IOKit call at all.
+    // A bare `DisplaySleep` is NOT used here: `DesiredPowerState` carries a
+    // legitimate `displaySleepAssertion` property, which such a term would
+    // reject on correct code.
+    let forbidden = [
+        "PreventUserIdleDisplaySleep",  // and kIOPMAssertionTypePreventUserIdleDisplaySleep
+        "NoDisplaySleep",               // kIOPMAssertionTypeNoDisplaySleep
+        "beginActivity",
+        "performActivity",
+        "idleDisplaySleepDisabled",
+        "caffeinate",
+    ]
+
+    for file in files {
+        let code = swiftCodeWithoutComments(try String(contentsOf: file, encoding: .utf8))
+        for name in forbidden {
+            #expect(!code.contains(name), """
+                \(file.lastPathComponent) names \(name) in CODE rather than in a \
+                comment. coffee-bar holds PreventUserIdleSystemSleep and no \
+                display assertion of any kind (design §6.1). A comment may name \
+                the constant; creating one is what this refuses.
+                """)
+        }
+    }
+}
+
+@Test func theCoreLayerReachesNoIOKitAtAll() throws {
+    // `CoffeeBarCore` decides what a session MEANS. It holds no assertion, so
+    // unlike `CoffeeBarPower` it has no reason to reach IOKit at all, and the
+    // stricter rule costs it nothing. It imports only Foundation today.
+    //
+    // Named bug this catches: an assertion path opened in the layer that BOTH
+    // the app layer and the power layer depend on. `PowerBroker` already decides
+    // `DesiredPowerState`, so a direct IOKit call here would leave that decision
+    // reading `displaySleepAssertion == false` while the display was pinned
+    // awake — the same defect design §6.1 forbids, in the one place both other
+    // layers trust.
+    //
+    // Comments are stripped for the same reason as above: `PowerTypes.swift`
+    // must keep explaining the product against `caffeinate -d` in prose.
+    let files = try sources(ofTargets: coreLayerTargets)
+
+    #expect(files.contains { $0.lastPathComponent == "PowerBroker.swift" }, """
+        the core scan never reached PowerBroker.swift; it read \(files.count) \
+        files under \(packageRoot.path)
+        """)
+
+    for file in files {
+        let code = swiftCodeWithoutComments(try String(contentsOf: file, encoding: .utf8))
+        for name in ["IOKit", "IOPMAssertion"] {
+            #expect(!code.contains(name), """
+                \(file.lastPathComponent) names \(name) in CODE. CoffeeBarCore \
+                is the decision layer and reaches no power hardware; the \
+                assertion lives in CoffeeBarPower behind AssertionHolder.
+                """)
+        }
+    }
+}
+
+// MARK: - Code that arrives from outside this repository
+
+@Test func thePackageResolvesNoExternalDependency() throws {
+    // Finding B5. Every content check in this file reads FILES INSIDE THIS
+    // REPOSITORY. A dependency on another package links code that no closure
+    // walk can reach, however complete the walk is, because the source is not
+    // here to read. `everyTargetLinkedIntoTheBinaryIsContentScanned` would still
+    // pass: the external product is not a target of this package.
+    //
+    // Both doors are asserted, and both are read from the description SwiftPM
+    // RESOLVED rather than from manifest text — so the `Package@swift-6.swift`
+    // escape documented at the top of this file cannot defeat them:
+    //
+    //   1. the package's own `dependencies`, which is what a `.package(url:)` or
+    //      `.package(path:)` in the manifest produces; and
+    //   2. every target's `product_dependencies`, which is what actually LINKS
+    //      that foreign code into a binary.
+    //
+    // Door 2 is not redundant. A dependency declared and unused is harmless; a
+    // product taken into a target is the one that ships. SwiftPM emits
+    // `product_dependencies` only for a target that has one, so its absence
+    // today is the passing state and not a missing field — measured against a
+    // two-package fixture, where the key appears holding `["Dep"]`.
+    //
+    // Should this package ever need a dependency, this check is the deliberate
+    // stop where somebody decides how the new code gets read for §6.1.
+    let package = try resolvedPackage.get()
+
+    // A description of nothing would satisfy both checks below.
+    #expect(package.targets.isEmpty == false,
+            "the description listed no targets at \(packageRoot.path)")
+
+    #expect(package.packageDependencies.isEmpty, """
+        the package resolved external dependencies: \(package.packageDependencies).
+        Their sources live outside this repository, so no check in this file can \
+        read them for a display assertion. Vendor the code, or extend this guard \
+        to scan the checkout deliberately.
+        """)
+
+    let importers = package.targets
+        .filter { $0.value.productDependencies.isEmpty == false }
+        .map { "\($0.key) takes \($0.value.productDependencies.sorted())" }
+        .sorted()
+
+    #expect(importers.isEmpty, """
+        targets link products from another package: \(importers).
+        That code reaches the coffee-bar binary and no content check here reads \
+        one line of it.
+        """)
+}
+
+// MARK: - The discriminator the below-app checks rest on
+
+@Test func swiftCodeWithoutCommentsKeepsCodeAndDropsComments() {
+    // The below-app checks are only as good as this function. If it stripped
+    // nothing, `AssertionHolder.swift`'s doc comment would fail a correct tree;
+    // if it stripped string literals, a display assertion raised from a plain
+    // literal would pass. Both directions are pinned here.
+    //
+    // Each case is a literal in, a literal out — never the function's own logic
+    // re-run as the expectation.
+    let cases: [(name: String, source: String, expected: String)] = [
+        ("a line comment goes, the code around it stays",
+         "let a = 1 // PreventUserIdleDisplaySleep\nlet b = 2",
+         "let a = 1 \nlet b = 2"),
+
+        ("a doc comment naming the constant goes",
+         "/// does **not** hold `PreventUserIdleDisplaySleep`.\nlet a = 1",
+         "\nlet a = 1"),
+
+        ("a block comment goes and keeps its line breaks",
+         "let a = 1\n/* caffeinate -d\n   beginActivity */\nlet b = 2",
+         "let a = 1\n\n\nlet b = 2"),
+
+        ("nested block comments close at the outer end, not the inner one",
+         "let a = 1 /* outer /* inner */ still comment */ let b = 2",
+         "let a = 1  let b = 2"),
+
+        // The escape route that stripping literals would open.
+        ("a string literal survives, contents and all",
+         "IOPMAssertionCreateWithName(\"PreventUserIdleDisplaySleep\" as CFString)",
+         "IOPMAssertionCreateWithName(\"PreventUserIdleDisplaySleep\" as CFString)"),
+
+        ("`//` inside a string literal opens no comment",
+         "let url = \"https://example.com/beginActivity\"\nlet a = 1",
+         "let url = \"https://example.com/beginActivity\"\nlet a = 1"),
+
+        ("`/*` inside a string literal opens no comment",
+         "let glob = \"/*\"\nlet a = 1",
+         "let glob = \"/*\"\nlet a = 1"),
+
+        ("an escaped quote does not end the string early",
+         "let a = \"he said \\\"caffeinate\\\" loudly\" // gone\nlet b = 2",
+         "let a = \"he said \\\"caffeinate\\\" loudly\" \nlet b = 2"),
+
+        ("a raw string keeps its contents and its delimiters",
+         "let a = #\"a \\#(x) caffeinate \"quoted\" here\"# // gone",
+         "let a = #\"a \\#(x) caffeinate \"quoted\" here\"# "),
+
+        ("a multi-line string keeps everything between the fences",
+         "let a = \"\"\"\n// not a comment\ncaffeinate\n\"\"\"\nlet b = 2",
+         "let a = \"\"\"\n// not a comment\ncaffeinate\n\"\"\"\nlet b = 2"),
+
+        ("a `#` that opens no string is kept",
+         "let p = #filePath // gone",
+         "let p = #filePath "),
+
+        ("division is not a comment",
+         "let half = total / 2 / 1",
+         "let half = total / 2 / 1"),
+    ]
+
+    for testCase in cases {
+        #expect(swiftCodeWithoutComments(testCase.source) == testCase.expected,
+                "\(testCase.name): got \(swiftCodeWithoutComments(testCase.source).debugDescription)")
     }
 }
 

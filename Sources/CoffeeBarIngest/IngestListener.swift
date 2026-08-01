@@ -12,7 +12,8 @@ public enum IngestError: Error, Equatable {
     case directoryUnwritable(String)
     /// Another listener already answers at this path, or this one already does.
     case alreadyServing(String)
-    /// Something sits at the socket path that must not be cleared out.
+    /// Something sits at the socket path that must not, or cannot, be cleared
+    /// out.
     case socketPathBlocked(String)
 }
 
@@ -89,7 +90,31 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
     private let lock = NSLock()
     private var listener: NWListener?
     private var activeConnections = 0
-    private var ready = false
+
+    /// Which socket node this listener bound, captured when it reported
+    /// `.ready`. Non-nil IS "ready". See `isReady`.
+    ///
+    /// It replaces a plain `Bool`. Two fields that have to agree would be one
+    /// more invariant to keep, and this one carries strictly more than the flag
+    /// did. The three write sites are unchanged: here, the `.ready` state, and
+    /// `stop()`.
+    private var boundNode: NodeIdentity?
+
+    /// Identifies one node on one filesystem.
+    ///
+    /// Device AND inode. An inode number is unique only within a filesystem,
+    /// and the socket path is user-configurable at the initialiser, so the two
+    /// have to travel together.
+    private struct NodeIdentity: Equatable {
+        let device: dev_t
+        let inode: ino_t
+    }
+
+    /// Lifetime census for the per-connection state. See `ConnectionCensus`.
+    ///
+    /// Internal, so a test can prove those objects are RELEASED. Nothing on the
+    /// serving path reads it.
+    let connectionCensus = ConnectionCensus()
 
     public init(socketPath: String = UnixSocketIngestListener.defaultSocketPath,
                 idleTimeout: TimeInterval = UnixSocketIngestListener.defaultIdleTimeout,
@@ -107,12 +132,43 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
     ///
     /// `public` since it became an `IngestListening` requirement. It is the
     /// panel's answer to "is this process serving", which no read of the user's
-    /// settings file can give. `stop()` clears it, and a bind that never
-    /// reaches `.ready` never sets it, so a false answer here means the socket
-    /// really is not serving.
+    /// settings file can give.
+    ///
+    /// A stored flag alone answered for the PAST. It was written at exactly
+    /// three sites — the initialiser, the `.ready` state, and `stop()` — so
+    /// `stop()` was the only thing that ever cleared it, and a node that went
+    /// away while the process ran left it true. Measured: the user deletes the
+    /// node, `curl` fails at exit 7, every event is lost, and the panel reports
+    /// no problem at all, because `ingestListening` is this value.
+    ///
+    /// So the flag became a precondition and the node became the proof. The
+    /// question asked is IDENTITY, not existence: is the node at the path the
+    /// one this listener bound. A type check cannot answer it. The scenario
+    /// recorded at the `occupant` call site below — a second binder unlinks the
+    /// node and binds its own, and this listener is left `.ready` on an
+    /// unlinked inode, deaf for ever — leaves a socket of exactly the right
+    /// type at the path. Only device and inode tell the two apart.
+    ///
+    /// `lstat`, never `stat`. A symlink at the path answers false even when it
+    /// resolves to this listener's own socket. The node has then left the 0700
+    /// directory, which is the whole access control of design §4, so answering
+    /// true would report a security property the app no longer has.
+    ///
+    /// The lock is released BEFORE the syscall. This is polled in tight loops,
+    /// not only on the 30 s refresh, and `accept` takes the same lock on every
+    /// connection. Measured at 1.3 µs per call, which is 0.0067 % of a core at
+    /// one call per 20 ms. No ratio against the bare flag is quoted: that
+    /// multiplier moves with machine load, where both absolutes reproduce.
+    ///
+    /// `stop()` still clears the identity, and that is still load-bearing: it
+    /// leaves the node in place on purpose, so the node alone cannot say that
+    /// this listener stopped.
     public var isReady: Bool {
-        lock.lock(); defer { lock.unlock() }
-        return ready
+        lock.lock()
+        let bound = boundNode
+        lock.unlock()
+        guard let bound else { return false }
+        return Self.nodeIdentity(atPath: socketPath) == bound
     }
 
     /// How many connections are being served right now.
@@ -173,6 +229,22 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
             // on it. Removing a node NOTHING answers on is how every unix-socket
             // server starts.
             try? FileManager.default.removeItem(atPath: path)
+            // The AFTER-STATE, not the return. `try?` is right here — the node
+            // may legitimately have gone by itself between the probe and this
+            // line, and that error means nothing — but a node that SURVIVES
+            // means everything. Measured: a dangling symlink plus
+            // `lchflags(path, UF_IMMUTABLE)`, a USER flag any process under this
+            // account can set on its own link, made the delete fail silently.
+            // The bind then went THROUGH the surviving link and the socket
+            // landed at the far end, which is the relocation this probe exists
+            // to stop, reached by a second route.
+            //
+            // Refusing is the only honest answer. Recovery is what makes
+            // `.stale` the right classification for a link, and where the
+            // recovery cannot happen there is nothing left to prefer it for.
+            guard Self.nodeType(atPath: path) == nil else {
+                throw IngestError.socketPathBlocked(path)
+            }
         }
 
         let parameters = NWParameters.tcp
@@ -187,8 +259,12 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
             try? FileManager.default.setAttributes(
                 [.posixPermissions: 0o600], ofItemAtPath: path)
             guard let self else { return }
+            // Identity, not existence. A capture that fails means no socket of
+            // ours is at the path, which is what `isReady` would answer in any
+            // case, so nothing is stored and this listener reports false.
+            guard let identity = Self.nodeIdentity(atPath: path) else { return }
             self.lock.lock()
-            self.ready = true
+            self.boundNode = identity
             self.lock.unlock()
         }
 
@@ -226,7 +302,7 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
         let cancelling = listener
         listener = nil
         activeConnections = 0
-        ready = false
+        boundNode = nil
         lock.unlock()
         cancelling?.cancel()
     }
@@ -240,7 +316,7 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
         case stale
         /// Something answers, or we cannot prove otherwise.
         case live
-        /// Something is there that must not be cleared out.
+        /// Something is there that must not, or cannot, be cleared out.
         case blocked
     }
 
@@ -285,13 +361,108 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
         // all, ECONNREFUSED for a bound node whose owner has gone, ENOTSOCK for
         // a plain file left at the path.
         switch errno {
-        case ENOENT: return .absent
+        case ENOENT:
+            // `connect` FOLLOWS a symlink, so a DANGLING one answers ENOENT —
+            // the same errno an empty path gives. `lstat` tells the two apart,
+            // because it does not follow the link.
+            //
+            // Answering `.absent` for both was measured to RELOCATE the live
+            // socket. `.absent` removes nothing, so `NWListener` bound through
+            // the link and created the node at the link's target. The 0700
+            // directory above then guarded a path nothing was serving on. The
+            // 0755 bind window documented there is not created by the link and
+            // measured 0.2 ms; what the link does is move that known window out
+            // of the directory that closes it. The loss is defence in depth.
+            //
+            // `.stale` rather than `.blocked`, deliberately. `removeItem` does
+            // not follow a symlink, so it takes the LINK, and a dangling link
+            // has no target left to take. A link to an unserved socket and a
+            // link to a regular file already resolve here, so all three
+            // removable link cases now follow one rule. It also RECOVERS from a
+            // planted link rather than only reporting it, and recovery here is
+            // free: a dangling link has no target to lose.
+            //
+            // That is a preference, not an absolute. A refusal is NOT uniquely
+            // bad — a link to a directory already gives a standing refusal this
+            // app cannot clear itself, and the design accepts that outcome. So
+            // `.blocked` is chosen wherever recovery is not free, including a
+            // delete that fails, above.
+            //
+            // A live node is never reached by this branch. It answers `connect`
+            // or gives ECONNREFUSED, and it is not a symlink either way.
+            return Self.nodeType(atPath: path) == mode_t(S_IFLNK) ? .stale : .absent
         case ECONNREFUSED, ENOTSOCK: return .stale
         default: return .live
         }
     }
 
+    /// The type bits of the node AT `path`, or nil when there is nothing there.
+    ///
+    /// `lstat`, never `stat`. Both callers ask about the object at the path
+    /// itself rather than about what it resolves to.
+    private static func nodeType(atPath path: String) -> mode_t? {
+        var status = stat()
+        guard lstat(path, &status) == 0 else { return nil }
+        return status.st_mode & mode_t(S_IFMT)
+    }
+
+    /// Which SOCKET node is at `path`, or nil when the path does not hold one.
+    ///
+    /// `lstat`, never `stat`, for the reason `isReady` gives: a symlink must
+    /// answer nil even when it resolves to this listener's own socket.
+    private static func nodeIdentity(atPath path: String) -> NodeIdentity? {
+        var status = stat()
+        guard lstat(path, &status) == 0 else { return nil }
+        guard status.st_mode & mode_t(S_IFMT) == mode_t(S_IFSOCK) else { return nil }
+        return NodeIdentity(device: status.st_dev, inode: status.st_ino)
+    }
+
     // MARK: - Serving one connection
+
+    /// Counts the `ConnectionState` objects made and freed.
+    ///
+    /// It exists so a test can prove they are FREED. `ConnectionState` owns a
+    /// framer, and the framer keeps the entire raw POST — headers and body — in
+    /// a stored property. One state object that outlives its connection
+    /// therefore pins that request's bytes, the assistant reply text among them,
+    /// for the life of the process. Design §7 forbids reading conversation
+    /// content at all, so retaining it is the same defect at rest.
+    ///
+    /// Per listener rather than process-wide, deliberately. `swift-testing` runs
+    /// tests in parallel, so a global counter would be moved by every other test
+    /// that serves a connection, and no test could own its own reading.
+    ///
+    /// `made` carries as much weight as `live`: an assertion that nothing is
+    /// alive passes on its own whenever nothing was ever built, so a test needs
+    /// both numbers to say anything.
+    final class ConnectionCensus: @unchecked Sendable {
+        private let lock = NSLock()
+        private var made = 0
+        private var live = 0
+
+        fileprivate func noteMade() {
+            lock.lock(); defer { lock.unlock() }
+            made += 1
+            live += 1
+        }
+
+        fileprivate func noteFreed() {
+            lock.lock(); defer { lock.unlock() }
+            live -= 1
+        }
+
+        /// How many per-connection state objects exist right now.
+        var liveCount: Int {
+            lock.lock(); defer { lock.unlock() }
+            return live
+        }
+
+        /// How many have been made since this listener was created.
+        var createdCount: Int {
+            lock.lock(); defer { lock.unlock() }
+            return made
+        }
+    }
 
     /// Per-connection state.
     ///
@@ -303,6 +474,14 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
         var framer = HTTPRequestFramer()
         var timeout: DispatchWorkItem?
         private var released = false
+        private let census: ConnectionCensus
+
+        init(census: ConnectionCensus) {
+            self.census = census
+            census.noteMade()
+        }
+
+        deinit { census.noteFreed() }
 
         /// True exactly once. The idle timer and the final frame race each
         /// other, and the connection slot must come back exactly one time.
@@ -336,7 +515,7 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
             return
         }
 
-        let state = ConnectionState()
+        let state = ConnectionState(census: connectionCensus)
         // A peer that opens a connection and then says nothing produces no
         // complete frame, no `isComplete` and no error, so nothing else in the
         // receive loop would ever end it.
@@ -354,6 +533,13 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
     private func finish(_ connection: NWConnection, state: ConnectionState) {
         guard state.claimRelease() else { return }
         state.timeout?.cancel()
+        // Cancelling is NOT releasing. The work item's block captures `state`
+        // strongly, and `state` owns the item, so leaving this set keeps
+        // `state -> timeout -> block -> state` alive as an island nothing can
+        // reach and nothing ever frees. `state.framer` holds the whole raw POST,
+        // so every served request would pin its bytes for the life of the
+        // process. Measured before this line existed: 0 of 2200 states freed.
+        state.timeout = nil
         lock.lock()
         // Clamped because `stop()` zeroes the counter while connections may
         // still be draining.
@@ -362,11 +548,30 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
         connection.cancel()
     }
 
+    /// The most bytes one `receive` may hand back at a time.
+    ///
+    /// Deliberately NOT `HTTPRequestFramer.maximumBytes`, which this used to be.
+    /// The two answer different questions. That constant is a PROTOCOL limit —
+    /// how large one request may be. This one is a TRANSPORT limit — how much of
+    /// that request may arrive in a single delivery. Tying the second to the
+    /// first means every rise in the request cap silently retunes the socket.
+    ///
+    /// It matters in bytes, not only in tidiness. The framer refuses only AFTER
+    /// it appends, so a connection peaks at `maximumBytes + receiveChunkBytes`.
+    /// With `defaultMaximumConnections` at 32 and the cap now 1 MiB, holding
+    /// this at 64 KiB keeps the worst case near 34 MiB, where copying the cap
+    /// here would allow 64 MiB — in an app that is meant to stay invisible.
+    ///
+    /// A smaller value costs more receives, never a stalled read:
+    /// `minimumIncompleteLength` is 1, so each receive returns as soon as any
+    /// byte is available and never waits for this many.
+    private static let receiveChunkBytes = 65_536
+
     private func receive(_ connection: NWConnection,
                          state: ConnectionState,
                          onEvent: @escaping @Sendable (HookEvent) -> Void) {
         connection.receive(minimumIncompleteLength: 1,
-                           maximumLength: HTTPRequestFramer.maximumBytes) {
+                           maximumLength: Self.receiveChunkBytes) {
             [weak self] data, _, isComplete, error in
             guard let self else { connection.cancel(); return }
 

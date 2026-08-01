@@ -40,21 +40,106 @@ private struct SocketSandbox {
     func remove() { try? FileManager.default.removeItem(at: directory) }
 }
 
+/// A second directory this test owns, OUTSIDE the socket's 0700 parent.
+///
+/// It is where a symlink at the socket path points, and where a relocated
+/// socket would land. 0755 on purpose: finding I2 is that the bind leaves the
+/// one directory no other user can traverse, so the far end has to be a place
+/// where that matters.
+///
+/// The same 104-byte `sun_path` budget applies. The per-user temporary
+/// directory is 49 bytes and `/cb-rt-XXXXXX/r.sock` adds 20, for 69.
+private struct RelocationTarget {
+    let directory: URL
+
+    init() {
+        let tag = String(UUID().uuidString.prefix(6)).lowercased()
+        directory = FileManager.default.temporaryDirectory.appending(path: "cb-rt-\(tag)")
+    }
+
+    var path: String { directory.appending(path: "r.sock").path }
+
+    func makeDirectory() throws {
+        try FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o755])
+    }
+
+    func remove() { try? FileManager.default.removeItem(at: directory) }
+}
+
 private func mode(ofItemAtPath path: String) -> Int16? {
     (try? FileManager.default.attributesOfItem(atPath: path)[.posixPermissions]
         as? NSNumber)??.int16Value
 }
 
+/// What kind of object sits at `path`, without following a symlink.
+///
+/// `attributesOfItem` is `lstat`-based, so a symlink answers
+/// `.typeSymbolicLink` and never the type of its target. That distinction is
+/// the whole of finding I2: a test that followed the link would report a socket
+/// and never see that the socket is somewhere else.
+private func fileType(ofItemAtPath path: String) -> FileAttributeType? {
+    (try? FileManager.default.attributesOfItem(atPath: path)[.type]) as? FileAttributeType
+}
+
+/// The longest a post may take before the test stops waiting for it.
+///
+/// Bounding this is not tidiness. `curl` with no limit waits for an answer for
+/// ever, and a listener that is bound but not being SERVED gives it none: the
+/// node is in the listen backlog, so the connection succeeds and then nothing
+/// arrives. Measured, that hung one test body permanently and took the whole run
+/// with it — 375 tests started, 318 finished, and the run had to be killed after
+/// ten minutes with no failure reported at all.
+///
+/// Sixty seconds is far longer than any post here needs. The exchange is one
+/// small POST over a local socket, and even under the CPU oversubscription that
+/// `pumpBudget` is sized for the whole suite finishes in about 150 s. A post
+/// that reaches this limit reports `curl` exit 28.
+private let postTimeoutSeconds = "60"
+
 /// Posts one payload the way a real hook does. `/usr/bin/curl` ships with macOS.
+///
+/// Returns `curl`'s exit status: 0 on success, 7 when the socket could not be
+/// connected to, and 28 when the listener accepted the connection and never
+/// answered within `postTimeoutSeconds`.
 @discardableResult
 private func post(_ json: String, to socketPath: String) throws -> Int32 {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
     process.arguments = ["--silent", "--show-error", "--fail",
+                         "--max-time", postTimeoutSeconds,
                          "--unix-socket", socketPath,
                          "-X", "POST",
                          "-H", "Content-Type: application/json",
                          "--data", json,
+                         "http://localhost/ingest"]
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    try process.run()
+    process.waitUntilExit()
+    return process.terminationStatus
+}
+
+/// Posts a body that is too large to pass through `argv`.
+///
+/// `ARG_MAX` is 1 MiB on macOS (`getconf ARG_MAX`) and bounds the arguments and
+/// the environment TOGETHER, so a body near the 1 MiB request cap cannot ride on
+/// the command line the way `post(_:to:)` sends one. The payload goes to a file
+/// instead.
+///
+/// `--data-binary` rather than `--data`: `--data` strips newlines, and a test
+/// about exact framing must send exactly the bytes on disk.
+@discardableResult
+private func post(contentsOfFile path: String, to socketPath: String) throws -> Int32 {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+    process.arguments = ["--silent", "--show-error", "--fail",
+                         "--max-time", postTimeoutSeconds,
+                         "--unix-socket", socketPath,
+                         "-X", "POST",
+                         "-H", "Content-Type: application/json",
+                         "--data-binary", "@\(path)",
                          "http://localhost/ingest"]
     process.standardOutput = FileHandle.nullDevice
     process.standardError = FileHandle.nullDevice
@@ -120,6 +205,50 @@ private final class RawClient {
     func close() { Darwin.close(descriptor) }
 }
 
+/// Binds a raw `AF_UNIX` listening socket at `path`, the way a FOREIGN process
+/// would: it unlinks whatever is there and takes the path for itself.
+///
+/// Deliberately NOT a second `UnixSocketIngestListener`. `start()` refuses to
+/// steal a live node, so this listener can no longer reproduce the scenario the
+/// file documents at the `occupant` call site — a second instance that unlinked
+/// and rebound, leaving the first one `.ready` on an unlinked inode and deaf
+/// for ever. Another program under the same account is under no such rule.
+private final class ForeignListener {
+    private let descriptor: Int32
+
+    init?(takingOver path: String) {
+        let opened = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard opened >= 0 else { return nil }
+
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+        let bytes = Array(path.utf8)
+        guard bytes.count < MemoryLayout.size(ofValue: address.sun_path) else {
+            Darwin.close(opened)
+            return nil
+        }
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: bytes) }
+
+        // `bind` fails with EADDRINUSE on an existing node, so the path has to
+        // be cleared first. That unlink is the whole attack.
+        Darwin.unlink(path)
+
+        let bound = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(opened, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard bound == 0, Darwin.listen(opened, 1) == 0 else {
+            Darwin.close(opened)
+            return nil
+        }
+        descriptor = opened
+    }
+
+    func close() { Darwin.close(descriptor) }
+}
+
 /// Collects what the listener delivered, across the queue boundary.
 private final class Collected: @unchecked Sendable {
     private let lock = NSLock()
@@ -139,22 +268,89 @@ private final class Collected: @unchecked Sendable {
     }
 }
 
+/// How long every wait in this file gets, unless it states its own budget.
+///
+/// Five seconds was the old value and it was measured to be too short. On this
+/// 14-core machine with 56 CPU burners running — roughly the pressure a 3-core
+/// CI runner is under — the suite took 153 s where it takes 3.9 s idle, and NINE
+/// tests in this file failed purely because a 5 s wait for the bind expired.
+///
+/// A generous budget is close to free. Every default-budget wait here is for
+/// something that MUST happen, so a passing test leaves the loop as soon as the
+/// condition holds and never spends the budget. Only an already-failing test
+/// pays, and it pays in exchange for naming its real cause. The one wait for a
+/// condition that must NEVER hold states its own short budget, and must keep
+/// doing so.
+private let pumpBudget: TimeInterval = 30
+
 /// Waits until `condition` holds or the deadline passes.
 ///
-/// The listener runs on `DispatchQueue.main`. `swift-testing` runs a test body
-/// on the concurrency pool rather than on the main thread, and the harness's own
-/// main-actor executor drains the main queue, so this thread only has to wait.
-/// When a test body IS on the main thread, waiting would starve the very queue
-/// it is waiting for, so the run loop is turned over instead.
-private func pump(until condition: () -> Bool, seconds: TimeInterval = 5) {
+/// NEVER on the main thread. That is enforced below rather than merely written
+/// here, because the failure it prevents is silent and total.
+///
+/// Measured in this package, not assumed. Marking any test in this file
+/// `@MainActor` makes `Thread.isMainThread` true here. This helper used to turn
+/// the run loop over in that case, and inside the `swift test` process that does
+/// not drain `DispatchQueue.main` at all: a bare `DispatchQueue.main.async`
+/// block enqueued just before the wait never ran, and the listener never
+/// reported `.ready`, so the whole budget went by.
+///
+/// What follows is worse than one slow test. `NWListener` binds on its own
+/// internal queue, so the socket node DOES appear — measured at mode 0755,
+/// because the handler that tightens it to 0600 is delivered to `.main` and
+/// never runs. `curl` then connects into the listen backlog and waits for an
+/// answer that cannot come, so the test body never returns and the main thread
+/// is held for ever. One such test wedged the entire run: 375 tests started, 318
+/// finished, killed after ten minutes with no failure reported.
+///
+/// The deleted branch is not wrong everywhere — in a plain executable, where the
+/// Swift runtime does run a CFRunLoop on the main thread, the same code drains
+/// the main queue correctly. That is the point. Its correctness depends on who
+/// owns the main thread, which a test cannot know, so the branch is gone and a
+/// trap that names the cause stands in its place.
+private func pump(until condition: () -> Bool, seconds: TimeInterval = pumpBudget) {
+    precondition(!Thread.isMainThread, """
+        pump() ran on the main thread. Every listener in this file serves on \
+        DispatchQueue.main, and waiting here never lets that queue run, so this \
+        wait cannot end and the run will wedge. Remove @MainActor from the test \
+        that called this.
+        """)
     let deadline = Date().addingTimeInterval(seconds)
     while !condition() && Date() < deadline {
-        if Thread.isMainThread {
-            RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02))
-        } else {
-            Thread.sleep(forTimeInterval: 0.02)
-        }
+        Thread.sleep(forTimeInterval: 0.02)
     }
+}
+
+/// Waits for the listener to bind, and SAYS SO when it does not.
+///
+/// Every test below needs a bound socket before it can measure anything. When
+/// the bind did not happen, the old `pump(until: { listener.isReady })` said
+/// nothing and the next assertion reported the consequence as if it were the
+/// cause. Measured under load, all nine failures in this file read that way:
+///
+/// - `socket mode is absent` — reads as a permissions defect. The listener had
+///   simply not bound.
+/// - `an error was expected but none was thrown` — reads as the guard against
+///   stealing a live node being gone. The first listener had not bound, so the
+///   second one correctly found the path free.
+/// - `RawClient(path:) -> nil` — reads as a refused connection. There was no
+///   node to connect to.
+///
+/// The first of those is why this is a `#require` and not an `#expect`. A
+/// maintainer triaging `socket mode is absent` hunts a permissions defect that
+/// does not exist. A test with no socket has nothing left to say, so it stops
+/// here and names the one thing that did go wrong.
+private func requireReady(_ listener: UnixSocketIngestListener,
+                          within seconds: TimeInterval = pumpBudget,
+                          sourceLocation: SourceLocation = #_sourceLocation) throws {
+    pump(until: { listener.isReady }, seconds: seconds)
+    try #require(listener.isReady,
+                 """
+                 the listener did not bind within \(seconds) s. Nothing below \
+                 this line had a socket to measure, so this is a timeout and \
+                 not a defect in what the test asserts.
+                 """,
+                 sourceLocation: sourceLocation)
 }
 
 /// Waits for the node at `path` to stop answering.
@@ -181,7 +377,7 @@ private func waitUntilNothingAnswers(at path: String) {
     try listener.start { event in
         collected.record(event, onMain: Thread.isMainThread)
     }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
 
     #expect(try post(#"{"hook_event_name":"Stop","session_id":"s1"}"#, to: sandbox.path) == 0)
     pump(until: { !collected.all.isEmpty })
@@ -204,7 +400,7 @@ private func waitUntilNothingAnswers(at path: String) {
     try listener.start { event in
         collected.record(event, onMain: Thread.isMainThread)
     }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
 
     #expect(try post(#"{"hook_event_name":"Stop","session_id":"s1"}"#, to: sandbox.path) == 0)
     pump(until: { !collected.all.isEmpty })
@@ -224,7 +420,7 @@ private func waitUntilNothingAnswers(at path: String) {
     try listener.start { event in
         collected.record(event, onMain: Thread.isMainThread)
     }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
 
     _ = try post("not json at all", to: sandbox.path)
     _ = try post(#"{"hook_event_name":"Stop","session_id":"good"}"#, to: sandbox.path)
@@ -250,7 +446,7 @@ private func waitUntilNothingAnswers(at path: String) {
     try listener.start { event in
         collected.record(event, onMain: Thread.isMainThread)
     }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
 
     let attacker = try #require(RawClient(path: sandbox.path))
     attacker.transmit("POST /ingest HTTP/1.1\r\nHost: localhost\r\nContent-Length: -1\r\n\r\n")
@@ -273,7 +469,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
     try listener.start { _ in }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
 
     #expect(mode(ofItemAtPath: sandbox.path) == 0o600,
             "socket mode is \(mode(ofItemAtPath: sandbox.path).map { String($0, radix: 8) } ?? "absent")")
@@ -289,7 +485,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
     try listener.start { _ in }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
 
     #expect(mode(ofItemAtPath: sandbox.directory.path) == 0o700,
             "parent directory mode is \(mode(ofItemAtPath: sandbox.directory.path).map { String($0, radix: 8) } ?? "absent")")
@@ -311,7 +507,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
     try listener.start { _ in }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
 
     #expect(mode(ofItemAtPath: sandbox.directory.path) == 0o700)
 }
@@ -331,7 +527,7 @@ private func waitUntilNothingAnswers(at path: String) {
     defer { sandbox.remove() }
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     try listener.start { _ in }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
     #expect(FileManager.default.fileExists(atPath: sandbox.path))
 
     listener.stop()
@@ -355,7 +551,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let first = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { first.stop() }
     try first.start { event in collected.record(event, onMain: Thread.isMainThread) }
-    pump(until: { first.isReady })
+    try requireReady(first)
 
     let second = UnixSocketIngestListener(socketPath: sandbox.path)
     #expect(throws: IngestError.alreadyServing(sandbox.path)) {
@@ -367,6 +563,95 @@ private func waitUntilNothingAnswers(at path: String) {
     pump(until: { !collected.all.isEmpty })
     #expect(collected.all.map(\.sessionID) == ["first"],
             "the first listener stopped receiving after the second one started")
+}
+
+/// A released listener keeps the socket. Only `cancel()` gives it back.
+///
+/// This is the check behind the no-cleanup comment in `ServingModel.swift`.
+/// That comment used to claim the orphan's own `NWListener` "goes with it when
+/// the object does", which is FALSE, and the false claim was the entire stated
+/// justification for shipping `ServingModel` with no cleanup path.
+///
+/// The two halves have to be measured TOGETHER, and that is the whole design of
+/// this test. The wrapper really does deallocate. Only the `NWListener` inside
+/// it survives. A maintainer who checked the wrapper alone with a weak
+/// reference would watch it go away and conclude the comment was right — which
+/// is very probably how the false sentence came to be written.
+///
+/// This test PINS A LEAK. That is deliberate. It characterises behaviour that
+/// is intentional today but not desirable: `ServingModel` cannot own the
+/// listener's lifetime, because nothing can tell an orphaned model from the
+/// live one at release time — see `aModelThatGoesAwayLeavesTheListenerAlone`.
+/// If somebody lands a real fix (a self-owned-socket check in `occupant()`, or
+/// a cleanup path owned by whoever owns the lifetime), THIS TEST SHOULD GO RED.
+/// When it does, update the comment in `ServingModel.swift` in the same commit.
+/// Do not silence this test and leave the comment behind.
+///
+/// Named bug this catches: `deinit { stop() }` on `UnixSocketIngestListener`.
+/// The same mutant `aModelThatGoesAwayLeavesTheListenerAlone` kills from the
+/// model's side, killed here at the socket instead of at a stub's counter.
+@Test func aReleasedListenerNoLongerOwnsTheSocket() throws {
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    try sandbox.makeDirectory()
+
+    weak var observed: UnixSocketIngestListener?
+
+    do {
+        let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+        try listener.start { _ in }
+        try requireReady(listener)
+        // Precondition, not the point: the socket really was bound, so what the
+        // assertions below measure is a RELEASE and not a failed bind.
+        let bound = try #require(
+            RawClient(path: sandbox.path),
+            "the listener never accepted a connection, so nothing below measures a release")
+        bound.close()
+        observed = listener
+    }
+
+    // ASSERTION A — bullet 1. The wrapper DOES go away.
+    pump(until: { observed == nil })
+    #expect(observed == nil,
+            "the UnixSocketIngestListener itself outlived its last owner, which is not what was measured")
+
+    // ASSERTION B — bullet 2, and the load-bearing one. The NWListener does NOT.
+    // Closed rather than dropped: every probe in this file gives its descriptor
+    // back, and a leaked one would sit in the listen backlog of a listener no
+    // object owns any more.
+    let leaked = RawClient(path: sandbox.path)
+    #expect(leaked != nil,
+            "the socket stopped accepting once its owner was released — the comment in ServingModel.swift is now wrong and must be corrected with this test")
+    leaked?.close()
+
+    // ASSERTION C — bullet 2's second half. The leaked socket is not merely
+    // bound: it accepts a real hook post and drops it, so an external prober
+    // calls ingest healthy while every event is lost. 52 is "empty reply from
+    // server", which is what `newConnectionHandler`'s `guard let self else
+    // { connection.cancel() }` produces once the wrapper has gone.
+    let exit = try post(#"{"hook_event_name":"PreToolUse","session_id":"s1"}"#,
+                        to: sandbox.path)
+    #expect(exit == 52,
+            "a post to the leaked socket returned \(exit), not the measured 52 (accepted, then dropped)")
+
+    // ASSERTION D — bullet 3, and the control. Without it, a machine where
+    // nothing at that path ever refuses would pass A and B for the wrong
+    // reason. Same class, same path shape, stopped explicitly instead of
+    // dropped.
+    let control = SocketSandbox()
+    defer { control.remove() }
+    try control.makeDirectory()
+
+    let stopped = UnixSocketIngestListener(socketPath: control.path)
+    try stopped.start { _ in }
+    try requireReady(stopped)
+    let answering = try #require(RawClient(path: control.path), "the control never bound")
+    answering.close()
+
+    stopped.stop()
+    waitUntilNothingAnswers(at: control.path)
+    #expect(RawClient(path: control.path) == nil,
+            "stop() did not give the socket back, so this test cannot tell release from cancel and proves nothing")
 }
 
 @Test func aNodeLeftByAStoppedListenerIsReclaimedByTheNextStart() throws {
@@ -382,7 +667,7 @@ private func waitUntilNothingAnswers(at path: String) {
 
     let first = UnixSocketIngestListener(socketPath: sandbox.path)
     try first.start { _ in }
-    pump(until: { first.isReady })
+    try requireReady(first)
     first.stop()
     waitUntilNothingAnswers(at: sandbox.path)
     #expect(FileManager.default.fileExists(atPath: sandbox.path),
@@ -392,7 +677,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let second = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { second.stop() }
     try second.start { event in collected.record(event, onMain: Thread.isMainThread) }
-    pump(until: { second.isReady })
+    try requireReady(second)
 
     #expect(try post(#"{"hook_event_name":"Stop","session_id":"second"}"#,
                      to: sandbox.path) == 0)
@@ -413,7 +698,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
     try listener.start { _ in }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
 
     #expect(mode(ofItemAtPath: sandbox.path) == 0o600)
 }
@@ -439,6 +724,330 @@ private func waitUntilNothingAnswers(at path: String) {
             "start() deleted a directory it found at the socket path")
 }
 
+// MARK: - A symlink at the socket path (audit finding I2)
+
+@Test func aDanglingSymlinkAtTheSocketPathDoesNotRelocateTheLiveSocket() throws {
+    // Audit finding I2, measured deterministically over three runs of three.
+    // `fileExists` FOLLOWS a symlink, so a DANGLING one reads as nothing at
+    // all: the directory branch was skipped, `connect` gave ENOENT, and the
+    // probe answered `.absent`. `.absent` removes nothing, so `NWListener`
+    // bound THROUGH the link and the live socket was created at the link's
+    // TARGET. Every POST was then served from there, and `isReady` said yes.
+    //
+    // The harm is the loss of defence in depth, not a wide standing hole. The
+    // 0755 bind window is NOT created by the link: a control with no link shows
+    // the same two modes, and the window measured 0.2 ms. What the link does is
+    // move that known window OUT of the 0700 directory that closes it.
+    //
+    // `theParentDirectoryIsNotTraversableByOtherUsers` cannot catch this. It
+    // measures the CONFIGURED parent, which stays 0700 while the socket lives
+    // somewhere else entirely.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    try sandbox.makeDirectory()
+    let target = RelocationTarget()
+    defer { target.remove() }
+    try target.makeDirectory()
+
+    try FileManager.default.createSymbolicLink(atPath: sandbox.path,
+                                               withDestinationPath: target.path)
+    #expect(!FileManager.default.fileExists(atPath: target.path),
+            "the link is not dangling; this test would measure a different case")
+
+    let collected = Collected()
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+    try listener.start { event in collected.record(event, onMain: Thread.isMainThread) }
+    try requireReady(listener)
+
+    #expect(!FileManager.default.fileExists(atPath: target.path),
+            "the live socket was created at the link's target, outside the 0700 directory")
+    #expect(fileType(ofItemAtPath: sandbox.path) == .typeSocket,
+            "the configured path is \(fileType(ofItemAtPath: sandbox.path)?.rawValue ?? "absent"), not a socket")
+
+    // The recovery has to be complete, not merely safe. A fix that refused to
+    // start would also keep the socket out of the target directory.
+    #expect(try post(#"{"hook_event_name":"Stop","session_id":"here"}"#,
+                     to: sandbox.path) == 0)
+    pump(until: { !collected.all.isEmpty })
+    #expect(collected.all.map(\.sessionID) == ["here"])
+}
+
+@Test func aDanglingSymlinkThatCannotBeRemovedIsRefusedRatherThanFollowed() throws {
+    // `removeItem` is called as `try?`, so its error is dropped. That is right
+    // — the node may legitimately have gone by itself between the probe and the
+    // delete — but it means the RETURN says nothing about what is at the path.
+    //
+    // Named bug this catches: the delete fails, nothing notices, and the bind
+    // goes THROUGH the surviving link. That is the relocation of finding I2
+    // again, reached by a different route. `UF_IMMUTABLE` is a USER flag: any
+    // process running as this account can set it on its own link, and no
+    // special privilege is needed.
+    //
+    // Refusing is the only honest answer here. Recovery is what makes `.stale`
+    // the right classification for a dangling link, and when the recovery
+    // cannot happen there is nothing left to prefer it for.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    try sandbox.makeDirectory()
+    let target = RelocationTarget()
+    defer { target.remove() }
+    try target.makeDirectory()
+
+    try FileManager.default.createSymbolicLink(atPath: sandbox.path,
+                                               withDestinationPath: target.path)
+    // Registered AFTER the directory cleanups, so it runs BEFORE them: an
+    // immutable link cannot be deleted, and the sandbox would outlive the run.
+    defer { lchflags(sandbox.path, 0) }
+    #expect(lchflags(sandbox.path, UInt32(UF_IMMUTABLE)) == 0,
+            "lchflags failed, errno \(errno); this test would prove nothing")
+
+    // The flag has to really stop the delete on this machine. Without this the
+    // refusal below could not be told apart from `lchflags` doing nothing.
+    try? FileManager.default.removeItem(atPath: sandbox.path)
+    #expect(fileType(ofItemAtPath: sandbox.path) == .typeSymbolicLink,
+            "UF_IMMUTABLE did not stop the delete; this test would prove nothing")
+
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+    #expect(throws: IngestError.socketPathBlocked(sandbox.path)) {
+        try listener.start { _ in }
+    }
+
+    // A short budget of its own, because this condition must NEVER hold.
+    // `start()` returning is not the bind: `NWListener` binds asynchronously,
+    // so reading the far end straight away would pass before a relocation had
+    // had time to appear, and the assertion would measure nothing.
+    pump(until: { FileManager.default.fileExists(atPath: target.path) }, seconds: 2)
+    #expect(!FileManager.default.fileExists(atPath: target.path),
+            "the bind went through the link that survived the delete")
+}
+
+@Test func aSymlinkToAnUnservedSocketIsClearedRatherThanFollowed() throws {
+    // One of the three symlink cases that were already correct before I2 was
+    // fixed. Connecting through the link reaches a bound node whose owner has
+    // gone, which gives ECONNREFUSED, so the probe says `.stale`. `removeItem`
+    // does not follow a symlink, so it takes the LINK and the far end survives.
+    //
+    // Named bug this catches: a fix for the dangling case that reclassifies
+    // EVERY symlink, leaving the app refusing to start on a path it used to
+    // reclaim without help.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let target = RelocationTarget()
+    defer { target.remove() }
+    try target.makeDirectory()
+
+    // An unserved socket node. `stop()` leaves one behind on purpose.
+    let dead = UnixSocketIngestListener(socketPath: target.path)
+    try dead.start { _ in }
+    try requireReady(dead)
+    dead.stop()
+    waitUntilNothingAnswers(at: target.path)
+    #expect(fileType(ofItemAtPath: target.path) == .typeSocket,
+            "no unserved socket node was left; this test would measure a different case")
+
+    try sandbox.makeDirectory()
+    try FileManager.default.createSymbolicLink(atPath: sandbox.path,
+                                               withDestinationPath: target.path)
+
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+    try listener.start { _ in }
+    try requireReady(listener)
+
+    #expect(fileType(ofItemAtPath: sandbox.path) == .typeSocket,
+            "the configured path is \(fileType(ofItemAtPath: sandbox.path)?.rawValue ?? "absent"), not a socket")
+    #expect(FileManager.default.fileExists(atPath: target.path),
+            "removeItem followed the link and deleted the node at the far end")
+}
+
+@Test func aSymlinkToARegularFileIsClearedRatherThanFollowed() throws {
+    // The second already-correct case. ENOTSOCK through the link, so `.stale`,
+    // and again `removeItem` takes the link. The file at the far end surviving
+    // is what proves the link was not followed.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let target = RelocationTarget()
+    defer { target.remove() }
+    try target.makeDirectory()
+    FileManager.default.createFile(atPath: target.path, contents: Data("keep".utf8))
+
+    try sandbox.makeDirectory()
+    try FileManager.default.createSymbolicLink(atPath: sandbox.path,
+                                               withDestinationPath: target.path)
+
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+    try listener.start { _ in }
+    try requireReady(listener)
+
+    #expect(fileType(ofItemAtPath: sandbox.path) == .typeSocket,
+            "the configured path is \(fileType(ofItemAtPath: sandbox.path)?.rawValue ?? "absent"), not a socket")
+    #expect(FileManager.default.contents(atPath: target.path) == Data("keep".utf8),
+            "removeItem followed the link and deleted the file at the far end")
+}
+
+@Test func aSymlinkToADirectoryAtTheSocketPathIsRefusedRatherThanDeleted() throws {
+    // The third already-correct case. `fileExists` FOLLOWS the link and reports
+    // a directory, so the probe says `.blocked` and `start()` throws.
+    //
+    // Named bug this catches: a fix for the dangling case placed BEFORE the
+    // directory branch, which would send a link to a directory to `removeItem`.
+    // The link itself would go, and on the next run the same path would be a
+    // plain directory the existing guard already refuses — but the app would
+    // have silently thrown away the user's link either way.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let target = RelocationTarget()
+    defer { target.remove() }
+    try target.makeDirectory()
+    let witness = target.directory.appending(path: "keep.txt").path
+    FileManager.default.createFile(atPath: witness, contents: Data("keep".utf8))
+
+    try sandbox.makeDirectory()
+    try FileManager.default.createSymbolicLink(atPath: sandbox.path,
+                                               withDestinationPath: target.directory.path)
+
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+    #expect(throws: IngestError.socketPathBlocked(sandbox.path)) {
+        try listener.start { _ in }
+    }
+    #expect(FileManager.default.fileExists(atPath: witness),
+            "start() reached a directory through the link and deleted what was under it")
+    #expect(fileType(ofItemAtPath: sandbox.path) == .typeSymbolicLink,
+            "start() deleted the link it refused to follow")
+}
+
+// MARK: - isReady answers for now (audit finding I3)
+
+@Test func isReadyIsFalseOnceTheSocketNodeIsGone() throws {
+    // Audit finding I3. `ready` is written at exactly three sites — the
+    // initialiser, the `.ready` state, and `stop()` — so `stop()` was the only
+    // thing that ever cleared it, and a vanished node left it true.
+    //
+    // Named bug this catches: the user deletes the node, `curl` fails at exit
+    // 7, every agent event is lost, and the panel reports NO problem, because
+    // `ServingModel` sets `ingestListening = listener.isReady` and
+    // `ingestAdvisory` then returns nil.
+    //
+    // Deleting it by hand is a plausible act, not a contrived one: `stop()`
+    // deliberately leaves stale nodes behind, so tidying one up is exactly what
+    // the app's own behaviour invites.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+    try listener.start { _ in }
+    try requireReady(listener)
+
+    try FileManager.default.removeItem(atPath: sandbox.path)
+
+    // Measured rather than assumed, and measured FIRST: if a post still
+    // succeeded, the answer below would be about nothing.
+    #expect(try post(#"{"hook_event_name":"Stop","session_id":"lost"}"#,
+                     to: sandbox.path) != 0,
+            "the node was still being served; this test would measure a different case")
+    #expect(!listener.isReady,
+            "isReady answered for a past start(); nothing can post and the panel shows no problem")
+}
+
+@Test func isReadyIsFalseWhenTheSocketPathHoldsSomethingThatIsNotASocket() throws {
+    // The node can be REPLACED as well as removed, and the replacement is what
+    // separates two candidate fixes. Named bug this catches: an `isReady` that
+    // asks only whether SOMETHING exists at the path. A regular file answers
+    // that question yes while no connection can be made through it.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+    try listener.start { _ in }
+    try requireReady(listener)
+
+    try FileManager.default.removeItem(atPath: sandbox.path)
+    FileManager.default.createFile(atPath: sandbox.path, contents: Data("not a socket".utf8))
+    #expect(FileManager.default.fileExists(atPath: sandbox.path),
+            "nothing took the path; this test would measure the removal case instead")
+
+    #expect(try post(#"{"hook_event_name":"Stop","session_id":"lost"}"#,
+                     to: sandbox.path) != 0,
+            "the path was still being served; this test would measure a different case")
+    #expect(!listener.isReady,
+            "isReady treats any node at the path as proof of serving")
+}
+
+@Test func isReadyIsFalseAfterAnotherProgramTakesThePath() throws {
+    // The most documented I3 case in this file, and the one a type check cannot
+    // see. The comment at the `occupant` call site records it as measured: a
+    // second binder unlinks the node and binds its own, and this listener stays
+    // `.ready` on an unlinked inode, deaf for ever and with no error to report.
+    //
+    // A socket IS at the path afterwards, and it answers connections, so
+    // "something of the right type is there" says healthy. Only the identity of
+    // the node can tell the two apart.
+    //
+    // Named bug this catches: the panel reports serving while every event goes
+    // to somebody else's socket.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+    try listener.start { _ in }
+    try requireReady(listener)
+
+    let foreign = try #require(ForeignListener(takingOver: sandbox.path),
+                               "the path could not be taken over; nothing below would be measured")
+    defer { foreign.close() }
+
+    // Both preconditions matter. The first proves a real socket node is at the
+    // path, and the second proves it ANSWERS — so no probe of any kind, not
+    // even a connection attempt, could report this path as dead.
+    #expect(fileType(ofItemAtPath: sandbox.path) == .typeSocket,
+            "the path holds \(fileType(ofItemAtPath: sandbox.path)?.rawValue ?? "nothing"), not a socket")
+    let probe = try #require(RawClient(path: sandbox.path),
+                             "the node at the path refuses connections; this is a different case")
+    probe.close()
+
+    #expect(!listener.isReady,
+            "isReady reports serving while the node at the path belongs to another program")
+}
+
+@Test func isReadyIsFalseWhenASymlinkTakesThePathToOurOwnSocket() throws {
+    // The guard for `lstat` over `stat` inside `isReady`, which nothing else
+    // measures. Every other case reads the same through either call: a removed
+    // node is absent both ways, and a regular file is the wrong type both ways.
+    //
+    // This case separates them. The live socket node is MOVED and a link is put
+    // in its place, so the path still resolves to the very same inode. `stat`
+    // follows the link and reports this listener's own socket, identity and
+    // all. `lstat` sees the link.
+    //
+    // False is the right answer even though the socket still serves through the
+    // link. The node has left the 0700 directory, which is the whole access
+    // control of design §4. Answering true would report a security property the
+    // app no longer has.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let target = RelocationTarget()
+    defer { target.remove() }
+    try target.makeDirectory()
+
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+    try listener.start { _ in }
+    try requireReady(listener)
+
+    try FileManager.default.moveItem(atPath: sandbox.path, toPath: target.path)
+    try FileManager.default.createSymbolicLink(atPath: sandbox.path,
+                                               withDestinationPath: target.path)
+    #expect(fileType(ofItemAtPath: target.path) == .typeSocket,
+            "the socket node did not move; this test would measure a different case")
+
+    #expect(!listener.isReady,
+            "isReady followed the link and answered for a node that is no longer at the path")
+}
+
 @Test func startingAListenerThatIsAlreadyServingThrows() throws {
     // The same-instance case. Named bug this catches: a second `start()` that
     // silently does nothing and leaves the caller's NEW handler unwired, so
@@ -448,7 +1057,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
     try listener.start { _ in }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
 
     #expect(throws: IngestError.alreadyServing(sandbox.path)) {
         try listener.start { _ in }
@@ -468,7 +1077,7 @@ private func waitUntilNothingAnswers(at path: String) {
                                             idleTimeout: 0.5)
     defer { listener.stop() }
     try listener.start { _ in }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
 
     let client = try #require(RawClient(path: sandbox.path))
     defer { client.close() }
@@ -491,7 +1100,7 @@ private func waitUntilNothingAnswers(at path: String) {
                                             maximumConnections: 2)
     defer { listener.stop() }
     try listener.start { _ in }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
 
     var parked: [RawClient] = []
     defer { parked.forEach { $0.close() } }
@@ -502,8 +1111,25 @@ private func waitUntilNothingAnswers(at path: String) {
     }
     // Both must be ADMITTED before the third arrives, or this measures a race
     // rather than the cap.
-    pump(until: { listener.activeConnectionCount == 2 })
-    #expect(listener.activeConnectionCount == 2)
+    //
+    // Commit `d6dafb2` raised the budget for `extra.peerClosed` below to 30 s
+    // because a loaded 3-core runner could not close a connection inside 5 s.
+    // This wait sits EARLIER in the same test and had kept the 5 s default, so
+    // on that same runner it expired first and masked the fix outright.
+    //
+    // A `#require`, because the assertions below are only about the cap once
+    // this holds. The message has to separate the two readings: a cap of 2
+    // cannot refuse the FIRST two connections, so a count under 2 here is the
+    // runner being slow and never the cap being wrong.
+    let admitBudget: TimeInterval = 30
+    pump(until: { listener.activeConnectionCount == 2 }, seconds: admitBudget)
+    try #require(listener.activeConnectionCount == 2,
+                 """
+                 only \(listener.activeConnectionCount) of 2 connections were \
+                 admitted within \(admitBudget) s. The cap is not implicated — \
+                 a cap of 2 admits the first two — so this is a slow runner, \
+                 and the refusal measured below would have been a race.
+                 """)
 
     let extra = try #require(RawClient(path: sandbox.path))
     defer { extra.close() }
@@ -543,7 +1169,7 @@ private func waitUntilNothingAnswers(at path: String) {
                                             maximumConnections: 2)
     defer { listener.stop() }
     try listener.start { event in collected.record(event, onMain: Thread.isMainThread) }
-    pump(until: { listener.isReady })
+    try requireReady(listener)
 
     for index in 0..<3 {
         #expect(try post(#"{"hook_event_name":"Stop","session_id":"s\#(index)"}"#,
@@ -554,6 +1180,97 @@ private func waitUntilNothingAnswers(at path: String) {
     #expect(collected.all.map(\.sessionID) == ["s0", "s1", "s2"])
     pump(until: { listener.activeConnectionCount == 0 })
     #expect(listener.activeConnectionCount == 0)
+}
+
+// MARK: - The buffered payload is released (audit finding B3)
+
+@Test func everyServedRequestReleasesTheStateHoldingItsRawBytes() throws {
+    // Named bug this catches: `finish()` cancels the idle timer and leaves
+    // `state.timeout` still pointing at the work item. That item's block
+    // captures `state` STRONGLY, so `state -> timeout -> block -> state` is an
+    // island nothing can reach and nothing ever frees. `cancel()` does not
+    // release a work item's captures, so cancelling alone does not break it.
+    //
+    // Why it is a PRIVACY defect and not merely untidy: every `ConnectionState`
+    // owns a framer, and the framer keeps the whole raw POST in a stored
+    // property. A state object that outlives its connection therefore pins the
+    // assistant reply text and the conversation-transcript path in memory for
+    // the life of the process. Design §7 forbids that outright. The audit
+    // measured 0 of 2200 states freed and 6,405,780 bytes retained.
+    //
+    // THE SETTLE WINDOW MUST EXCEED THE IDLE TIMEOUT, or this test proves
+    // NOTHING. A pending `asyncAfter` holds its work item until the deadline in
+    // the FIXED code too, so an observation taken before the deadline sees a
+    // live state in BOTH arms. This exact confound produced a wrong result
+    // during the audit: a 100 s deadline reported the fixed tree as leaking.
+    // The injected timeout here is 1 s and the window below is 8 s.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let collected = Collected()
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path,
+                                            idleTimeout: 1)
+    defer { listener.stop() }
+    try listener.start { event in collected.record(event, onMain: Thread.isMainThread) }
+    try requireReady(listener)
+
+    let posts = 5
+    for index in 0..<posts {
+        let json = #"{"hook_event_name":"Stop","session_id":"s\#(index)","transcript_path":"/tmp/t.jsonl","last_assistant_message":"reply text that must not stay resident"}"#
+        #expect(try post(json, to: sandbox.path) == 0, "post \(index) was refused")
+    }
+    pump(until: { collected.all.count == posts })
+    #expect(collected.all.count == posts)
+
+    // Without this the assertion below passes trivially whenever the posts did
+    // not reach the listener at all: nothing built, so nothing alive.
+    #expect(listener.connectionCensus.createdCount == posts,
+            "the listener built \(listener.connectionCensus.createdCount) states for \(posts) posts; the leak assertion would be vacuous")
+
+    pump(until: { listener.connectionCensus.liveCount == 0 }, seconds: 8)
+    #expect(listener.connectionCensus.liveCount == 0,
+            "\(listener.connectionCensus.liveCount) of \(posts) ConnectionState objects were never freed; each still holds the raw POST bytes")
+}
+
+// MARK: - Reassembly across receives
+
+@Test func aBodyLargerThanTheReceiveChunkIsReassembled() throws {
+    // `receiveChunkBytes` (64 KiB) is deliberately NOT `maximumBytes` (1 MiB),
+    // and until now nothing exercised the gap between them. Named bug this
+    // catches: a receive loop that treats ONE delivery as ONE request. A body
+    // over the chunk size would then never frame — it would sit on `needMore`
+    // until the idle timeout closed it — and the traffic lost is exactly the
+    // traffic the cap was raised to admit: a reply carrying a large code block.
+    //
+    // The body is 256 KiB, four times the receive chunk and a quarter of the
+    // request cap, so it can neither arrive in one receive nor be refused.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let collected = Collected()
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+    try listener.start { event in collected.record(event, onMain: Thread.isMainThread) }
+    try requireReady(listener)
+
+    let filler = String(repeating: "x", count: 262_144)
+    let json = #"{"hook_event_name":"Stop","session_id":"reassembled","last_assistant_message":"\#(filler)"}"#
+    // Pinned to the two literals this test sits between. A future edit that
+    // moves either bound past the body size makes the test vacuous silently.
+    #expect(json.utf8.count > 65_536,
+            "the body is \(json.utf8.count) bytes and never crosses the 64 KiB receive chunk")
+    #expect(json.utf8.count < 1_048_576,
+            "the body is \(json.utf8.count) bytes and exceeds the 1 MiB request cap")
+
+    let payload = sandbox.directory.appending(path: "large.json").path
+    try json.write(toFile: payload, atomically: true, encoding: .utf8)
+
+    #expect(try post(contentsOfFile: payload, to: sandbox.path) == 0,
+            "a request spanning several receives was refused")
+    pump(until: { !collected.all.isEmpty })
+
+    let event = try #require(collected.all.first)
+    #expect(event.sessionID == "reassembled")
+    #expect(collected.all.count == 1,
+            "a request spanning several receives was delivered \(collected.all.count) times")
 }
 
 // MARK: - The declared surface

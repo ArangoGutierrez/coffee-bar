@@ -128,13 +128,46 @@ private func settings(_ name: String) throws -> Data {
     #expect(HookHealth.status(ofSettings: Data(#"[1, 2, 3]"#.utf8)) == .unreadable)
 }
 
+/// Every event the hub knows is either required or a documented exclusion.
+///
+/// This is the guard the previous version of this test only claimed to be. That
+/// version asserted a literal list plus `required ⊆ known`. Both stay GREEN when
+/// `HookEventKind` gains a case, so the bug it named — "the hub gaining an event
+/// while the check keeps asking for the old five" — walked straight through it.
+///
+/// The assertion below is the converse, and that is the direction that catches a
+/// new event: an unclassified case is neither required nor excluded, so it goes
+/// RED until somebody decides which it is.
+@Test func everyHookEventIsEitherRequiredOrDeliberatelyExcluded() {
+    // Each exclusion carries the reason it is not required.
+    //   PreCompact — `SessionHub.state(for:)` maps it to nil. It drives nothing.
+    //   SessionEnd — optional. It retires a session as soon as it ends; the
+    //                staleness timeout is the fallback when it is absent.
+    //                Design §10.4.
+    let excluded: Set<String> = ["PreCompact", "SessionEnd"]
+
+    for kind in HookEventKind.allCases {
+        let isRequired = HookHealth.requiredEvents.contains(kind.rawValue)
+        let isExcluded = excluded.contains(kind.rawValue)
+        #expect(isRequired || isExcluded,
+                "\(kind.rawValue) is neither required nor a documented exclusion; classify it")
+        #expect(!(isRequired && isExcluded),
+                "\(kind.rawValue) is both required and excluded")
+    }
+
+    // An exclusion naming an event that does not exist is a stale waiver, and it
+    // would quietly widen the list above.
+    for name in excluded {
+        #expect(HookEventKind(rawValue: name) != nil,
+                "\(name) is excluded but is not a HookEventKind")
+    }
+}
+
 @Test func theRequiredEventsAreTheOnesTheHubActsOn() {
-    // Ties the health check to the state machine. Named bug this catches: the
-    // hub gaining an event while the check keeps asking for the old five, so a
-    // half-installed hook set reports healthy.
-    //
-    // PreCompact is excluded because SessionHub maps it to nothing, and
-    // SessionEnd because design §10.4 leaves it open.
+    // The deliberate five, pinned as a literal so a change here is a decision
+    // rather than a drift. The guard against an UNCLASSIFIED event lives in
+    // `everyHookEventIsEitherRequiredOrDeliberatelyExcluded`; this one only
+    // records what was chosen.
     #expect(HookHealth.requiredEvents ==
             ["PermissionDenied", "PostToolUse", "PreToolUse", "SessionStart", "Stop"])
 

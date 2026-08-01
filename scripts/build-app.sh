@@ -95,11 +95,17 @@ fi
 # `git describe` exits 128 with "No names found" when no tag exists, and none
 # does yet, so the untagged fallback is the only path that runs today. Under
 # `set -e` an unguarded call would abort every build.
-VERSION_RAW="$(git -C "${REPO_ROOT}" describe --tags --abbrev=0 2>/dev/null || true)"
+# `COFFEE_BAR_VERSION` wins when set. A Homebrew build unpacks a release
+# TARBALL, which carries no `.git`, so `git describe` finds nothing there and
+# every brew-installed app would otherwise report `0.0.0-dev`. The formula knows
+# the version it is building and passes it in.
+VERSION_RAW="${COFFEE_BAR_VERSION:-$(git -C "${REPO_ROOT}" describe --tags --abbrev=0 2>/dev/null || true)}"
 VERSION="${VERSION_RAW#v}"
 VERSION="${VERSION:-0.0.0-dev}"
 
-if [ -n "${VERSION_RAW}" ]; then
+if [ -n "${COFFEE_BAR_VERSION:-}" ]; then
+    echo "==> version ${VERSION} (from COFFEE_BAR_VERSION)"
+elif [ -n "${VERSION_RAW}" ]; then
     echo "==> version ${VERSION} (from git tag ${VERSION_RAW})"
 else
     echo "==> version ${VERSION} (no git tag in this repo; untagged fallback)"
@@ -108,11 +114,19 @@ fi
 # --- build -------------------------------------------------------------------
 #
 # `--package-path` rather than `cd`: a failed `cd` would build the wrong tree.
+#
+# `COFFEE_BAR_SWIFT_FLAGS` exists for one caller: Homebrew. SwiftPM runs its own
+# `sandbox-exec`, and that cannot nest inside Homebrew's own sandbox — it fails
+# with `sandbox_apply: Operation not permitted`, which SwiftPM then reports as a
+# MANIFEST error, sending the reader after a `Package.swift` that is fine. The
+# formula sets this to `--disable-sandbox`. Unset, nothing changes.
+# shellcheck disable=SC2086
+SWIFT_FLAGS="${COFFEE_BAR_SWIFT_FLAGS:-}"
 
-echo "==> swift build -c release --product ${PRODUCT}"
-swift build -c release --product "${PRODUCT}" --package-path "${REPO_ROOT}"
+echo "==> swift build -c release --product ${PRODUCT} ${SWIFT_FLAGS}"
+swift build -c release --product "${PRODUCT}" --package-path "${REPO_ROOT}" ${SWIFT_FLAGS}
 
-BIN_DIR="$(swift build -c release --product "${PRODUCT}" --package-path "${REPO_ROOT}" --show-bin-path)"
+BIN_DIR="$(swift build -c release --product "${PRODUCT}" --package-path "${REPO_ROOT}" ${SWIFT_FLAGS} --show-bin-path)"
 BIN="${BIN_DIR}/${PRODUCT}"
 [ -x "${BIN}" ] || die "release binary not found at ${BIN}"
 
@@ -223,11 +237,23 @@ Built ${APP} (version ${VERSION}, unsigned)
 Launch it:
 
     open "${APP}"
+DONE
+
+# The checklist lives under .superpowers/, which git does not track, so a build
+# from a release tarball has no such file — and this was the last thing every
+# `brew install` user saw: a path into a directory that is not there. Guard it
+# rather than drop it, so a maintainer building a full checkout keeps the
+# pointer.
+CHECKLIST=".superpowers/sdd/2026-07-28-coffee-bar-m1/task6-acceptance-checklist.md"
+
+if [ -f "${REPO_ROOT}/${CHECKLIST}" ]; then
+    cat <<DONE
 
 Then run the manual acceptance checklist:
 
-    .superpowers/sdd/2026-07-28-coffee-bar-m1/task6-acceptance-checklist.md
+    ${CHECKLIST}
 DONE
+fi
 
 # Read the process table again: the build takes minutes, and an instance can
 # start or stop inside that window.

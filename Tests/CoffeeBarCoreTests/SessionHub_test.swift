@@ -341,6 +341,81 @@ private func recordedSessionID() throws -> String {
     #expect(out.first?.lastMessage == "no")
 }
 
+@Test func aMessageOfOversizedGraphemeClustersIsBoundedInBytes() throws {
+    // The audit's input. `String.prefix` counts Characters — Swift grapheme
+    // clusters — and one cluster is a base letter plus ANY number of combining
+    // marks. A "140-character" cap therefore let 42,140 bytes through onto a
+    // session and into the menu-bar panel.
+    //
+    // Named bug this catches: a cap that bounds anything except bytes on the
+    // way out. Every assertion here is a byte count, because `.count` is the
+    // view that cannot see this defect.
+    let hostile = String(repeating: "a" + String(repeating: "\u{0301}", count: 150),
+                         count: 140)
+    #expect(hostile.count == 140,
+            "precondition: the input is \(hostile.count) Characters, so it no longer sits exactly at the character cap")
+    #expect(hostile.utf8.count == 42_140,
+            "precondition: the input is \(hostile.utf8.count) bytes; the audit measurement this test rests on has moved")
+
+    let out = SessionHub.apply(
+        HookEvent(hookEventName: "PermissionDenied", sessionID: "s1", reason: hostile),
+        to: [session(.working)], now: t0)
+    let message = try #require(out.first?.lastMessage)
+
+    // The property that matters, then the exact result. One cluster is 301
+    // bytes, so three of them are 903 and a fourth would reach 1204 — derived
+    // by hand, never by repeating the implementation's arithmetic here.
+    #expect(message.utf8.count <= 1024,
+            "the message the panel renders is \(message.utf8.count) bytes")
+    #expect(message.count == 3)
+    #expect(message.utf8.count == 903)
+}
+
+@Test func truncationAtTheByteCapKeepsEveryGraphemeClusterWhole() throws {
+    // A cluster that straddles the byte boundary. The four-person family emoji
+    // is ONE Character built from seven scalars — 25 UTF-8 bytes — so 40 of
+    // them are 1000 bytes and a 41st would end at 1025. The cut lands inside a
+    // cluster unless the truncation walks Characters.
+    //
+    // Named bug this catches: truncating the UTF-8 view instead, as in
+    // `String(decoding: reason.utf8.prefix(1024), as: UTF8.self)`. That returns
+    // 1024 bytes ending in a severed sequence — half a scalar, or a trailing
+    // ZWJ with nothing after it — which the panel renders as a broken glyph.
+    let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}"
+    #expect(family.count == 1,
+            "precondition: the family emoji is \(family.count) Characters; it can no longer straddle a boundary")
+    #expect(family.utf8.count == 25,
+            "precondition: the family emoji is \(family.utf8.count) bytes, so the numbers below no longer hold")
+
+    let out = SessionHub.apply(
+        HookEvent(hookEventName: "PermissionDenied", sessionID: "s1",
+                  reason: String(repeating: family, count: 140)),
+        to: [session(.working)], now: t0)
+    let message = try #require(out.first?.lastMessage)
+
+    #expect(message == String(repeating: family, count: 40))
+    #expect(message.count == 40)
+    #expect(message.utf8.count == 1000)
+}
+
+@Test func aDenseScriptKeepsItsFullCharacterAllowance() throws {
+    // The mirror of the fix. A byte cap tight enough to bite ordinary text is
+    // the same defect pointing the other way, and it is invisible in a suite
+    // whose only untrusted input is ASCII.
+    //
+    // Named bug this catches: a byte cap at or below 420, or a truncation that
+    // counts bytes first. U+6F22 is 3 UTF-8 bytes and one Character, so 140 of
+    // them are 420 bytes and a correct cap hands back every one.
+    let out = SessionHub.apply(
+        HookEvent(hookEventName: "PermissionDenied", sessionID: "s1",
+                  reason: String(repeating: "\u{6F22}", count: 200)),
+        to: [session(.working)], now: t0)
+    let message = try #require(out.first?.lastMessage)
+
+    #expect(message.count == 140)
+    #expect(message.utf8.count == 420)
+}
+
 @Test func aSessionEndReasonIsNotRenderedAsAMessage() throws {
     // `reason` is carried by TWO recorded events with unrelated meanings: the
     // PermissionDenied explanation the panel shows the human, and SessionEnd's
