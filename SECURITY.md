@@ -85,8 +85,12 @@ socket and kill ingest silently.
 
 Three facts back the network claim, all checkable from a clone:
 
-- `Sources/` contains no networking symbol. `URLSession`, `NSURL`, `CFNetwork`,
-  `getaddrinfo` and `NWConnection(host:` all return zero hits across the tree.
+- `Sources/` reaches the network stack in exactly one place, and binds it to a
+  filesystem path. `IngestListener.swift` imports `Network` and builds an
+  `NWListener`, then sets `parameters.requiredLocalEndpoint = .unix(path: path)`
+  at line 251, so the listener answers on a unix socket and never on an IP
+  endpoint. `URLSession`, `NSURL`, `CFNetwork`, `getaddrinfo` and
+  `NWConnection(host:` all return zero hits across the tree.
 - The only `connect(` in `Sources/` is `IngestListener.swift`, on
   `sockaddr_un` — a filesystem path, never an IP address or a hostname.
 - `Package.swift` declares no external package dependencies, so no third-party
