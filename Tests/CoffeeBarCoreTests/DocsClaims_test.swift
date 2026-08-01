@@ -61,6 +61,39 @@ private func readmeProse(_ text: String) -> String {
     return s
 }
 
+/// The user-facing documents these checks police.
+///
+/// `site/index.html` is the higher-risk of the two: it is what a stranger reads
+/// first, and until this file existed nothing in the suite could see it.
+private let documentedSurfaces = ["README.md", "site/index.html"]
+
+/// An HTML page reduced to prose.
+///
+/// Comments go first and deliberately: the do-not-publish marker is a comment,
+/// and it is an instruction to the maintainer rather than a claim to a reader.
+/// `pre` and `style` go too, for the same reason fenced code goes from Markdown.
+private func htmlProse(_ text: String) -> String {
+    var s = text.replacingOccurrences(of: "<!--[\\s\\S]*?-->", with: " ",
+                                      options: .regularExpression)
+    s = s.replacingOccurrences(of: "<pre>[\\s\\S]*?</pre>", with: " ",
+                               options: .regularExpression)
+    s = s.replacingOccurrences(of: "<style>[\\s\\S]*?</style>", with: " ",
+                               options: .regularExpression)
+    s = s.replacingOccurrences(of: "<code>[^<]*</code>", with: " ",
+                               options: .regularExpression)
+    s = s.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+    return s
+}
+
+/// The prose of one documented surface, with code and markup removed.
+private func surfaceProse(_ name: String) throws -> String {
+    let url = repoRoot().appending(path: name)
+    guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+        throw ReadmeUnreadable(path: url.path)
+    }
+    return name.hasSuffix(".html") ? htmlProse(text) : readmeProse(text)
+}
+
 private struct BadPattern: Error, CustomStringConvertible {
     let pattern: String
     var description: String {
@@ -88,12 +121,13 @@ private func matches(_ pattern: String, in text: String) throws -> [[String]] {
 
 // MARK: - The guard cannot pass vacuously
 
-@Test func theReadmeIsReadableAndSubstantial() throws {
-    let text = try readmeText()
+@Test(arguments: documentedSurfaces)
+func everyDocumentedSurfaceIsReadableAndSubstantial(_ name: String) throws {
+    let prose = try surfaceProse(name)
     // A path mis-resolution would otherwise make every check below pass on an
     // empty string. Same failure-closed shape the leak guard uses.
-    #expect(text.count > 2000,
-            "README is \(text.count) bytes; the checks below would pass vacuously")
+    #expect(prose.count > 1000,
+            "\(name) reduces to \(prose.count) bytes of prose; the checks would pass vacuously")
 }
 
 // MARK: - Claim 1: the hook count
@@ -118,18 +152,38 @@ private func matches(_ pattern: String, in text: String) throws -> [[String]] {
             "README hook block documents \(documented.sorted()); HookHealth.requiredEvents is \(required.sorted())")
 }
 
-@Test func theReadmeProseCountMatchesTheRequiredEventCount() throws {
-    let prose = readmeProse(try readmeText())
-    let words = ["three": 3, "four": 4, "five": 5, "six": 6, "seven": 7]
+/// The patterns below still match live claims.
+///
+/// A parameterized check cannot assert "I found something" per surface, because
+/// a surface may legitimately carry none of a given claim — `site/index.html`
+/// states no durations at all. So anti-vacuity is pinned HERE, against the
+/// README, which is known to carry one of each. If a pattern rots, this goes red
+/// instead of every other check silently scanning nothing.
+@Test func theGuardStillMatchesRealClaims() throws {
+    let prose = try surfaceProse("README.md")
+    #expect(try !matches(hookCountPattern, in: prose).isEmpty, "no '<number> hooks' phrase found")
+    #expect(try !matches(durationPattern, in: prose).isEmpty, "no duration found")
+    #expect(try !matches(percentPattern, in: prose).isEmpty, "no percentage found")
 
-    let found = try matches("\\b(three|four|five|six|seven)\\b[\\s\\S]{0,20}?hooks?", in: prose)
-    #expect(!found.isEmpty, "no '<number> hooks' phrase in README prose; the guard cannot run")
+    let site = try surfaceProse("site/index.html")
+    #expect(try !matches(hookCountPattern, in: site).isEmpty, "no '<number> hooks' phrase on the site")
+    #expect(try !matches(percentPattern, in: site).isEmpty, "no percentage on the site")
+}
 
+private let hookCountPattern = "\\b(three|four|five|six|seven)\\b[\\s\\S]{0,25}?hooks?"
+private let durationPattern = "(\\d[\\d,_]*)[\\s-]*(second|minute|hour)s?"
+private let percentPattern = "(\\d+)\\s*%"
+private let numberWords = ["three": 3, "four": 4, "five": 5, "six": 6, "seven": 7]
+
+@Test(arguments: documentedSurfaces)
+func theProseHookCountMatchesTheRequiredEventCount(_ name: String) throws {
+    let prose = try surfaceProse(name)
     let real = HookHealth.requiredEvents.count
-    for m in found {
-        let stated = words[m[1].lowercased()] ?? -1
+
+    for m in try matches(hookCountPattern, in: prose) {
+        let stated = numberWords[m[1].lowercased()] ?? -1
         #expect(stated == real,
-                "README prose says \"\(m[1]) hooks\" but HookHealth.requiredEvents has \(real)")
+                "\(name) says \"\(m[1]) hooks\" but HookHealth.requiredEvents has \(real)")
     }
 }
 
@@ -142,21 +196,19 @@ private let productConstants: [String: Double] = [
 
 private let secondsPerUnit: [String: Double] = ["second": 1, "minute": 60, "hour": 3600]
 
-@Test func everyDurationTheReadmeStatesIsARealProductConstant() throws {
-    let prose = readmeProse(try readmeText())
+@Test(arguments: documentedSurfaces)
+func everyDurationStatedIsARealProductConstant(_ name: String) throws {
+    let prose = try surfaceProse(name)
     let known = Set(productConstants.values)
 
-    let found = try matches("(\\d[\\d,_]*)[\\s-]*(second|minute|hour)s?", in: prose)
-    #expect(!found.isEmpty, "no duration in README prose; the guard cannot run")
-
-    for m in found {
+    for m in try matches(durationPattern, in: prose) {
         let digits = m[1].replacingOccurrences(of: ",", with: "")
                          .replacingOccurrences(of: "_", with: "")
         guard let value = Double(digits),
               let scale = secondsPerUnit[m[2].lowercased()] else { continue }
         let seconds = value * scale
         #expect(known.contains(seconds),
-                "README states \"\(m[0])\" = \(Int(seconds)) s, which is not a product constant. Known: \(known.sorted().map { Int($0) })")
+                "\(name) states \"\(m[0])\" = \(Int(seconds)) s, which is not a product constant. Known: \(known.sorted().map { Int($0) })")
     }
 }
 
@@ -180,34 +232,64 @@ private let secondsPerUnit: [String: Double] = ["second": 1, "minute": 60, "hour
     }
 }
 
-@Test func theBatteryFloorTheReadmeStatesIsTheRealDefault() throws {
-    let prose = readmeProse(try readmeText())
-    let found = try matches("(\\d+)\\s*%", in: prose)
-    #expect(!found.isEmpty, "no percentage in README prose; the guard cannot run")
+@Test(arguments: documentedSurfaces)
+func theBatteryFloorStatedIsTheRealDefault(_ name: String) throws {
+    let prose = try surfaceProse(name)
 
     // `batteryFloorPercent` is NOT passed, so the DEFAULT decides. Passing the
-    // README's own number as the floor would make this tautological.
-    for m in found {
+    // document's own number as the floor would make this tautological.
+    for m in try matches(percentPattern, in: prose) {
         guard let stated = Int(m[1]) else { continue }
 
         let atFloor = PowerBroker.decide(PowerInputs(powerSource: .battery,
                                                      batteryPercent: stated,
                                                      userIntent: .serve))
         #expect(atFloor.idleSleepAssertion == false,
-                "README claims a \(stated)% floor, but a serve at \(stated)% still holds")
+                "\(name) claims a \(stated)% floor, but a serve at \(stated)% still holds")
 
         let aboveFloor = PowerBroker.decide(PowerInputs(powerSource: .battery,
                                                         batteryPercent: stated + 1,
                                                         userIntent: .serve))
         #expect(aboveFloor.idleSleepAssertion == true,
-                "README claims a \(stated)% floor, but a serve at \(stated + 1)% does not hold")
+                "\(name) claims a \(stated)% floor, but a serve at \(stated + 1)% does not hold")
+    }
+}
+
+/// "below N%" and "at or below N%" are different claims. Only one is true.
+///
+/// `PowerBroker` suppresses at `percent <= floor`, so at EXACTLY the floor the
+/// product does not hold. A document saying "below 20% it does not hold" states
+/// the opposite of what happens at 20% itself. `ServingModel.swift` already
+/// carries this reasoning for the panel line; nothing enforced it for the docs,
+/// and `site/index.html` shipped the wording that comment condemns.
+@Test(arguments: documentedSurfaces)
+func aBoundaryPhraseMatchesTheRealBoundary(_ name: String) throws {
+    let prose = try surfaceProse(name)
+
+    for m in try matches("(at or below|below|under)\\s*(\\d+)\\s*%", in: prose) {
+        guard let stated = Int(m[2]) else { continue }
+        let inclusive = m[1].lowercased().hasPrefix("at or")
+
+        let holdsAtTheNumber = PowerBroker.decide(
+            PowerInputs(powerSource: .battery,
+                        batteryPercent: stated,
+                        userIntent: .serve)).idleSleepAssertion
+
+        if inclusive {
+            #expect(holdsAtTheNumber == false,
+                    "\(name) says \"at or below \(stated)%\", but a serve at exactly \(stated)% still holds")
+        } else {
+            #expect(holdsAtTheNumber == true,
+                    "\(name) says \"\(m[1]) \(stated)%\", which claims \(stated)% itself is safe. A serve at exactly \(stated)% does NOT hold, so the true phrasing is \"at or below \(stated)%\"")
+        }
     }
 }
 
 // MARK: - Claim 3: a named control must exist in the product
 
-@Test func everyControlTheReadmeNamesExistsInTheProduct() throws {
-    let prose = readmeProse(try readmeText())
+@Test(arguments: documentedSurfaces)
+func everyControlNamedExistsInTheProduct(_ name: String) throws {
+    let prose = try surfaceProse(name)
 
     // A quoted phrase in a sentence that offers it as something the reader can
     // operate. "unless you turn on \"stay awake while blocked\"" is the shape
@@ -218,7 +300,7 @@ private let secondsPerUnit: [String: Double] = ["second": 1, "minute": 60, "hour
     for m in found {
         let phrase = m[1]
         #expect(sourcesContain(phrase),
-                "README offers a control named \"\(phrase)\", but no file under Sources/ contains that string")
+                "\(name) offers a control named \"\(phrase)\", but no file under Sources/ contains that string")
     }
 }
 
