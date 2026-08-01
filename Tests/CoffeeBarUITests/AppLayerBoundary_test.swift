@@ -848,6 +848,86 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     }
 }
 
+// MARK: - Network egress
+
+@Test func noLinkedTargetCanReachTheNetworkByAddress() throws {
+    // `SECURITY.md` tells a reader coffee-bar "makes no network egress", and the
+    // 2026-08-01 audit found NOTHING enforced it. Egress genuinely was zero —
+    // `lsof -c coffee-bar -a -i` against the running process returned no IP
+    // sockets — but a measurement taken once is not a guard, and one added
+    // `URLSession` line would have shipped through a fully green suite.
+    //
+    // The rule is about the DESTINATION, not about Network.framework.
+    // `IngestListener` legitimately uses `NWListener`; what no file may do is
+    // name an IP address or a hostname. So the forbidden set is the APIs that
+    // can only mean an off-machine peer. `AF_UNIX` and `sockaddr_un` are
+    // deliberately absent from it: those ARE the filesystem socket.
+    let linked = try linkedClosure(fromTarget: "CoffeeBarApp").sorted()
+    let files = try sources(ofTargets: linked)
+
+    // Positive control. Without it a mis-resolved root scans zero files and the
+    // loop below passes vacuously — the false-absence trap this repository has
+    // now hit three separate ways.
+    #expect(files.contains { $0.lastPathComponent == "IngestListener.swift" }, """
+        the egress scan never reached IngestListener.swift, the one file that \
+        touches Network.framework; it read \(files.count) files across \
+        \(linked.count) targets under \(packageRoot.path)
+        """)
+
+    let forbidden = ["URLSession", "URLRequest", "NSURL", "CFNetwork",
+                     "getaddrinfo", "gethostbyname", "NWConnection(host:",
+                     "NWEndpoint.hostPort", "AF_INET", "sockaddr_in",
+                     "inet_pton", "inet_addr"]
+
+    for file in files {
+        let code = swiftCodeWithoutComments(try String(contentsOf: file, encoding: .utf8))
+        for name in forbidden {
+            #expect(!code.contains(name), """
+                \(file.lastPathComponent) names \(name) in CODE. coffee-bar \
+                posts nothing off this machine: ingest binds a unix socket and \
+                there is no other network path. SECURITY.md states that to \
+                users, so this is a promise, not a preference.
+                """)
+        }
+    }
+}
+
+@Test func theOnlyListenerIsPinnedToAFilesystemEndpoint() throws {
+    // The companion to the rule above, and the half that a name-ban cannot do.
+    //
+    // `NWListener` defaults to a PORT. `requiredLocalEndpoint = .unix(path:)` is
+    // the single line that makes it answer on the filesystem instead. Delete
+    // that line and the listener binds TCP — reachable from off the machine —
+    // while every name in the forbidden list above stays absent and
+    // `noLinkedTargetCanReachTheNetworkByAddress` stays green.
+    let linked = try linkedClosure(fromTarget: "CoffeeBarApp").sorted()
+    let files = try sources(ofTargets: linked)
+
+    var sawParameters = false
+    for file in files {
+        let code = swiftCodeWithoutComments(try String(contentsOf: file, encoding: .utf8))
+        guard code.contains("NWParameters") else { continue }
+        sawParameters = true
+
+        #expect(code.contains("requiredLocalEndpoint"), """
+            \(file.lastPathComponent) builds NWParameters without setting \
+            requiredLocalEndpoint. A listener with no local endpoint binds a \
+            TCP port, which is reachable from off this machine.
+            """)
+        #expect(code.contains(".unix("), """
+            \(file.lastPathComponent) builds NWParameters but never names a \
+            .unix(path:) endpoint. The socket must live on the filesystem, \
+            where directory permissions bound who can reach it.
+            """)
+    }
+
+    #expect(sawParameters, """
+        no scanned file built NWParameters, so this guard checked nothing. \
+        Either the ingest listener stopped using Network.framework, or the \
+        target scan no longer reaches it.
+        """)
+}
+
 // MARK: - Code that arrives from outside this repository
 
 @Test func thePackageResolvesNoExternalDependency() throws {
