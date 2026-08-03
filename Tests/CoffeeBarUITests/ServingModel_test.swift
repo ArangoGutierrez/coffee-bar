@@ -1513,11 +1513,23 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
 }
 
 @MainActor
-@Test func theServingLineFollowsTheDecisionAndNotTheSetting() {
-    // Named bug this catches: a sentence built from `holdDisplayAwake` rather
-    // than from what was DECIDED. The battery floor releases the hold, the
-    // setting is still on, and the panel would announce a display hold that
-    // does not exist — beside its own line saying nothing is held.
+@Test func theServingLineNamesTheDisplayHoldAndTheFloorRelease() {
+    // Named bug this catches: a wrong or stale SUMMARY STRING. Mutating either
+    // literal in `servingSummary` turns this red. That is the whole of its
+    // value, and the name now says so.
+    //
+    // What it does NOT catch, corrected after a mutation proved it: this cannot
+    // tell `desired?.displaySleepAssertion` from `holdDisplayAwake`. An earlier
+    // name and comment here claimed it caught exactly that substitution. It does
+    // not, and no check at this level can. `PowerBroker.decide` grants the
+    // display assertion only in the branch that also grants the system hold, and
+    // `servingSummary` guards on `isServing` before reading the expression, so
+    // the two agree in every reachable state. Planting the substitution left the
+    // full suite green — 486 tests, zero failures.
+    //
+    // The decision-not-the-setting invariant is pinned where it IS falsifiable:
+    // `theOffPositionVetoesTheDisplayHoldToo` and
+    // `theBatteryFloorReleasesTheDisplayHoldToo` in `PowerBroker_test.swift`.
     let reader = FakeReader(source: .battery, percent: 25)
     let model = ServingModel(
         holder: SpyHolder(), reader: reader, health: fixtureHealth(),

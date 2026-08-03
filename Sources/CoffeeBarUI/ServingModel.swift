@@ -341,11 +341,20 @@ public final class ServingModel {
     /// no check in this package could read, in the UI of a product whose pitch
     /// is that it tells you the truth about what is keeping your Mac awake.
     ///
-    /// It reads the DECISION and not the setting. With the opt-in on and the
-    /// battery below the floor nothing is held at all, and a sentence built
-    /// from `holdDisplayAwake` would announce a display hold that does not
-    /// exist — beside the line saying nothing is held.
-    /// `theServingLineFollowsTheDecisionAndNotTheSetting` goes red on that.
+    /// It reads the DECISION and not the setting, deliberately — but be honest
+    /// about what that buys today. No check at this level can tell the two
+    /// apart, and an earlier version of this comment wrongly claimed one did.
+    /// `PowerBroker.decide` grants `displaySleepAssertion` only in the branch
+    /// that also grants the system hold, and the guard below returns before the
+    /// expression whenever nothing is held, so `desired?.displaySleepAssertion`
+    /// and `holdDisplayAwake` agree in every state reachable here. Substituting
+    /// one for the other is a semantic no-op today, proved by mutation.
+    ///
+    /// Reading the decision is still the correct source: it stays right if a
+    /// later change ever denies the screen while granting the machine, which is
+    /// exactly when a setting-derived sentence would begin to lie. The invariant
+    /// is pinned where it IS falsifiable — `theOffPositionVetoesTheDisplayHoldToo`
+    /// and `theBatteryFloorReleasesTheDisplayHoldToo` in `PowerBroker_test.swift`.
     ///
     /// Not `Optional`, unlike the advisories: this line is always on screen.
     /// "Nothing is held" is the answer a user opening the panel most needs.

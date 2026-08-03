@@ -24,7 +24,7 @@ import IOKit.pwr_mgt
 /// be able to disagree with IOKit.
 ///
 /// This is the ONE file in the package entitled to name the display assertion.
-/// `theLayersBelowTheAppNeverCreateADisplaySleepAssertion` refuses it in every
+/// `onlyAssertionHolderMayCreateADisplaySleepAssertion` refuses it in every
 /// other file below the app layer, and
 /// `theAppLayerNeverNamesADisplaySleepAssertion` refuses it in the app layer
 /// outright.

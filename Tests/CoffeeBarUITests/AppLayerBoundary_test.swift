@@ -96,7 +96,7 @@ private let appLayerTargets = [
 ///
 /// So this list is held to a different rule, one that separates NAMING the
 /// constant from CREATING the assertion. See
-/// `theLayersBelowTheAppNeverCreateADisplaySleepAssertion`.
+/// `onlyAssertionHolderMayCreateADisplaySleepAssertion`.
 ///
 /// Unlike `appLayerTargets`, the files here are not pinned to a literal list. A
 /// new file in this target is scanned the moment SwiftPM compiles it, which is
@@ -773,7 +773,7 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
 
 // MARK: - What the layers BELOW the app may do
 
-@Test func theLayersBelowTheAppNeverCreateADisplaySleepAssertion() throws {
+@Test func onlyAssertionHolderMayCreateADisplaySleepAssertion() throws {
     // Finding B6, the content half, and design §6.1 again — one layer down.
     //
     // The app layer's denylist cannot be pointed at these targets.
