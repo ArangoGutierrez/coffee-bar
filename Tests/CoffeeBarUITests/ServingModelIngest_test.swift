@@ -145,12 +145,38 @@ private final class CountingHolder: AssertionHolding, @unchecked Sendable {
     var releaseCount: Int { lock.lock(); defer { lock.unlock() }; return releases }
 
     @discardableResult
-    func acquire() -> Bool {
+    func acquire(displaySleep: Bool) -> Bool {
         lock.lock(); defer { lock.unlock() }; acquires += 1; return true
     }
 
     func release() {
         lock.lock(); defer { lock.unlock() }; releases += 1
+    }
+}
+
+/// A settings store held in memory.
+///
+/// The model here is built by `makeModel`, which hands one in. The shipping
+/// default reads `UserDefaults.standard` — the preferences of whoever runs the
+/// suite — and every check in this file is about ingest, not about settings.
+private final class FakeSettings: SettingsStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String: Any] = [:]
+
+    func bool(forKey key: String) -> Bool? {
+        lock.lock(); defer { lock.unlock() }; return values[key] as? Bool
+    }
+
+    func setBool(_ value: Bool, forKey key: String) {
+        lock.lock(); defer { lock.unlock() }; values[key] = value
+    }
+
+    func integer(forKey key: String) -> Int? {
+        lock.lock(); defer { lock.unlock() }; return values[key] as? Int
+    }
+
+    func setInteger(_ value: Int, forKey key: String) {
+        lock.lock(); defer { lock.unlock() }; values[key] = value
     }
 }
 
@@ -188,7 +214,7 @@ private func makeModel(listener: any IngestListening,
                        holder: CountingHolder = CountingHolder(),
                        clock: TestClock = TestClock(),
                        policy: StalePolicy = .standard) -> ServingModel {
-    ServingModel(holder: holder, reader: reader, health: fixtureHealth(),
+    ServingModel(holder: holder, reader: reader, health: fixtureHealth(), settings: FakeSettings(),
                  listener: listener, policy: policy, now: { clock.now })
 }
 

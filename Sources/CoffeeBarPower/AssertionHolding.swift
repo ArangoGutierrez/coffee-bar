@@ -12,7 +12,11 @@ import Foundation
 /// This is a seam, not a second implementation: `AssertionHolder` remains the
 /// only type that talks to IOKit.
 public protocol AssertionHolding: Sendable {
-    @discardableResult func acquire() -> Bool
+    /// - Parameter displaySleep: `DesiredPowerState.displaySleepAssertion`.
+    ///   The flag is a PARAMETER rather than a setting the holder reads, so the
+    ///   app layer reconciles one decision object and there is no second reader
+    ///   that can answer differently from `PowerBroker`.
+    @discardableResult func acquire(displaySleep: Bool) -> Bool
     func release()
 }
 

@@ -262,11 +262,17 @@ public struct HoldController: Equatable, Sendable {
     /// decides what SHOULD happen, and IOKit decides what did. It defaults to
     /// `false`, the safe direction — a caller that says nothing gets a refusal
     /// rather than a claim about a hold that may never have existed.
+    /// `holdDisplayAwake` is the user's opt-in (issue #12). It is passed
+    /// STRAIGHT to `PowerBroker` and this type keeps no memory of it: the
+    /// `.serve` cancel exists because an unconditional hold must not re-arm
+    /// itself, and the display setting is not a request that can be refused —
+    /// it only widens a hold that the broker has already granted.
     public mutating func evaluate(powerSource: PowerSource,
                                   batteryPercent: Int?,
                                   sessions: [AgentSession] = [],
                                   holdAwakeWhileBlocked: Bool = false,
                                   batteryFloorPercent: Int = 20,
+                                  holdDisplayAwake: Bool = false,
                                   assertionIsHeld: Bool = false) -> DesiredPowerState {
         let state = PowerBroker.decide(PowerInputs(
             sessions: sessions,
@@ -274,7 +280,8 @@ public struct HoldController: Equatable, Sendable {
             batteryPercent: batteryPercent,
             userIntent: intent,
             holdAwakeWhileBlocked: holdAwakeWhileBlocked,
-            batteryFloorPercent: batteryFloorPercent))
+            batteryFloorPercent: batteryFloorPercent,
+            holdDisplayAwake: holdDisplayAwake))
 
         // Recorded BEFORE the cancel below, which moves `intent` off `.serve`.
         //

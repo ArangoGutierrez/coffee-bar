@@ -15,27 +15,47 @@ public struct PowerInputs: Equatable, Sendable {
     public let holdAwakeWhileBlocked: Bool
     public let batteryFloorPercent: Int
 
+    /// Whether the user opted in to keeping the screen lit as well (issue #12).
+    ///
+    /// A SETTING, not a control position. It answers a different question from
+    /// `userIntent`: that one says whether to hold the machine at all, this one
+    /// says what a hold covers. Folding it into a fourth `UserIntent` case
+    /// would make "keep the screen on" imply "hold unconditionally", which is
+    /// not what a user asking for the screen means.
+    ///
+    /// Defaults to `false`, and that default is the product's claim: coffee-bar
+    /// lets the screen sleep unless asked otherwise.
+    public let holdDisplayAwake: Bool
+
     public init(sessions: [AgentSession] = [],
                 powerSource: PowerSource,
                 batteryPercent: Int?,
                 userIntent: UserIntent = .auto,
                 holdAwakeWhileBlocked: Bool = false,
-                batteryFloorPercent: Int = 20) {
+                batteryFloorPercent: Int = 20,
+                holdDisplayAwake: Bool = false) {
         self.sessions = sessions
         self.powerSource = powerSource
         self.batteryPercent = batteryPercent
         self.userIntent = userIntent
         self.holdAwakeWhileBlocked = holdAwakeWhileBlocked
         self.batteryFloorPercent = batteryFloorPercent
+        self.holdDisplayAwake = holdDisplayAwake
     }
 }
 
 /// The system state the app should bring about.
 ///
-/// `displaySleepAssertion` exists and is always `false`. It is not removed,
-/// because its presence is what the guard test asserts against: a future
-/// change that starts holding the display assertion has to set this field,
-/// and that goes red immediately.
+/// `displaySleepAssertion` is `false` unless the user opted in, and it is the
+/// ONE route to the display assertion: `AssertionHolder` reads this field and
+/// nothing else, so no layer can pin the screen awake behind the decision's
+/// back. Issue #12 turned the old absolute `false` into this default.
+///
+/// It never stands alone. `decide` grants it only alongside
+/// `idleSleepAssertion`, so the off switch and the battery floor govern the
+/// screen exactly as they govern the machine —
+/// `theDisplayAssertionRidesTheSystemHoldAndNeverOutlivesIt` sweeps every
+/// combination for that.
 public struct DesiredPowerState: Equatable, Sendable {
     public let idleSleepAssertion: Bool
     public let displaySleepAssertion: Bool
@@ -112,6 +132,12 @@ public enum PowerBroker {
                                            floor: inputs.batteryFloorPercent))
         }
 
-        return DesiredPowerState(idleSleepAssertion: true)
+        // The ONLY branch that grants the display assertion, and it is the only
+        // branch that grants a hold at all. Both refusals above return before
+        // it, so the opt-in cannot survive the off switch or the battery floor:
+        // a screen held through the floor drains the battery faster than the
+        // hold the floor has just refused.
+        return DesiredPowerState(idleSleepAssertion: true,
+                                 displaySleepAssertion: inputs.holdDisplayAwake)
     }
 }

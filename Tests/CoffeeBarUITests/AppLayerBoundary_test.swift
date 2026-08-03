@@ -1160,3 +1160,54 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
             """)
     }
 }
+
+@Test func thePanelOffersTheDisplayHoldControl() throws {
+    // Issue #12's acceptance, and the one thing no other check in this
+    // repository can see: the user has to be able to FIND the setting.
+    // `ServingModel` can store it, `PowerBroker` can weigh it and
+    // `AssertionHolder` can raise it with every check green while the panel
+    // offers no way to turn it on — which is a feature that does not exist.
+    //
+    // That is not hypothetical here. Commit 5116326 landed the hook health
+    // check, the model published it, and `PanelView` read it nowhere; the
+    // check above this one exists because of it.
+    //
+    // Same LIMIT as the two checks above, stated rather than hidden: this
+    // proves the panel NAMES the binding, not that it draws a usable control.
+    // M1 design §5.4 forbids asserting on rendered AppKit text, so no check in
+    // this package can watch the picker appear. It is a tripwire against
+    // deleting the control, not proof the control is right.
+    let files = try appLayerSources()
+    #expect(files.count == expectedSourceCount,
+            "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
+
+    let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
+                             "the app layer no longer compiles a PanelView.swift")
+    let source = try String(contentsOf: panel, encoding: .utf8)
+
+    // The BINDING, not the property. `model.holdDisplayAwake` would be
+    // satisfied by a line that merely displays the value, and a setting the
+    // user can read and not change is not a setting.
+    #expect(source.contains("$model.holdDisplayAwake"), """
+        PanelView.swift binds no control to model.holdDisplayAwake, so the \
+        display hold can be stored and honoured and the user can never turn it \
+        on. Issue #12 asks for a control they can see.
+        """)
+
+    // The labels come from the model, for the reason the Serving picker's do:
+    // a second list of literals in this view can drift from the sentence
+    // `servingSummary` writes, and design §5.4 rules out catching that.
+    #expect(source.contains("ServingModel.displayLabel"), """
+        PanelView.swift names its own labels for the display control. They \
+        belong on ServingModel beside the Serving labels, where a check can \
+        read them.
+        """)
+
+    // And the line that says what is actually held has to be the model's, not
+    // a sentence composed here. It reads "the display may still sleep", which
+    // is FALSE once the user opts in, and no check could see it in this file.
+    #expect(source.contains("model.servingSummary"), """
+        PanelView.swift never reads model.servingSummary, so the line telling \
+        the user what is held is composed in the view where no check reads it.
+        """)
+}
