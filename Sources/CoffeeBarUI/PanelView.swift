@@ -59,9 +59,30 @@ public struct PanelView: View {
     /// mention written in the shape of a call spends that budget on a comment,
     /// which compiles to nothing and so proves nothing.
     ///
+    /// `nonisolated` is LOAD-BEARING, and no local run catches it.
+    ///
+    /// SwiftUICore declares the protocol as
+    /// `@preconcurrency @_Concurrency.MainActor public protocol View`, so a
+    /// conforming type infers main-actor isolation for its members, this static
+    /// one included. A swift-testing `@Test` function is nonisolated, so calling
+    /// it from one is "call to main actor-isolated static method
+    /// 'versionLine(from:)' in a synchronous nonisolated context" — a hard
+    /// error, and exactly how this first shipped RED to CI.
+    ///
+    /// The two toolchains disagree, and the `@preconcurrency` half is why. It
+    /// compiled on Swift 6.3.3 locally and failed on the macos-15 runner's
+    /// 6.1.2. Which later rule relaxes the inference is NOT diagnosed here; only
+    /// the split itself is measured. The repo pins no toolchain, so a green
+    /// local suite is not evidence for this line — treat CI as the authority.
+    ///
+    /// The keyword is right on the merits, not a workaround for the test: this
+    /// takes a dictionary, returns a String, and touches no main-actor state, so
+    /// it has no business holding the main actor. Annotating the tests
+    /// `@MainActor` would have hidden the property rather than fixed it.
+    ///
     /// - Parameter info: a bundle info dictionary, or `nil` when running
     ///   outside a bundle.
-    static func versionLine(from info: [String: Any]?) -> String {
+    nonisolated static func versionLine(from info: [String: Any]?) -> String {
         "Version " + AppVersion.display(from: info)
     }
 
