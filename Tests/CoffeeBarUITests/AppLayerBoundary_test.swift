@@ -96,7 +96,7 @@ private let appLayerTargets = [
 ///
 /// So this list is held to a different rule, one that separates NAMING the
 /// constant from CREATING the assertion. See
-/// `theLayersBelowTheAppNeverCreateADisplaySleepAssertion`.
+/// `onlyAssertionHolderMayCreateADisplaySleepAssertion`.
 ///
 /// Unlike `appLayerTargets`, the files here are not pinned to a literal list. A
 /// new file in this target is scanned the moment SwiftPM compiles it, which is
@@ -113,6 +113,30 @@ private let powerLayerTargets = [
 private let coreLayerTargets = [
     "CoffeeBarCore",
 ]
+
+/// The ONE file entitled to create a display assertion, and the ONE symbol it
+/// may name in code.
+///
+/// Issue #12 settled the design question the old absolute ban encoded: "never
+/// holds the display" is a DEFAULT, not a product promise. A user may opt in,
+/// so exactly one file has to be allowed to raise the assertion — and that file
+/// is `AssertionHolder`, which already owns every other IOKit call in this
+/// package.
+///
+/// It is a FILE and a SYMBOL, never a blanket pass. `AssertionHolder.swift` is
+/// still refused `NoDisplaySleep`, `beginActivity`, `performActivity`,
+/// `idleDisplaySleepDisabled` and `caffeinate`, because none of those is the
+/// route this product chose and each one is a different way to pin the screen
+/// awake. Widening this to "AssertionHolder.swift may say anything" would
+/// delete the guard for the one file it most needs to read.
+///
+/// The app layer is NOT covered by this and must not be.
+/// `theAppLayerNeverNamesADisplaySleepAssertion` scans `CoffeeBarApp`,
+/// `CoffeeBarUI` and `CoffeeBarIngest`, never reaches this file, and keeps its
+/// absolute ban: the opt-in reaches IOKit through `DesiredPowerState` and the
+/// holder, so no app-layer file has any business naming the assertion.
+private let displayAssertionEntitlement = (file: "AssertionHolder.swift",
+                                           symbol: "PreventUserIdleDisplaySleep")
 
 /// Every file the app layer is allowed to compile, package-root relative and
 /// sorted.
@@ -749,7 +773,7 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
 
 // MARK: - What the layers BELOW the app may do
 
-@Test func theLayersBelowTheAppNeverCreateADisplaySleepAssertion() throws {
+@Test func onlyAssertionHolderMayCreateADisplaySleepAssertion() throws {
     // Finding B6, the content half, and design §6.1 again — one layer down.
     //
     // The app layer's denylist cannot be pointed at these targets.
@@ -766,6 +790,12 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // `IOPMAssertionCreateWithName("PreventUserIdleDisplaySleep" as CFString, …)`
     // is still caught.
     //
+    // ONE file is entitled to cross that line, for ONE symbol: issue #12 made
+    // the display hold an opt-in DEFAULT rather than a promise, so
+    // `AssertionHolder.swift` may raise `PreventUserIdleDisplaySleep`. See
+    // `displayAssertionEntitlement`. Every other file, and every other name,
+    // is refused exactly as before.
+    //
     // Named bug this catches: the audit's exact escape, six lines inside
     // `AssertionHolder.acquire()` raising the display assertion under a name
     // other than `AssertionHolder.assertionName`. The holder's own live-IOKit
@@ -776,9 +806,11 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     let files = try sources(ofTargets: powerLayerTargets + coreLayerTargets)
 
     // A scan that reached nothing, or reached the wrong directory, satisfies
-    // every `contains` below. Anchor on the file the finding is about.
-    #expect(files.contains { $0.lastPathComponent == "AssertionHolder.swift" }, """
-        the below-app scan never reached AssertionHolder.swift; it read \
+    // every `contains` below. Anchor on the file the finding is about — which
+    // is also the entitled file, so a scan that misses it silently turns the
+    // exemption below into an exemption for nobody.
+    #expect(files.contains { $0.lastPathComponent == displayAssertionEntitlement.file }, """
+        the below-app scan never reached \(displayAssertionEntitlement.file); it read \
         \(files.count) files under \(packageRoot.path)
         """)
 
@@ -803,14 +835,33 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
         "caffeinate",
     ]
 
+    // The entitlement is a HOLE in the list above, so it is worthless once the
+    // list stops carrying the symbol it exempts. Named bug this catches: a
+    // rename that touches one of the two and not the other, which leaves
+    // `PreventUserIdleDisplaySleep` unguarded in EVERY file below the app while
+    // this check still reads as though one file were special.
+    #expect(forbidden.contains(displayAssertionEntitlement.symbol), """
+        the entitlement exempts \(displayAssertionEntitlement.symbol) from a denylist \
+        that no longer carries it: \(forbidden). The symbol is then refused \
+        nowhere, so this check no longer discriminates for any file.
+        """)
+
     for file in files {
         let code = swiftCodeWithoutComments(try String(contentsOf: file, encoding: .utf8))
+        let entitled = file.lastPathComponent == displayAssertionEntitlement.file
+
         for name in forbidden {
+            // ONE file, ONE symbol. `AssertionHolder.swift` still answers for
+            // every other name here, and every other file still answers for
+            // this one.
+            if entitled && name == displayAssertionEntitlement.symbol { continue }
+
             #expect(!code.contains(name), """
                 \(file.lastPathComponent) names \(name) in CODE rather than in a \
-                comment. coffee-bar holds PreventUserIdleSystemSleep and no \
-                display assertion of any kind (design §6.1). A comment may name \
-                the constant; creating one is what this refuses.
+                comment. coffee-bar holds PreventUserIdleSystemSleep, and the \
+                display assertion is raised in \(displayAssertionEntitlement.file) \
+                and nowhere else (design §6.1, issue #12). A comment may name the \
+                constant; creating one outside that file is what this refuses.
                 """)
         }
     }
@@ -1108,4 +1159,55 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
             and the checks that assert its value.
             """)
     }
+}
+
+@Test func thePanelOffersTheDisplayHoldControl() throws {
+    // Issue #12's acceptance, and the one thing no other check in this
+    // repository can see: the user has to be able to FIND the setting.
+    // `ServingModel` can store it, `PowerBroker` can weigh it and
+    // `AssertionHolder` can raise it with every check green while the panel
+    // offers no way to turn it on — which is a feature that does not exist.
+    //
+    // That is not hypothetical here. Commit 5116326 landed the hook health
+    // check, the model published it, and `PanelView` read it nowhere; the
+    // check above this one exists because of it.
+    //
+    // Same LIMIT as the two checks above, stated rather than hidden: this
+    // proves the panel NAMES the binding, not that it draws a usable control.
+    // M1 design §5.4 forbids asserting on rendered AppKit text, so no check in
+    // this package can watch the picker appear. It is a tripwire against
+    // deleting the control, not proof the control is right.
+    let files = try appLayerSources()
+    #expect(files.count == expectedSourceCount,
+            "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
+
+    let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
+                             "the app layer no longer compiles a PanelView.swift")
+    let source = try String(contentsOf: panel, encoding: .utf8)
+
+    // The BINDING, not the property. `model.holdDisplayAwake` would be
+    // satisfied by a line that merely displays the value, and a setting the
+    // user can read and not change is not a setting.
+    #expect(source.contains("$model.holdDisplayAwake"), """
+        PanelView.swift binds no control to model.holdDisplayAwake, so the \
+        display hold can be stored and honoured and the user can never turn it \
+        on. Issue #12 asks for a control they can see.
+        """)
+
+    // The labels come from the model, for the reason the Serving picker's do:
+    // a second list of literals in this view can drift from the sentence
+    // `servingSummary` writes, and design §5.4 rules out catching that.
+    #expect(source.contains("ServingModel.displayLabel"), """
+        PanelView.swift names its own labels for the display control. They \
+        belong on ServingModel beside the Serving labels, where a check can \
+        read them.
+        """)
+
+    // And the line that says what is actually held has to be the model's, not
+    // a sentence composed here. It reads "the display may still sleep", which
+    // is FALSE once the user opts in, and no check could see it in this file.
+    #expect(source.contains("model.servingSummary"), """
+        PanelView.swift never reads model.servingSummary, so the line telling \
+        the user what is held is composed in the view where no check reads it.
+        """)
 }

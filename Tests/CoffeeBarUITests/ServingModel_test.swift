@@ -64,6 +64,7 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
     private let lock = NSLock()
     private var acquires = 0
     private var releases = 0
+    private var displayFlags: [Bool] = []
 
     var acquireCount: Int {
         lock.lock()
@@ -77,11 +78,23 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
         return releases
     }
 
+    /// The `displaySleep` argument of every `acquire`, in order.
+    ///
+    /// The whole SEQUENCE and not the last value. A model that asked for the
+    /// display hold once and dropped it on the next tick would look identical
+    /// to one that never asked, read through a single flag.
+    var displaySleepRequests: [Bool] {
+        lock.lock()
+        defer { lock.unlock() }
+        return displayFlags
+    }
+
     @discardableResult
-    func acquire() -> Bool {
+    func acquire(displaySleep: Bool) -> Bool {
         lock.lock()
         defer { lock.unlock() }
         acquires += 1
+        displayFlags.append(displaySleep)
         return true
     }
 
@@ -94,15 +107,48 @@ private final class SpyHolder: AssertionHolding, @unchecked Sendable {
 
 /// An assertion holder that always refuses.
 ///
-/// `AssertionHolder.acquire()` returns `false` when IOKit refuses the
-/// assertion, and `ServingModel` then leaves `isServing` false. Without a
+/// `AssertionHolder.acquire(displaySleep:)` returns `false` when IOKit refuses
+/// the assertion, and `ServingModel` then leaves `isServing` false. Without a
 /// double for that, every check here runs against a holder that never fails,
 /// and the panel's claims about a hold go untested on the path where no hold
 /// exists.
 private final class FailingHolder: AssertionHolding, @unchecked Sendable {
     @discardableResult
-    func acquire() -> Bool { false }
+    func acquire(displaySleep: Bool) -> Bool { false }
     func release() {}
+}
+
+/// A settings store held in memory.
+///
+/// EVERY `ServingModel` built in this file is handed one. The shipping default
+/// is `UserDefaultsSettingsStore()` over `.standard` — the preferences of
+/// whoever runs the suite — so a check that took the default would read that
+/// person's own setting and would edit it on the way past.
+private final class FakeSettings: SettingsStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String: Any] = [:]
+
+    init(_ initial: [String: Any] = [:]) { values = initial }
+
+    func bool(forKey key: String) -> Bool? {
+        lock.lock(); defer { lock.unlock() }
+        return values[key] as? Bool
+    }
+
+    func setBool(_ value: Bool, forKey key: String) {
+        lock.lock(); defer { lock.unlock() }
+        values[key] = value
+    }
+
+    func integer(forKey key: String) -> Int? {
+        lock.lock(); defer { lock.unlock() }
+        return values[key] as? Int
+    }
+
+    func setInteger(_ value: Int, forKey key: String) {
+        lock.lock(); defer { lock.unlock() }
+        values[key] = value
+    }
 }
 
 /// A hook-health reader pointed at a committed fixture.
@@ -132,7 +178,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // `.stop` are DIFFERENT intents that produce the SAME `isServing` here, so
     // no getter derived from `isServing` can satisfy both.
     let reader = FakeReader(source: .ac, percent: 80)
-    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: SpyHolder(), reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
 
     // The shipped default, before the user has touched anything. `.auto` holds
     // nothing while no session is running — M2 ingest is what will feed them —
@@ -157,7 +204,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // positions have been used, because that is the sequence the Bool could
     // not express.
     let reader = FakeReader(source: .ac, percent: 80)
-    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: SpyHolder(), reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
 
     model.intent = .serve
     #expect(model.intent == .serve)
@@ -186,7 +234,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // disagrees with the machine.
     let reader = FakeReader(source: .ac, percent: 80)
     let spy = SpyHolder()
-    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: spy, reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
 
     // Precondition: nothing acquired before the set, so the count below cannot
     // come from anywhere else.
@@ -211,7 +260,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
 @Test func togglingServingOnAcquiresTheAssertion() {
     let reader = FakeReader(source: .ac, percent: 80)
     let spy = SpyHolder()
-    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: spy, reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
 
     // Precondition: nothing is held before the user asks for anything.
     #expect(model.isServing == false)
@@ -227,7 +277,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
 @Test func togglingServingOffReleasesTheAssertion() {
     let reader = FakeReader(source: .ac, percent: 80)
     let spy = SpyHolder()
-    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: spy, reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
 
     model.intent = .serve
     #expect(model.isServing == true)
@@ -249,7 +300,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // assertion — exactly the failure a user cannot see and cannot undo.
     let reader = FakeReader(source: .battery, percent: 21)
     let spy = SpyHolder()
-    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: spy, reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
 
     model.intent = .serve
     #expect(model.isServing == true)
@@ -271,7 +323,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // battery recovers.
     let reader = FakeReader(source: .battery, percent: 21)
     let spy = SpyHolder()
-    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: spy, reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
 
     model.intent = .serve
     #expect(spy.acquireCount == 1)
@@ -294,7 +347,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // Design §5.4: the reason is asserted on the enum, never on rendered text.
     let reader = FakeReader(source: .battery, percent: 21)
     let spy = SpyHolder()
-    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: spy, reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
 
     model.intent = .serve
     reader.set(source: .battery, percent: 19)
@@ -324,7 +378,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // the one sentence that says why. The user gets a refusal with no reason.
     let reader = FakeReader(source: .battery, percent: 21)
     let spy = SpyHolder()
-    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: spy, reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
 
     model.intent = .serve
     #expect(model.isServing == true)
@@ -354,7 +409,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // catches from the side where the reading crosses the floor directly.
     let reader = FakeReader(source: .battery, percent: 21)
     let spy = SpyHolder()
-    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: spy, reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
 
     model.intent = .serve
     #expect(model.isServing == true)
@@ -386,7 +442,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // `isServing` stays false until the user toggles again.
     let reader = FakeReader(source: .battery, percent: 21)
     let spy = SpyHolder()
-    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: spy, reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
 
     model.intent = .serve
     reader.set(source: .battery, percent: 19)
@@ -418,7 +475,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // one-point error stays green there.
     let reader = FakeReader(source: .battery, percent: 21)
     let spy = SpyHolder()
-    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: spy, reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
 
     model.intent = .serve
     reader.set(source: .battery, percent: 19)
@@ -439,7 +497,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
 @Test func theSuppressionLineClearsWhenTheBatteryRisesAboveTheFloor() {
     let reader = FakeReader(source: .battery, percent: 21)
     let spy = SpyHolder()
-    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: spy, reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
 
     model.intent = .serve
     reader.set(source: .battery, percent: 19)
@@ -476,7 +535,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // value to the holder is the tick.
     let reader = FakeReader(source: .battery, percent: 21)
     let spy = SpyHolder()
-    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth(),
+    let model = ServingModel(holder: spy, reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings(),
                              listener: NoopIngestListener())
 
     model.intent = .serve
@@ -533,7 +593,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     var captured: Timer?
     do {
         let model = ServingModel(holder: SpyHolder(),
-                                 reader: FakeReader(source: .ac, percent: 80), health: fixtureHealth(),
+                                 reader: FakeReader(source: .ac, percent: 80),
+                                 health: fixtureHealth(), settings: FakeSettings(),
                                  listener: NoopIngestListener())
         try model.startMonitoring(interval: 0.01)
         captured = model.timer
@@ -573,7 +634,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // does, not about what a tick does, so neither timer should fire while it
     // runs — a short interval would let the run loop decide the outcome.
     let model = ServingModel(holder: SpyHolder(),
-                             reader: FakeReader(source: .ac, percent: 80), health: fixtureHealth(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth(), settings: FakeSettings(),
                              listener: NoopIngestListener())
 
     try model.startMonitoring(interval: 60)
@@ -620,7 +682,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // across every input combination.
     let reader = FakeReader(source: .battery, percent: 50)
     let spy = SpyHolder()
-    let model = ServingModel(holder: spy, reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: spy, reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
 
     model.intent = .serve
     let held = try #require(model.desired)
@@ -657,7 +720,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
 @Test func theModelPublishesTheHookHealthItReads() {
     let model = ServingModel(holder: SpyHolder(),
                              reader: FakeReader(source: .ac, percent: 80),
-                             health: fixtureHealth("missing-stop.json"))
+                             health: fixtureHealth("missing-stop.json"),
+                             settings: FakeSettings())
 
     // Before the first refresh nothing has been read. `PanelView.onAppear`
     // calls `refresh()`, so this value never reaches the screen.
@@ -673,7 +737,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // rather than fail to build.
     let model = ServingModel(holder: SpyHolder(),
                              reader: FakeReader(source: .ac, percent: 80),
-                             health: fixtureHealth("definitely-not-here.json"))
+                             health: fixtureHealth("definitely-not-here.json"),
+                             settings: FakeSettings())
 
     model.refresh()
     #expect(model.hookHealth == .unreadable)
@@ -702,7 +767,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
 
     let model = ServingModel(holder: SpyHolder(),
                              reader: FakeReader(source: .ac, percent: 80),
-                             health: HookHealthReader(settingsURL: settings))
+                             health: HookHealthReader(settingsURL: settings),
+                             settings: FakeSettings())
     model.refresh()
     #expect(model.hookHealth == .missing(["Stop"]))
 
@@ -728,7 +794,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // instance stealing the socket kills ingest and leaves this file `.wired`.
     let model = ServingModel(holder: SpyHolder(),
                              reader: FakeReader(source: .ac, percent: 80),
-                             health: fixtureHealth("wired.json"))
+                             health: fixtureHealth("wired.json"),
+                             settings: FakeSettings())
 
     model.refresh()
     #expect(model.hookHealth == .wired)
@@ -745,7 +812,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // joined.
     let model = ServingModel(holder: SpyHolder(),
                              reader: FakeReader(source: .ac, percent: 80),
-                             health: fixtureHealth("missing-two.json"))
+                             health: fixtureHealth("missing-two.json"),
+                             settings: FakeSettings())
 
     model.refresh()
     #expect(model.hookHealth == .missing(["PermissionDenied", "Stop"]))
@@ -775,7 +843,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // the exact six-occurrence pattern design §6 exists to avoid.
     let model = ServingModel(holder: SpyHolder(),
                              reader: FakeReader(source: .ac, percent: 80),
-                             health: fixtureHealth("definitely-not-here.json"))
+                             health: fixtureHealth("definitely-not-here.json"),
+                             settings: FakeSettings())
 
     model.refresh()
     #expect(model.hookHealth == .unreadable)
@@ -808,7 +877,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // absence of it, from a settings-file read alone.
     let model = ServingModel(holder: SpyHolder(),
                              reader: FakeReader(source: .ac, percent: 80),
-                             health: fixtureHealth("missing-two.json"))
+                             health: fixtureHealth("missing-two.json"),
+                             settings: FakeSettings())
     model.refresh()
 
     let advisory = try #require(model.hookAdvisory)
@@ -835,7 +905,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // snaps back to Auto and no sentence says the app moved it, so a user who
     // clicked On reads a line about the battery and believes On is honoured.
     let reader = FakeReader(source: .battery, percent: 19)
-    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: SpyHolder(), reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
 
     model.intent = .serve
 
@@ -855,7 +926,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // panel tells a user who touched nothing that their click was refused, and
     // points at a control that is exactly where they left it.
     let reader = FakeReader(source: .battery, percent: 19)
-    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: SpyHolder(), reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
 
     model.ingest(HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
 
@@ -874,7 +946,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // `reason(_:stillTrueOf:)`. The battery recovers, the floor stops refusing
     // anything, and the panel goes on telling the user their click was refused.
     let reader = FakeReader(source: .battery, percent: 19)
-    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: SpyHolder(), reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
 
     model.intent = .serve
     #expect(model.suppressionAdvisory?.contains("was refused") == true,
@@ -904,7 +977,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // simply false, and false on the commonest exit from On rather than on an
     // edge case. Shipped in round 1 of this task and measured before this fix.
     let reader = FakeReader(source: .battery, percent: 50)
-    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: SpyHolder(), reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
 
     model.intent = .serve
     // The two preconditions that make this the RELEASE path and not the refusal
@@ -935,7 +1009,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // reads that they are back on Auto while the control shows Off, so the one
     // sentence explaining the move describes a move that did not happen.
     let reader = FakeReader(source: .battery, percent: 50)
-    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: SpyHolder(), reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
 
     model.intent = .stop
     model.intent = .serve
@@ -962,7 +1037,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // holding any assertion." — two sentences that contradict each other on one
     // screen. The word "released" is new, so this falsehood is new.
     let reader = FakeReader(source: .battery, percent: 50)
-    let model = ServingModel(holder: FailingHolder(), reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: FailingHolder(), reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
 
     model.intent = .serve
     // The precondition that makes this the failing-holder path. Without it the
@@ -997,7 +1073,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // click lands. Without the earlier On click this check misses the case
     // where the "did this request ask for a hold?" flag survives the new click.
     let reader = FakeReader(source: .battery, percent: 50)
-    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: SpyHolder(), reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
 
     model.ingest(HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
     model.intent = .serve
@@ -1031,7 +1108,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // The second refusal is then silent, which is the failure this whole task
     // exists to remove.
     let reader = FakeReader(source: .battery, percent: 19)
-    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: SpyHolder(), reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
 
     model.intent = .serve
     #expect(model.suppressionAdvisory?.contains("was refused") == true,
@@ -1056,7 +1134,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // reads Off and the panel says Auto, so the one line that exists to explain
     // the move describes a move that did not happen.
     let reader = FakeReader(source: .battery, percent: 15)
-    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: SpyHolder(), reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
 
     model.intent = .stop
     model.intent = .serve
@@ -1090,7 +1169,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // user who touched NOTHING gets. The disclosure is then inoperative in
     // exactly the case it exists for.
     let reader = FakeReader(source: .battery, percent: 19)
-    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: SpyHolder(), reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
 
     model.ingest(HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
     model.intent = .serve
@@ -1127,7 +1207,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // exactly 20%, the control snaps back to Auto on its own, and the one
     // sentence that says why is missing — while every check at 19% stays green.
     let reader = FakeReader(source: .battery, percent: 20)
-    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: SpyHolder(), reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
 
     model.intent = .serve
 
@@ -1161,7 +1242,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // not the one on screen, with the control back on Auto and no session
     // running.
     let reader = FakeReader(source: .battery, percent: 5)
-    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: SpyHolder(), reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
 
     model.intent = .serve
     #expect(model.suppressionAdvisory?.contains("was refused") == true,
@@ -1201,7 +1283,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // `anHonouredOnClickReleasedByTheFloorNeverSaysItWasRefused` exists to stop,
     // reached through a different door.
     let reader = FakeReader(source: .battery, percent: 25)
-    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth())
+    let model = ServingModel(holder: SpyHolder(), reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
 
     model.intent = .serve
     #expect(model.isServing == true, "precondition: the click was honoured and the Mac is held")
@@ -1217,4 +1300,259 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
         At 19% — coffee-bar does not hold at or below 20%. coffee-bar released \
         the hold from your On click, so the control is back on Auto.
         """)
+}
+
+// MARK: - The display hold (issue #12)
+//
+// Issue #12 asked whether "coffee-bar never holds a display assertion" is a
+// product promise or a default. The user settled it: a DEFAULT. So these check
+// two things that are not the same — that the default is still off, and that
+// the opt-in actually reaches IOKit. Either one alone can be green while the
+// product is wrong.
+
+@MainActor
+@Test func theDisplayHoldIsOffOnAFreshInstall() {
+    // The shipped state, for a user who has never opened the panel. A store
+    // with nothing in it is what a first launch reads.
+    let reader = FakeReader(source: .ac, percent: 80)
+    let spy = SpyHolder()
+    let model = ServingModel(holder: spy, reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
+
+    #expect(model.holdDisplayAwake == false)
+
+    model.intent = .serve
+
+    #expect(model.isServing == true, "precondition: the machine is held at all")
+    #expect(spy.displaySleepRequests == [false], """
+        the model asked for a display hold nobody turned on: \
+        \(spy.displaySleepRequests)
+        """)
+}
+
+@MainActor
+@Test func theDisplayHoldReachesTheHolderOnlyWhileTheSettingIsOn() {
+    // The whole feature, end to end through the model's own seam. Named bug
+    // this catches: a setting the panel writes and stores and NOTHING reads —
+    // a control that moves and changes nothing, which is the failure mode
+    // `thePanelReadsTheHookAdvisoryTheModelPublishes` exists for one layer up.
+    let reader = FakeReader(source: .ac, percent: 80)
+    let spy = SpyHolder()
+    let model = ServingModel(holder: spy, reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
+
+    model.intent = .serve
+    #expect(spy.displaySleepRequests == [false], "precondition: the default is off")
+
+    model.holdDisplayAwake = true
+
+    // The SEQUENCE, not the last value: the setting has to reach IOKit on the
+    // next reconcile, not merely be remembered.
+    #expect(spy.displaySleepRequests == [false, true], """
+        turning the setting on did not ask the holder for the display: \
+        \(spy.displaySleepRequests)
+        """)
+
+    model.holdDisplayAwake = false
+
+    // And back off again. A model that only ever adds leaves the screen lit
+    // after the user unticks the box.
+    #expect(spy.displaySleepRequests == [false, true, false], """
+        turning the setting off did not withdraw the display request: \
+        \(spy.displaySleepRequests)
+        """)
+}
+
+@MainActor
+@Test func theOffPositionWithdrawsTheDisplayHoldAsWell() {
+    // The absolute veto, one layer above `theOffPositionVetoesTheDisplayHoldToo`.
+    // The user has opted in AND switched the product off; the screen must go to
+    // sleep with the machine. Named bug this catches: an opt-in read straight
+    // off the setting rather than off `DesiredPowerState`, which would keep the
+    // screen lit after the off switch.
+    let reader = FakeReader(source: .ac, percent: 80)
+    let spy = SpyHolder()
+    let model = ServingModel(
+        holder: spy, reader: reader, health: fixtureHealth(),
+        settings: FakeSettings([SettingsKey.holdDisplayAwake: true]))
+
+    model.intent = .serve
+    #expect(spy.displaySleepRequests == [true], "precondition: the opt-in reached the holder")
+
+    model.intent = .stop
+
+    #expect(model.isServing == false)
+    #expect(spy.releaseCount >= 1, "the off switch released nothing")
+    // No further acquire happened, so nothing re-asked for the display.
+    #expect(spy.displaySleepRequests == [true], """
+        something asked for a hold after the off switch: \(spy.displaySleepRequests)
+        """)
+}
+
+@MainActor
+@Test func theBatteryFloorWithdrawsTheDisplayHoldAsWell() {
+    // §8.1 through the model. A screen held below the floor drains the battery
+    // faster than the hold the floor has just refused.
+    let reader = FakeReader(source: .battery, percent: 25)
+    let spy = SpyHolder()
+    let model = ServingModel(
+        holder: spy, reader: reader, health: fixtureHealth(),
+        settings: FakeSettings([SettingsKey.holdDisplayAwake: true]))
+
+    model.intent = .serve
+    #expect(model.isServing == true, "precondition: the hold was honoured above the floor")
+    #expect(spy.displaySleepRequests == [true], "precondition: the display went up with it")
+
+    reader.set(source: .battery, percent: 19)
+    model.refresh()
+
+    #expect(model.isServing == false)
+    #expect(spy.releaseCount >= 1, "the floor released nothing")
+    #expect(spy.displaySleepRequests == [true], """
+        something asked for a display hold below the floor: \(spy.displaySleepRequests)
+        """)
+}
+
+@MainActor
+@Test func theSettingIsWrittenToTheStoreWhenTheUserChangesIt() {
+    // The write half of persistence. Without it the panel remembers the choice
+    // for exactly as long as the app runs, and every check above stays green.
+    let store = FakeSettings()
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth(), settings: store)
+
+    #expect(store.bool(forKey: SettingsKey.holdDisplayAwake) == nil,
+            "precondition: nothing was stored before the user touched anything")
+
+    model.holdDisplayAwake = true
+    #expect(store.bool(forKey: SettingsKey.holdDisplayAwake) == true)
+
+    model.holdDisplayAwake = false
+    // `false`, not absent. A store that deleted the key on an opt-out would
+    // read as "never asked" and could never distinguish the two.
+    #expect(store.bool(forKey: SettingsKey.holdDisplayAwake) == false)
+}
+
+@MainActor
+@Test func aStoredSettingIsReadBackAtTheNextLaunch() {
+    // The read half, which is what "survives a restart" means at this layer:
+    // a NEW model over a store that already holds the value starts opted in.
+    // `SettingsStore_test.swift` proves the value reaches the disk; this proves
+    // the model asks for it at all.
+    //
+    // Named bug this catches: an `init` that ignores the store and starts every
+    // launch at `false`. Every check above still passes, because each one sets
+    // the value itself before reading it.
+    let spy = SpyHolder()
+    let model = ServingModel(
+        holder: spy, reader: FakeReader(source: .ac, percent: 80),
+        health: fixtureHealth(),
+        settings: FakeSettings([SettingsKey.holdDisplayAwake: true]))
+
+    #expect(model.holdDisplayAwake == true)
+
+    model.intent = .serve
+    #expect(spy.displaySleepRequests == [true], """
+        a model that read the stored opt-in never asked the holder for it: \
+        \(spy.displaySleepRequests)
+        """)
+}
+
+@MainActor
+@Test func theDisplayHoldMatchesWhatTheDecisionAskedFor() {
+    // The two must never disagree. `desired` is the decision object every
+    // guard in this repository asserts against, and the holder is what actually
+    // reaches IOKit — so a model that read the setting directly on its way to
+    // `acquire` would pin the screen awake while `desired.displaySleepAssertion`
+    // still read `false`, which is the exact blind spot §6.1's guard rests on.
+    let spy = SpyHolder()
+    let model = ServingModel(
+        holder: spy, reader: FakeReader(source: .ac, percent: 80),
+        health: fixtureHealth(),
+        settings: FakeSettings([SettingsKey.holdDisplayAwake: true]))
+
+    model.intent = .serve
+
+    let decided = try? #require(model.desired)
+    #expect(decided?.displaySleepAssertion == true)
+    #expect(spy.displaySleepRequests.last == decided?.displaySleepAssertion)
+}
+
+// MARK: - What the panel says is held
+
+@MainActor
+@Test func theServingLineNamesTheDisplayOnlyWhenTheDisplayIsHeld() {
+    // The sentence beside the control, and the reason it moved out of
+    // `PanelView`: it read "Holding the system awake. The display may still
+    // sleep." unconditionally, which is FALSE the moment a user opts in — a
+    // false claim in the UI of a product whose pitch is that it tells you the
+    // truth about what is keeping your Mac awake. Composed in the view, no
+    // check in this package could read it (design §5.4).
+    let reader = FakeReader(source: .ac, percent: 80)
+    let store = FakeSettings()
+    let model = ServingModel(holder: SpyHolder(), reader: reader,
+                             health: fixtureHealth(), settings: store)
+
+    // Nothing held at all.
+    #expect(model.servingSummary == "Not holding any assertion.")
+
+    // Held, screen free to sleep — the shipped default.
+    model.intent = .serve
+    #expect(model.isServing == true, "precondition: the machine is held")
+    #expect(model.servingSummary == "Holding the system awake. The display may still sleep.")
+
+    // Held, screen held too.
+    model.holdDisplayAwake = true
+    #expect(model.servingSummary == "Holding the system awake, and the display with it.")
+
+    // And back. The three sentences are distinct, so no one of them can stand
+    // in for another.
+    model.holdDisplayAwake = false
+    #expect(model.servingSummary == "Holding the system awake. The display may still sleep.")
+}
+
+@MainActor
+@Test func theServingLineNamesTheDisplayHoldAndTheFloorRelease() {
+    // Named bug this catches: a wrong or stale SUMMARY STRING. Mutating either
+    // literal in `servingSummary` turns this red. That is the whole of its
+    // value, and the name now says so.
+    //
+    // What it does NOT catch, corrected after a mutation proved it: this cannot
+    // tell `desired?.displaySleepAssertion` from `holdDisplayAwake`. An earlier
+    // name and comment here claimed it caught exactly that substitution. It does
+    // not, and no check at this level can. `PowerBroker.decide` grants the
+    // display assertion only in the branch that also grants the system hold, and
+    // `servingSummary` guards on `isServing` before reading the expression, so
+    // the two agree in every reachable state. Planting the substitution left the
+    // full suite green — 486 tests, zero failures.
+    //
+    // The decision-not-the-setting invariant is pinned where it IS falsifiable:
+    // `theOffPositionVetoesTheDisplayHoldToo` and
+    // `theBatteryFloorReleasesTheDisplayHoldToo` in `PowerBroker_test.swift`.
+    let reader = FakeReader(source: .battery, percent: 25)
+    let model = ServingModel(
+        holder: SpyHolder(), reader: reader, health: fixtureHealth(),
+        settings: FakeSettings([SettingsKey.holdDisplayAwake: true]))
+
+    model.intent = .serve
+    #expect(model.servingSummary == "Holding the system awake, and the display with it.",
+            "precondition: the opt-in reached the panel above the floor")
+
+    reader.set(source: .battery, percent: 19)
+    model.refresh()
+
+    #expect(model.holdDisplayAwake == true, "precondition: the setting itself did not change")
+    #expect(model.servingSummary == "Not holding any assertion.")
+}
+
+@MainActor
+@Test func theDisplayLabelsAreTwoDistinctWordsForTheTwoPositions() {
+    // The picker's two segments read from here, so a check can see what the
+    // control says. Named bug this catches: both segments rendering the same
+    // word, which makes the control unusable and which design §5.4 rules out
+    // catching on the rendered view.
+    #expect(ServingModel.displayLabel(for: true) != ServingModel.displayLabel(for: false))
+    #expect(ServingModel.displayLabel(for: false).isEmpty == false)
+    #expect(ServingModel.displayLabel(for: true).isEmpty == false)
 }

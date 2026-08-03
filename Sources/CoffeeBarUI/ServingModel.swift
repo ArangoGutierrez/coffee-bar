@@ -23,6 +23,7 @@ public final class ServingModel {
     private let reader: any PowerReadingProviding
     private let health: HookHealthReader
     private let listener: any IngestListening
+    private let settings: any SettingsStoring
     private let policy: StalePolicy
     private let now: @Sendable () -> Date
     private var controller = HoldController()
@@ -317,6 +318,53 @@ public final class ServingModel {
         }
     }
 
+    /// What the two positions of the display control are CALLED.
+    ///
+    /// Here rather than in `PanelView`, for the reason `label(for:)` is: design
+    /// §5.4 rules out asserting on the rendered control, so two literals in the
+    /// view are two literals no check reads — and `servingSummary` below
+    /// describes the same two states in prose that a check DOES read.
+    ///
+    /// It names what the SCREEN does, not what the setting is called. "On" and
+    /// "Off" sit on the Serving control one line above and would read as a
+    /// second power switch.
+    static func displayLabel(for holdsDisplay: Bool) -> String {
+        holdsDisplay ? "Stays on" : "Sleeps"
+    }
+
+    /// The one line the panel shows about what is held right now.
+    ///
+    /// Built HERE and not in `PanelView`, and issue #12 is why. The view
+    /// composed it as "Holding the system awake. The display may still sleep."
+    /// — unconditional, and FALSE the moment a user opts in. M1 design §5.4
+    /// forbids asserting on rendered AppKit text, so that sentence was a claim
+    /// no check in this package could read, in the UI of a product whose pitch
+    /// is that it tells you the truth about what is keeping your Mac awake.
+    ///
+    /// It reads the DECISION and not the setting, deliberately — but be honest
+    /// about what that buys today. No check at this level can tell the two
+    /// apart, and an earlier version of this comment wrongly claimed one did.
+    /// `PowerBroker.decide` grants `displaySleepAssertion` only in the branch
+    /// that also grants the system hold, and the guard below returns before the
+    /// expression whenever nothing is held, so `desired?.displaySleepAssertion`
+    /// and `holdDisplayAwake` agree in every state reachable here. Substituting
+    /// one for the other is a semantic no-op today, proved by mutation.
+    ///
+    /// Reading the decision is still the correct source: it stays right if a
+    /// later change ever denies the screen while granting the machine, which is
+    /// exactly when a setting-derived sentence would begin to lie. The invariant
+    /// is pinned where it IS falsifiable — `theOffPositionVetoesTheDisplayHoldToo`
+    /// and `theBatteryFloorReleasesTheDisplayHoldToo` in `PowerBroker_test.swift`.
+    ///
+    /// Not `Optional`, unlike the advisories: this line is always on screen.
+    /// "Nothing is held" is the answer a user opening the panel most needs.
+    public var servingSummary: String {
+        guard isServing else { return "Not holding any assertion." }
+        return desired?.displaySleepAssertion == true
+            ? "Holding the system awake, and the display with it."
+            : "Holding the system awake. The display may still sleep."
+    }
+
     /// Turns a `start()` failure into something the user can act on.
     ///
     /// Each case names the path and the next step, because "ingest is not
@@ -379,16 +427,28 @@ public final class ServingModel {
     public init(holder: any AssertionHolding = AssertionHolder(),
                 reader: any PowerReadingProviding = SystemPowerReader(),
                 health: HookHealthReader = HookHealthReader(),
+                settings: any SettingsStoring = UserDefaultsSettingsStore(),
                 listener: any IngestListening = UnixSocketIngestListener(),
                 policy: StalePolicy = .standard,
                 now: @escaping @Sendable () -> Date = { Date() }) {
         self.holder = holder
         self.reader = reader
         self.health = health
+        self.settings = settings
         self.listener = listener
         self.policy = policy
         self.now = now
         self.reading = reader.read()
+        // Read ONCE, here, and never again. `refresh()` runs every 30 seconds
+        // and on every hook event; re-reading the store on each of those would
+        // make an external write to the preferences move the user's control
+        // under them, and this app is the only writer anyway.
+        //
+        // `?? false` is the product's default: the screen sleeps unless the
+        // user has said otherwise. A key nobody wrote reads as `nil` here, not
+        // as `false` — see `SettingsStoring`.
+        self.holdDisplayAwakeStorage =
+            settings.bool(forKey: SettingsKey.holdDisplayAwake) ?? false
     }
 
     // There is deliberately NO `deinit` here, and none may be added.
@@ -466,6 +526,41 @@ public final class ServingModel {
         }
     }
 
+    /// Bound to the panel's display control. Whether a hold covers the SCREEN
+    /// as well as the machine (issue #12).
+    ///
+    /// A SETTING and not a fourth control position, because it answers a
+    /// different question from `intent`: that one says whether to hold at all,
+    /// this one says what a hold covers. The two are independent, so the panel
+    /// shows two controls.
+    ///
+    /// It never reaches IOKit on its own. The setter hands it to
+    /// `PowerBroker` through `refresh()`, which weighs the off switch and the
+    /// battery floor first, and only `DesiredPowerState.displaySleepAssertion`
+    /// reaches `AssertionHolder`. A model that passed this straight to
+    /// `acquire` would keep the screen lit through the off switch and below the
+    /// battery floor — `theOffPositionWithdrawsTheDisplayHoldAsWell` and
+    /// `theBatteryFloorWithdrawsTheDisplayHoldAsWell` go red on exactly that.
+    ///
+    /// Computed over a stored property, the same shape as `intent` above, so
+    /// `@Observable` tracks the read and the panel redraws.
+    ///
+    /// The setter WRITES BEFORE it reconciles. A crash between the two would
+    /// otherwise lose a choice the user has already seen take effect, and the
+    /// store is the only thing that outlives the process.
+    public var holdDisplayAwake: Bool {
+        get { holdDisplayAwakeStorage }
+        set {
+            holdDisplayAwakeStorage = newValue
+            settings.setBool(newValue, forKey: SettingsKey.holdDisplayAwake)
+            refresh()
+        }
+    }
+
+    /// The backing store for `holdDisplayAwake`, seeded from the settings in
+    /// `init`. Private: `holdDisplayAwake` is the property with the behaviour.
+    private var holdDisplayAwakeStorage: Bool
+
     /// Re-samples power, retires silent sessions, and reconciles the assertion.
     /// Safe to call on a timer.
     ///
@@ -493,6 +588,7 @@ public final class ServingModel {
         let state = controller.evaluate(powerSource: reading.source,
                                         batteryPercent: reading.percent,
                                         sessions: sessions,
+                                        holdDisplayAwake: holdDisplayAwakeStorage,
                                         assertionIsHeld: isServing)
         // Derived from the SAME array handed to `evaluate` above, on purpose.
         // Design §14 forbids a second source here: a panel that disagrees with
@@ -517,8 +613,12 @@ public final class ServingModel {
         // separately, one on the state and one on the wording.
         cancelledServe = suppression == nil ? nil : controller.cancelledServe
 
+        // The DECISION reaches IOKit, never the setting. `state` has already
+        // been weighed against the off switch and the battery floor, so this
+        // line cannot pin the screen awake behind the decision's back — which
+        // is the blind spot every §6.1 guard rests on.
         if state.idleSleepAssertion {
-            isServing = holder.acquire()
+            isServing = holder.acquire(displaySleep: state.displaySleepAssertion)
         } else {
             holder.release()
             isServing = false

@@ -143,8 +143,11 @@ Then confirm the assertion behaves:
     pmset -g assertions | grep coffee-bar
 
 While an agent is working you should see `PreventUserIdleSystemSleep` named
-`"coffee-bar is serving"`. You should **never** see a display assertion from
-coffee-bar.
+`"coffee-bar is serving"`. With the panel's Display control on its default
+position you should see **no** display assertion from coffee-bar. Move that
+control to the other position and a second line appears while an agent works:
+`PreventUserIdleDisplaySleep`, named
+`"coffee-bar is keeping the display awake"`.
 
 ## Where to look in the UI
 

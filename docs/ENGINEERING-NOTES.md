@@ -33,11 +33,20 @@ yield `priorValue` — the value to restore *to*. Adding rejection at the store 
 `init(from:)` makes that branch unreachable for every real on-disk journal. Pinned by
 `schemaVersionIsReadFromTheFileNotAssumed`.
 
-**Nothing may hold `PreventUserIdleDisplaySleep`.** Letting the display sleep while
-the system stays awake is the product's differentiator (handoff §6.1). Two guards
-exist, in two components, because a single one covered only one:
-`holderNeverPreventsDisplaySleep` for `AssertionHolder`, and the `run(whileHeld:)`
-observation for `AssertionProbe`.
+**Only `AssertionHolder` may hold `PreventUserIdleDisplaySleep`, and only when the
+user opts in.** Letting the display sleep while the system stays awake is the
+product's differentiator (handoff §6.1). Issue #12 settled that it is a DEFAULT and
+not a promise, so the rule became an entitlement of one file and one symbol —
+`displayAssertionEntitlement` in `AppLayerBoundary_test.swift`. Nothing reads the
+setting on the way to IOKit: `PowerBroker` weighs the off switch and the battery
+floor first, and `AssertionHolder` takes only what
+`DesiredPowerState.displaySleepAssertion` asks for.
+
+Guards exist in two components, because a single one covered only one:
+`theHolderPreventsNoDisplaySleepWhileTheHoldIsOff` and
+`noDisplayAssertionIsHeldUnderAnyNameWhileTheHoldIsOff` for `AssertionHolder`, and
+the `run(whileHeld:)` observation for `AssertionProbe`. `AssertionProbe` keeps the
+absolute ban: a capability probe has no user to ask.
 
 ---
 

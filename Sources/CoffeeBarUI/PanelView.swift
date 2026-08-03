@@ -115,12 +115,44 @@ public struct PanelView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
 
-            // `isServing` stays on screen beside the control. The user has to
-            // be able to see that Auto is holding right now, or is not — the
-            // control says what was asked for and this line says what happened.
-            Text(model.isServing
-                 ? "Holding the system awake. The display may still sleep."
-                 : "Not holding any assertion.")
+            // The second control, and a SEPARATE question from the one above.
+            // That one says whether to hold at all; this says whether a hold
+            // covers the screen. Issue #12 settled that "coffee-bar never holds
+            // the display" is a DEFAULT and not a promise, so the user needs
+            // somewhere to change it — a setting nobody can find is a setting
+            // that does not exist.
+            //
+            // A fourth position on the Serving picker was the alternative and
+            // is rejected: it would make "keep my screen on" imply "hold
+            // unconditionally", which is not what a user asking for the screen
+            // means, and it would put the off switch and the screen on one
+            // control where they cannot be chosen independently.
+            //
+            // Same `.segmented` shape as above, and the labels come from the
+            // model for the same reason: `servingSummary` describes these two
+            // states in prose, and two literals here could drift from it with
+            // nothing to catch the drift (design §5.4).
+            Text("Display").font(.headline)
+
+            Picker("Display", selection: $model.holdDisplayAwake) {
+                Text(ServingModel.displayLabel(for: false)).tag(false)
+                Text(ServingModel.displayLabel(for: true)).tag(true)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            // What is ACTUALLY held, beside the two controls that asked for it.
+            // The user has to be able to see that Auto is holding right now, or
+            // is not — the controls say what was asked for and this line says
+            // what happened.
+            //
+            // Rendered verbatim from the model, with no text built here. This
+            // view composed the sentence until issue #12, and it read "the
+            // display may still sleep" whatever the user had chosen — a false
+            // claim no check could reach, because M1 design §5.4 rules out
+            // asserting on this view. The wording now lives on
+            // `ServingModel.servingSummary` and is asserted there.
+            Text(model.servingSummary)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

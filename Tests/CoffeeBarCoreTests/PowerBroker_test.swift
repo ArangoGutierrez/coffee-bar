@@ -23,17 +23,25 @@ private func inputs(sessions: [AgentSession] = [],
                     battery: Int? = 80,
                     intent: UserIntent = .auto,
                     blocked: Bool = false,
-                    floor: Int = 20) -> PowerInputs {
+                    floor: Int = 20,
+                    holdDisplayAwake: Bool = false) -> PowerInputs {
     PowerInputs(sessions: sessions, powerSource: source, batteryPercent: battery,
                 userIntent: intent, holdAwakeWhileBlocked: blocked,
-                batteryFloorPercent: floor)
+                batteryFloorPercent: floor, holdDisplayAwake: holdDisplayAwake)
 }
 
 // MARK: - The invariant that justifies the product
 
-@Test func displaySleepAssertionIsNeverRequested() {
-    // Handoff §6.1. Every combination, not a sampled one: this is the single
-    // behaviour that separates coffee-bar from `caffeinate -d`.
+@Test func noUserIntentAloneRequestsTheDisplayAssertion() {
+    // Handoff §6.1, as issue #12 settled it: letting the screen sleep is the
+    // DEFAULT, not a promise. So the sweep no longer says "never"; it says
+    // nothing a user does to the SERVING control can reach the display
+    // assertion. Only the opt-in can, and the opt-in is a separate input.
+    //
+    // Every combination, not a sampled one. `holdDisplayAwake` is left at its
+    // default here on purpose: that default IS the claim. Every position of the
+    // Serving control, every session state, every power source and every
+    // battery reading — and the screen still sleeps.
     //
     // `UserIntent.allCases`, not a literal `[.serve, .stop]`. That literal was
     // the whole enum until M2 added `.auto`, and a hand-written list silently
@@ -55,6 +63,77 @@ private func inputs(sessions: [AgentSession] = [],
             }
         }
     }
+}
+
+@Test func theDisplayAssertionRidesTheSystemHoldAndNeverOutlivesIt() {
+    // The other half of the sweep above, and the one that makes it mean
+    // something. Without this, deleting the whole opt-in from `decide` leaves
+    // `noUserIntentAloneRequestsTheDisplayAssertion` green for ever.
+    //
+    // The invariant, asserted over the SAME matrix with the opt-in ON: the
+    // display assertion is requested EXACTLY when the machine is held, and
+    // never on its own. `out.idleSleepAssertion` is the independently-derived
+    // value here — it is what every other check in this file already pins,
+    // state by state — so this is not the implementation's own expression
+    // written twice.
+    //
+    // Named bug this catches: a `decide` that returns `displaySleepAssertion:
+    // inputs.holdDisplayAwake` flatly. It would pin the screen awake under
+    // `.stop` — the absolute veto — and below the battery floor, where nothing
+    // at all should be held, and every other check in this file stays green
+    // because none of them reads this field.
+    for state in SessionState.allCases {
+        for source in [PowerSource.ac, .battery] {
+            for intent in UserIntent.allCases {
+                for blocked in [true, false] {
+                    for battery in [nil, 0, 19, 20, 21, 100] as [Int?] {
+                        let out = PowerBroker.decide(inputs(
+                            sessions: [session(state)], source: source,
+                            battery: battery, intent: intent, blocked: blocked,
+                            holdDisplayAwake: true))
+                        #expect(out.displaySleepAssertion == out.idleSleepAssertion, """
+                            state \(state.rawValue), \(source), \(intent), \
+                            blocked \(blocked), battery \(String(describing: battery)): \
+                            display \(out.displaySleepAssertion) beside hold \
+                            \(out.idleSleepAssertion)
+                            """)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Test func theOffPositionVetoesTheDisplayHoldToo() {
+    // The absolute veto, spelled out against a LITERAL rather than against
+    // another field of the same answer. `.stop` is the off switch, and a
+    // product that keeps the screen lit after the user switched it off is the
+    // trust failure §5.1 rules out — the opt-in is not a second, louder On.
+    let out = PowerBroker.decide(inputs(sessions: [session(.working)],
+                                        intent: .stop, holdDisplayAwake: true))
+    #expect(out.idleSleepAssertion == false)
+    #expect(out.displaySleepAssertion == false)
+}
+
+@Test func theBatteryFloorReleasesTheDisplayHoldToo() {
+    // §8.1. The floor is a safety limit on the machine, and a display held
+    // through it drains the battery FASTER than the hold it just refused.
+    //
+    // At exactly the floor, which is where `PowerBroker` suppresses.
+    let out = PowerBroker.decide(inputs(sessions: [session(.working)],
+                                        source: .battery, battery: 20,
+                                        intent: .serve, holdDisplayAwake: true))
+    #expect(out.idleSleepAssertion == false)
+    #expect(out.displaySleepAssertion == false)
+    #expect(out.suppression == .batteryFloor(percent: 20, floor: 20))
+
+    // One point above it the whole hold arrives, display and all. Without this
+    // the check above passes against a `decide` that never grants the opt-in.
+    let above = PowerBroker.decide(inputs(sessions: [session(.working)],
+                                          source: .battery, battery: 21,
+                                          intent: .serve, holdDisplayAwake: true))
+    #expect(above.idleSleepAssertion == true)
+    #expect(above.displaySleepAssertion == true)
 }
 
 // MARK: - Wake predicate (§5.1)

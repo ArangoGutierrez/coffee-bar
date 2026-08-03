@@ -70,7 +70,7 @@ machine is free to sleep — and it wakes into work when you answer.
 <h2>What it actually does</h2>
 <ul>
   <li>Holds <code>PreventUserIdleSystemSleep</code>, bound to live agent session state.</li>
-  <li><strong>Never holds a display assertion.</strong> The screen still sleeps while the work continues.</li>
+  <li><strong>Holds no display assertion by default.</strong> The screen still sleeps while the work continues. A Display control in the panel opts in when you do want the screen kept on.</li>
   <li>Releases when every agent is blocked on input, not when a timer expires.</li>
   <li>Shows how many sessions are working, and which ones are waiting on you.</li>
   <li>Retires a session whose agent crashed, so a dead process cannot pin the machine awake for ever.</li>
