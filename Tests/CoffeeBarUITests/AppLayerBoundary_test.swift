@@ -114,6 +114,30 @@ private let coreLayerTargets = [
     "CoffeeBarCore",
 ]
 
+/// The ONE file entitled to create a display assertion, and the ONE symbol it
+/// may name in code.
+///
+/// Issue #12 settled the design question the old absolute ban encoded: "never
+/// holds the display" is a DEFAULT, not a product promise. A user may opt in,
+/// so exactly one file has to be allowed to raise the assertion — and that file
+/// is `AssertionHolder`, which already owns every other IOKit call in this
+/// package.
+///
+/// It is a FILE and a SYMBOL, never a blanket pass. `AssertionHolder.swift` is
+/// still refused `NoDisplaySleep`, `beginActivity`, `performActivity`,
+/// `idleDisplaySleepDisabled` and `caffeinate`, because none of those is the
+/// route this product chose and each one is a different way to pin the screen
+/// awake. Widening this to "AssertionHolder.swift may say anything" would
+/// delete the guard for the one file it most needs to read.
+///
+/// The app layer is NOT covered by this and must not be.
+/// `theAppLayerNeverNamesADisplaySleepAssertion` scans `CoffeeBarApp`,
+/// `CoffeeBarUI` and `CoffeeBarIngest`, never reaches this file, and keeps its
+/// absolute ban: the opt-in reaches IOKit through `DesiredPowerState` and the
+/// holder, so no app-layer file has any business naming the assertion.
+private let displayAssertionEntitlement = (file: "AssertionHolder.swift",
+                                           symbol: "PreventUserIdleDisplaySleep")
+
 /// Every file the app layer is allowed to compile, package-root relative and
 /// sorted.
 ///
@@ -766,6 +790,12 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // `IOPMAssertionCreateWithName("PreventUserIdleDisplaySleep" as CFString, …)`
     // is still caught.
     //
+    // ONE file is entitled to cross that line, for ONE symbol: issue #12 made
+    // the display hold an opt-in DEFAULT rather than a promise, so
+    // `AssertionHolder.swift` may raise `PreventUserIdleDisplaySleep`. See
+    // `displayAssertionEntitlement`. Every other file, and every other name,
+    // is refused exactly as before.
+    //
     // Named bug this catches: the audit's exact escape, six lines inside
     // `AssertionHolder.acquire()` raising the display assertion under a name
     // other than `AssertionHolder.assertionName`. The holder's own live-IOKit
@@ -776,9 +806,11 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     let files = try sources(ofTargets: powerLayerTargets + coreLayerTargets)
 
     // A scan that reached nothing, or reached the wrong directory, satisfies
-    // every `contains` below. Anchor on the file the finding is about.
-    #expect(files.contains { $0.lastPathComponent == "AssertionHolder.swift" }, """
-        the below-app scan never reached AssertionHolder.swift; it read \
+    // every `contains` below. Anchor on the file the finding is about — which
+    // is also the entitled file, so a scan that misses it silently turns the
+    // exemption below into an exemption for nobody.
+    #expect(files.contains { $0.lastPathComponent == displayAssertionEntitlement.file }, """
+        the below-app scan never reached \(displayAssertionEntitlement.file); it read \
         \(files.count) files under \(packageRoot.path)
         """)
 
@@ -803,14 +835,33 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
         "caffeinate",
     ]
 
+    // The entitlement is a HOLE in the list above, so it is worthless once the
+    // list stops carrying the symbol it exempts. Named bug this catches: a
+    // rename that touches one of the two and not the other, which leaves
+    // `PreventUserIdleDisplaySleep` unguarded in EVERY file below the app while
+    // this check still reads as though one file were special.
+    #expect(forbidden.contains(displayAssertionEntitlement.symbol), """
+        the entitlement exempts \(displayAssertionEntitlement.symbol) from a denylist \
+        that no longer carries it: \(forbidden). The symbol is then refused \
+        nowhere, so this check no longer discriminates for any file.
+        """)
+
     for file in files {
         let code = swiftCodeWithoutComments(try String(contentsOf: file, encoding: .utf8))
+        let entitled = file.lastPathComponent == displayAssertionEntitlement.file
+
         for name in forbidden {
+            // ONE file, ONE symbol. `AssertionHolder.swift` still answers for
+            // every other name here, and every other file still answers for
+            // this one.
+            if entitled && name == displayAssertionEntitlement.symbol { continue }
+
             #expect(!code.contains(name), """
                 \(file.lastPathComponent) names \(name) in CODE rather than in a \
-                comment. coffee-bar holds PreventUserIdleSystemSleep and no \
-                display assertion of any kind (design §6.1). A comment may name \
-                the constant; creating one is what this refuses.
+                comment. coffee-bar holds PreventUserIdleSystemSleep, and the \
+                display assertion is raised in \(displayAssertionEntitlement.file) \
+                and nowhere else (design §6.1, issue #12). A comment may name the \
+                constant; creating one outside that file is what this refuses.
                 """)
         }
     }
