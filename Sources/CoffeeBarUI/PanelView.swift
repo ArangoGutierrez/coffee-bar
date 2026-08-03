@@ -3,10 +3,12 @@
 
 import SwiftUI
 import AppKit
+import Foundation
 import CoffeeBarCore
 
-// `import AppKit` is explicit for `NSApplication.shared.terminate`. Do not
-// rely on SwiftUI re-exporting it.
+// `import AppKit` is explicit for `NSApplication.shared.terminate`, and
+// `import Foundation` for `Bundle.main.infoDictionary`. Do not rely on SwiftUI
+// re-exporting either.
 
 public struct MenuBarLabel: View {
     let isServing: Bool
@@ -35,6 +37,53 @@ public struct PanelView: View {
     private var batteryLine: String {
         let charge = model.reading.percent.map { "\($0)%" } ?? "no battery"
         return "\(charge) · \(model.reading.source == .ac ? "AC power" : "battery")"
+    }
+
+    /// The line that answers "which build is this?".
+    ///
+    /// A `static func` taking the dictionary, rather than a sentence built
+    /// inline in `body`, for the reason stated all through this file: M1 design
+    /// §5.4 forbids asserting on rendered AppKit text, so a string composed in
+    /// `body` is a string no check reads. Taking `info` as a parameter instead
+    /// of reading `Bundle.main` here is what lets a check reach this without
+    /// rendering the view or living inside an app bundle. It is asserted in
+    /// `PanelVersionLine_test.swift`.
+    ///
+    /// The stamp itself is not interpreted here. `display(from:)` on
+    /// `AppVersion` owns the rule that an unusable stamp reports `unknown`, so
+    /// this never invents a version and never draws a blank tail.
+    ///
+    /// That prose names the call WITHOUT its parentheses on purpose. The
+    /// acceptance script mutates every call to `display` on `AppVersion` in
+    /// this file and rejects a mutation wider than 6 diff lines. A second
+    /// mention written in the shape of a call spends that budget on a comment,
+    /// which compiles to nothing and so proves nothing.
+    ///
+    /// `nonisolated` is LOAD-BEARING, and no local run catches it.
+    ///
+    /// SwiftUICore declares the protocol as
+    /// `@preconcurrency @_Concurrency.MainActor public protocol View`, so a
+    /// conforming type infers main-actor isolation for its members, this static
+    /// one included. A swift-testing `@Test` function is nonisolated, so calling
+    /// it from one is "call to main actor-isolated static method
+    /// 'versionLine(from:)' in a synchronous nonisolated context" — a hard
+    /// error, and exactly how this first shipped RED to CI.
+    ///
+    /// The two toolchains disagree, and the `@preconcurrency` half is why. It
+    /// compiled on Swift 6.3.3 locally and failed on the macos-15 runner's
+    /// 6.1.2. Which later rule relaxes the inference is NOT diagnosed here; only
+    /// the split itself is measured. The repo pins no toolchain, so a green
+    /// local suite is not evidence for this line — treat CI as the authority.
+    ///
+    /// The keyword is right on the merits, not a workaround for the test: this
+    /// takes a dictionary, returns a String, and touches no main-actor state, so
+    /// it has no business holding the main actor. Annotating the tests
+    /// `@MainActor` would have hidden the property rather than fixed it.
+    ///
+    /// - Parameter info: a bundle info dictionary, or `nil` when running
+    ///   outside a bundle.
+    nonisolated static func versionLine(from info: [String: Any]?) -> String {
+        "Version " + AppVersion.display(from: info)
     }
 
     public var body: some View {
@@ -156,6 +205,18 @@ public struct PanelView: View {
             AttentionListView(sessions: model.attention)
 
             Divider()
+
+            // Which build is this. On screen rather than in a log, because the
+            // question is always asked ABOUT a machine the maintainer is not
+            // sitting at: until now the only way to answer it was to diff
+            // `Sources/` between the installed keg's SHA and HEAD.
+            //
+            // The sentence is composed in `versionLine(from:)`, not here, so a
+            // check can read it. `Bundle.main.infoDictionary` is nil under
+            // `swift run`, and that case is asserted rather than avoided.
+            Text(PanelView.versionLine(from: Bundle.main.infoDictionary))
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             Button("Quit coffee-bar") { NSApplication.shared.terminate(nil) }
                 .keyboardShortcut("q")
