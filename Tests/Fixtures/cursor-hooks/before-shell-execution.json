@@ -2,13 +2,14 @@
   "command": "REDACTED",
   "conversation_id": "11111111-2222-3333-4444-555555555555",
   "cursor_version": "2026.01.23-916f423",
-  "generation_id": "0a0a0a0a-1b1b-2c2c-3d3d-4e4e4e4e4e4e",
+  "cwd": "/tmp/claude/fixtures-10a-round2/cursor-ws",
+  "generation_id": "11111111-2222-3333-4444-555555555555",
   "hook_event_name": "beforeShellExecution",
   "model": "composer-2.5",
   "sandbox": false,
   "transcript_path": null,
   "user_email": "user@example.com",
   "workspace_roots": [
-    "/tmp/claude/fixtures-10a-2f450f0/cursor-ws"
+    "/tmp/claude/fixtures-10a-round2/cursor-ws"
   ]
 }

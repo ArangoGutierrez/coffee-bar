@@ -53,9 +53,19 @@ CONTENT_KEYS = {"last_assistant_message", "tool_input", "tool_response",
 # generic UUID rule in scrub_path() rewrites it to the SESSION id, and the
 # fixture then claims turn_id == session_id, which no real payload does. A
 # fixture that invents a shape is the one thing this corpus must never do.
-# `generation_id` is Cursor's per-response identifier and is here for the same
-# reason as `turn_id`: it is a distinct UUID in the real payload, and without an
-# entry it would come out equal to the session id.
+# `generation_id` is deliberately NOT here, and the reason is the mirror image.
+# An earlier revision mapped it, on the assumption that Cursor's per-response id
+# is distinct. Measured instead of assumed, it is not: across two captures,
+# `generation_id == conversation_id == session_id` on 20 of 20 lines, including
+# a conversation with five tool calls in it. Mapping it made the fixtures claim
+# a difference no observed payload has — the same fault as the paragraph above,
+# pointed the other way. Leaving it out lets the generic UUID rule in
+# scrub_path() give all three the SAME fake, which is what was observed.
+#
+# Scope of that measurement, so the next reader does not over-read it: every
+# line came from a headless `cursor-agent --print` run, which is one generation
+# per conversation. Whether an interactive session with several generations
+# breaks the equality is UNVERIFIED. Re-capture before relying on it either way.
 #
 # `user_email` is not an id in the same sense, but it belongs here and not in
 # CONTENT_KEYS. Cursor puts the signed-in account address on EVERY event. The
@@ -67,7 +77,6 @@ ID_MAP = {
     "session_id": "11111111-2222-3333-4444-555555555555",
     "prompt_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
     "turn_id": "99999999-8888-7777-6666-555555555555",
-    "generation_id": "0a0a0a0a-1b1b-2c2c-3d3d-4e4e4e4e4e4e",
     "tool_use_id": "toolu_FIXTUREFIXTUREFIXTURE01",
     "user_email": "user@example.com",
 }
@@ -101,6 +110,21 @@ def scrub(key, value):
             # keep the key set, blank the values: shape is what we test
             return {k: "REDACTED" for k in value}
         if isinstance(value, list):
+            # A list of objects keeps ONE element's key set, values blanked.
+            # Returning a bare [] here loses the nesting this file's docstring
+            # promises to keep, and the loss is not academic: one fixture is
+            # the ONLY evidence a decoder author gets for its event. Cursor's
+            # afterFileEdit.edits is really [{old_string, new_string}], and []
+            # teaches the reader [String].
+            #
+            # One element, not all of them: the count is a property of the
+            # capture, not of the payload shape, and a second element would
+            # only repeat the same key set.
+            if value and isinstance(value[0], dict):
+                return [{k: "REDACTED" for k in value[0]}]
+            # Empty, or a list of scalars: nothing to keep. background_tasks
+            # and attachments are both empty in the captures on record, so
+            # this branch is what holds those two fixtures steady.
             return []
         return "REDACTED"
     if isinstance(value, str):
