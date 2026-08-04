@@ -40,6 +40,25 @@ public struct HoldController: Equatable, Sendable {
     public private(set) var intent: UserIntent
     public private(set) var lastSuppression: HoldSuppression?
 
+    /// The battery floor the last `evaluate` actually gave the broker, AFTER
+    /// bounding.
+    ///
+    /// **Reported, never re-derived, and issue #11 is why.** The floor became a
+    /// user setting, so the stored number and the number a decision uses are no
+    /// longer the same: `PowerInputs.init` bounds and the store does not. A
+    /// panel that named the floor by calling `BatteryFloor.bounded` on the
+    /// setting itself would agree today and could drift tomorrow, because it
+    /// would be a SECOND derivation running beside the real one.
+    ///
+    /// Taken off the `PowerInputs` this type built, which is the bounding site's
+    /// own output. The value the panel prints is therefore the value the
+    /// decision was made on, by construction rather than by agreement.
+    ///
+    /// `BatteryFloor.default` before the first `evaluate`, which is the floor a
+    /// decision would use if one were asked right now — `evaluate` declares the
+    /// same default.
+    public private(set) var floorInForce: Int = BatteryFloor.default
+
     /// How the `.serve` now cancelled ended, and where the control went, for the
     /// suppression recorded in `lastSuppression`. `nil` when that suppression
     /// cancelled no click.
@@ -271,17 +290,24 @@ public struct HoldController: Equatable, Sendable {
                                   batteryPercent: Int?,
                                   sessions: [AgentSession] = [],
                                   holdAwakeWhileBlocked: Bool = false,
-                                  batteryFloorPercent: Int = 20,
+                                  batteryFloorPercent: Int = BatteryFloor.default,
                                   holdDisplayAwake: Bool = false,
                                   assertionIsHeld: Bool = false) -> DesiredPowerState {
-        let state = PowerBroker.decide(PowerInputs(
+        // Bound to a local so the BOUNDED floor can be read back off it. That
+        // read is the whole point: `PowerInputs.init` is the one place a floor
+        // is bounded, so its own output is the only honest answer to "what
+        // floor is the machine being judged against right now".
+        let inputs = PowerInputs(
             sessions: sessions,
             powerSource: powerSource,
             batteryPercent: batteryPercent,
             userIntent: intent,
             holdAwakeWhileBlocked: holdAwakeWhileBlocked,
             batteryFloorPercent: batteryFloorPercent,
-            holdDisplayAwake: holdDisplayAwake))
+            holdDisplayAwake: holdDisplayAwake)
+        floorInForce = inputs.batteryFloorPercent
+
+        let state = PowerBroker.decide(inputs)
 
         // Recorded BEFORE the cancel below, which moves `intent` off `.serve`.
         //

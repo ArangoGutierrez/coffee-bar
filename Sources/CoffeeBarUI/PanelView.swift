@@ -141,6 +141,29 @@ public struct PanelView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
 
+            // The third control, and a third separate question: how much
+            // battery a hold may spend. Issue #11 made the floor a setting
+            // because 20% is a guess about somebody else's day — a user on a
+            // train wants it higher, a user beside a charger wants it lower —
+            // and a safety limit nobody can reach is one they work around by
+            // turning the product off.
+            //
+            // The segments come from `BatteryFloor.choices`, in CoffeeBarCore
+            // beside the permitted range, so an offered value the decision
+            // would bound away cannot be listed here. The labels come from the
+            // model for the reason the two controls above use it: design §5.4
+            // rules out asserting on rendered AppKit text, so a label written
+            // in this file is a label no check reads.
+            Text("Battery floor").font(.headline)
+
+            Picker("Battery floor", selection: $model.batteryFloorPercent) {
+                ForEach(BatteryFloor.choices, id: \.self) { percent in
+                    Text(ServingModel.floorLabel(for: percent)).tag(percent)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
             // What is ACTUALLY held, beside the two controls that asked for it.
             // The user has to be able to see that Auto is holding right now, or
             // is not — the controls say what was asked for and this line says

@@ -19,6 +19,16 @@ public enum SettingsKey {
     /// screen sleep unless the user says otherwise. That is the product's
     /// difference from the blunt tools — a default now, rather than a promise.
     public static let holdDisplayAwake = "holdDisplayAwake"
+
+    /// The charge at or below which coffee-bar stops holding the machine awake
+    /// (issue #11).
+    ///
+    /// Absent by default, and the default is `BatteryFloor.default`. Absent is
+    /// NOT zero here, and this is the key the `Int?` on `integer(forKey:)`
+    /// exists for: a missing key read as 0 is a floor that fires only once the
+    /// machine is already dead. `theBatteryFloorKeyStringNeverChanges` holds the
+    /// string itself.
+    public static let batteryFloorPercent = "batteryFloorPercent"
 }
 
 /// Where a user preference is kept.

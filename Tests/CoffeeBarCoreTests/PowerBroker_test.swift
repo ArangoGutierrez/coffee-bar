@@ -377,6 +377,74 @@ private func inputs(sessions: [AgentSession] = [],
     ).idleSleepAssertion == true, "Auto stopped holding above the floor")
 }
 
+// MARK: - The floor is bounded before it decides (issue #11)
+
+@Test func aFloorBelowTheMinimumIsRaisedBeforeTheDecisionUsesIt() {
+    // Named bug this catches: a user-supplied floor of 0 reaches `decide`
+    // untouched, and `percent <= 0` is true only once the machine is already
+    // dead. Issue #11 makes the floor settable, so this stops being an author
+    // error and becomes whatever a `defaults write` puts in the preferences.
+    //
+    // The DISCRIMINATING pair. A floor of 0 that reaches `decide` intact holds
+    // at 1%; a floor raised to the 5 minimum refuses there. The control below
+    // is what stops a clamp that simply refuses everything from passing.
+    let atOne = PowerBroker.decide(
+        inputs(source: .battery, battery: 1, intent: .serve, floor: 0))
+    #expect(atOne.idleSleepAssertion == false,
+            "a 0% floor held at 1% battery; the floor reached the decision unbounded")
+
+    // The floor the user is TOLD about, which is the one the panel renders in
+    // `suppressionAdvisory`. A decision that bounded the comparison but
+    // reported the raw value would tell the user "does not hold at or below 0%"
+    // while refusing at 1%.
+    #expect(atOne.suppression == .batteryFloor(percent: 1, floor: 5))
+
+    // The control, one point above the bounded floor.
+    #expect(PowerBroker.decide(
+        inputs(source: .battery, battery: 6, intent: .serve, floor: 0)
+    ).idleSleepAssertion == true, "the raised floor refused above its own minimum")
+}
+
+@Test func aFloorAboveOneHundredIsCappedBeforeTheDecisionUsesIt() {
+    // Named bug this catches: a floor of 1000 refuses every hold at every
+    // charge, and the sentence the panel prints reads "coffee-bar does not hold
+    // at or below 1000%" — a percentage that cannot exist. The refusal at 100%
+    // is correct; the number quoted for it is not.
+    let out = PowerBroker.decide(
+        inputs(source: .battery, battery: 100, intent: .serve, floor: 1000))
+    #expect(out.idleSleepAssertion == false)
+    #expect(out.suppression == .batteryFloor(percent: 100, floor: 100))
+}
+
+@Test func bothFloorPathsBoundTheSameValueTheSameWay() {
+    // The invariant issue #11 turns on. There are TWO types in this module that
+    // take a floor from outside — `PowerInputs` on the broker path and
+    // `WatchdogPolicy` on the revert path — and before issue #11 only the
+    // second one bounded it.
+    //
+    // Named bug this catches: a SECOND bounding rule. Two clamps with their own
+    // literals drift the moment one of them is edited, and the product would
+    // then refuse a hold at a charge the watchdog is content to keep. Only a
+    // shared rule keeps this green for every value below.
+    //
+    // The arguments straddle both bounds and both sides of each.
+    for raw in [-100, -1, 0, 4, 5, 6, 20, 99, 100, 101, 1000] {
+        let broker = PowerInputs(powerSource: .battery, batteryPercent: 50,
+                                 batteryFloorPercent: raw).batteryFloorPercent
+        let watchdog = WatchdogPolicy(heartbeatTimeout: 45,
+                                      batteryFloorPercent: raw).batteryFloorPercent
+        #expect(broker == watchdog,
+                "floor \(raw): the broker path bounds it to \(broker), the watchdog path to \(watchdog)")
+    }
+
+    // Anti-vacuity. The loop above is satisfied by two paths that both do
+    // NOTHING, so the bounds themselves are pinned against literals here.
+    #expect(PowerInputs(powerSource: .battery, batteryPercent: 50,
+                        batteryFloorPercent: 0).batteryFloorPercent == 5)
+    #expect(PowerInputs(powerSource: .battery, batteryPercent: 50,
+                        batteryFloorPercent: 1000).batteryFloorPercent == 100)
+}
+
 // MARK: - The declared defaults (§4.2)
 
 @Test func powerInputsAppliesItsDocumentedDefaults() {
