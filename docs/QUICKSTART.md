@@ -158,4 +158,5 @@ it starts, look for the cup at the right end of the menu bar, near the clock.
 Click the cup to open the panel. If your menu bar is full, macOS drops status
 items silently and the cup will not appear.
 
-The panel holds a Serving switch, a battery line, and Quit.
+The panel holds a Serving control, a Display control, a battery line, the
+Waiting on you list, and Quit.
