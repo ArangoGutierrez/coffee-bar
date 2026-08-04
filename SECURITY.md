@@ -174,11 +174,20 @@ four of these must hold, and they are recorded in `docs/ROADMAP.md` under
    forensics, never authentication. In this threat model it is
    attacker-controlled data.
 
-The current `FileJournalStore` writes 0755 directories and a 0644 journal, and
-nothing pins those modes yet. That is harmless today, because only the
-unprivileged probe reads them. It stops being harmless the day a root process
-does. If you are reading this after M5 shipped and item 1 or item 3 is not true
-of the code, that is a vulnerability. Report it.
+`FileJournalStore` creates every directory level it makes with mode 0700 and the
+journal with mode 0600. The atomic replace behind each save carries the new
+file's mode rather than the destination's, so a journal an earlier build left
+0644 is repaired by the next write instead of keeping that mode forever.
+`Tests/CoffeeBarPowerTests/JournalStore_test.swift` asserts all of this with
+`stat(2)`, after the create path and after the replace path.
+
+One gap stays open on purpose. The store pins the mode of a directory it
+*creates*; it does not chmod a directory that already exists. An unprivileged
+process that repairs a path another user may control is not a fix, and item 1
+puts that check on the reader instead. So a journal directory an earlier build
+left 0755 keeps that mode, and the M5 helper must refuse it rather than assume
+the writer corrected it. If you are reading this after M5 shipped and item 1 or
+item 3 is not true of the code, that is a vulnerability. Report it.
 
 ## Things that are not vulnerabilities
 

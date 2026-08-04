@@ -31,6 +31,18 @@ public struct FileJournalStore: JournalStoring {
 
     private let url: URL
 
+    // Owner-only, per SECURITY.md: 0700 for the directory and 0600 for the
+    // journal. Neither is left to whichever process created the path first,
+    // which without these is the umask — 0755 and 0644 on a stock account.
+    //
+    // Two reasons the journal is not world-readable. It carries the arming
+    // provenance (pid, uid, binary path of whatever disabled sleep), which is
+    // forensic detail no other user needs. And under M5 a root helper reads
+    // this file as an instruction, so it must refuse anything group- or
+    // other-writable; a mode nobody pins is a mode it cannot trust.
+    private static let directoryMode = 0o700
+    private static let fileMode = 0o600
+
     public init(url: URL = FileJournalStore.systemURL) {
         self.url = url
     }
@@ -84,12 +96,15 @@ public struct FileJournalStore: JournalStoring {
     public func write(_ record: JournalRecord) throws {
         let dir = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(
-            at: dir, withIntermediateDirectories: true)
+            at: dir, withIntermediateDirectories: true,
+            attributes: [.posixPermissions: Self.directoryMode])
 
         let data = try Self.makeEncoder().encode(record)
         let tmp = dir.appendingPathComponent(".probe-journal.\(UUID().uuidString).tmp")
 
-        guard FileManager.default.createFile(atPath: tmp.path, contents: nil) else {
+        guard FileManager.default.createFile(
+            atPath: tmp.path, contents: nil,
+            attributes: [.posixPermissions: Self.fileMode]) else {
             throw JournalError.writeFailed("could not create \(tmp.path)")
         }
         let handle = try FileHandle(forWritingTo: tmp)
@@ -105,7 +120,24 @@ public struct FileJournalStore: JournalStoring {
             throw error
         }
 
-        _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)
+        // `.usingNewMetadataOnly` is load-bearing, not tidiness. By default a
+        // replace carries the DESTINATION's metadata onto the result, so a
+        // journal an earlier build left 0644 keeps that mode through every
+        // later save and upgrading never repairs it. Measured on macOS 26.5.2
+        // (25F84): without this option a 0644 destination reads 0644 after the
+        // replace, with it 0600.
+        //
+        // Chmod'ing after the rename would leave the journal world-readable for
+        // the window in between — and a crash inside that window would leave it
+        // 0644 permanently, which is worse than the window. The option carries
+        // the temp file's mode across the rename itself, so there is no window.
+        //
+        // It also discards the destination's extended attributes, verified with
+        // a marker xattr that does not survive the replace. That is acceptable
+        // here and is part of the point: this app owns the journal completely,
+        // and an xattr on it came from somewhere else.
+        _ = try FileManager.default.replaceItemAt(
+            url, withItemAt: tmp, options: .usingNewMetadataOnly)
 
         // The rename above is a directory metadata change. Syncing the file's
         // contents does not make its NAME durable — after a power failure the

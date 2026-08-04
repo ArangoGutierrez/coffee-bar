@@ -12,6 +12,19 @@ private func tempURL() -> URL {
         .appendingPathComponent("probe-journal.json")
 }
 
+/// The permission bits the FILESYSTEM reports for `path`, or `nil` when the
+/// path cannot be stat'd.
+///
+/// Read through `stat(2)` rather than through `FileManager.attributesOfItem`,
+/// so the reading cannot agree with a wrong implementation by going through the
+/// same API that set the mode. `st_mode` also carries the file type, so the
+/// permission bits are masked out explicitly.
+private func posixMode(of path: String) -> mode_t? {
+    var info = stat()
+    guard stat(path, &info) == 0 else { return nil }
+    return info.st_mode & (S_IRWXU | S_IRWXG | S_IRWXO)
+}
+
 private let prov = ArmProvenance(pid: 7, binaryPath: "/x", uid: 501)
 
 private func sample(prior: Bool = false) -> JournalRecord {
@@ -45,6 +58,94 @@ private func sample(prior: Bool = false) -> JournalRecord {
     try store.write(sample())
     #expect(FileManager.default.fileExists(atPath: url.path))
     #expect(try store.load() == sample())
+}
+
+// MARK: - Modes
+//
+// SECURITY.md records the target: the directory is 0700 and the journal is
+// 0600, and neither is left to whichever process created the path first. The
+// journal is an instruction to a root process under M5, so a mode the helper
+// cannot trust is a mode that stops it acting.
+//
+// Every assertion below reads the mode BACK from the filesystem. Asserting the
+// attributes dictionary the store passed in would only restate the request.
+
+@Test func aFirstWriteCreatesThePrivateDirectoryAndFileModes() throws {
+    // The create path. With no `attributes:` the modes come from the process
+    // umask — 022 on a stock account, so 0755 and 0644, which is exactly what
+    // SECURITY.md reported. A world-readable journal publishes the arming
+    // provenance: pid, uid and binary path of whatever disabled sleep.
+    let url = tempURL()
+    try FileJournalStore(url: url).write(sample())
+
+    #expect(posixMode(of: url.deletingLastPathComponent().path) == 0o700)
+    #expect(posixMode(of: url.path) == 0o600)
+}
+
+@Test func everyLaterSaveKeepsThePrivateModes() throws {
+    // The REPLACE path: on the second write the destination already exists, so
+    // `replaceItemAt` runs against a live file rather than an absent one.
+    //
+    // Be precise about what this catches, because the obvious claim is wrong.
+    // It does NOT catch the destination-metadata defect: with the store's own
+    // 0600 file at the destination, dropping `.usingNewMetadataOnly` leaves
+    // this test GREEN — measured. That defect belongs to
+    // `aWriteRepairsAJournalAnEarlierBuildLeftWorldReadable`, which is the only
+    // test that goes red for it.
+    //
+    // What this one catches is a save that stops pinning the mode at all, and
+    // it catches it on the second write rather than the first: removing either
+    // `attributes:` argument turns it red. A future replace that reset the mode
+    // to the umask would land here too, and the create-path test would not see
+    // it.
+    let url = tempURL()
+    let store = FileJournalStore(url: url)
+    try store.write(sample(prior: false))
+    try store.write(sample(prior: true))
+
+    #expect(posixMode(of: url.deletingLastPathComponent().path) == 0o700)
+    #expect(posixMode(of: url.path) == 0o600)
+    // Pins the premise: without this the assertions above could be reading the
+    // FIRST write's file, and the replace path would go unexercised.
+    #expect(try store.load()?.priorValue == true)
+}
+
+@Test func aWriteRepairsAJournalAnEarlierBuildLeftWorldReadable() throws {
+    // Every journal written before the modes were pinned is 0644 on disk. If
+    // the replace preserves the DESTINATION's metadata, that mode outlives the
+    // upgrade and every later save, and the file stays world-readable forever.
+    // Upgrading would silently fix nothing.
+    let url = tempURL()
+    let dir = url.deletingLastPathComponent()
+    try FileManager.default.createDirectory(
+        at: dir, withIntermediateDirectories: true,
+        attributes: [.posixPermissions: 0o700])
+    try Data("{}".utf8).write(to: url)
+    try FileManager.default.setAttributes(
+        [.posixPermissions: 0o644], ofItemAtPath: url.path)
+    // Pins the premise: if the legacy mode were not really 0644, the assertion
+    // below would pass without the repair ever being exercised.
+    try #require(posixMode(of: url.path) == 0o644)
+
+    try FileJournalStore(url: url).write(sample())
+
+    #expect(posixMode(of: url.path) == 0o600)
+}
+
+@Test func everyDirectoryLevelTheStoreCreatesIsPrivate() throws {
+    // SECURITY.md item 1: the M5 helper verifies EVERY component of the journal
+    // path, not only the final file. The real path is
+    // …/coffee-bar/state/probe-journal.json, so a first arm can create TWO
+    // levels — and a 0700 leaf inside a 0755 parent still fails that check,
+    // because anyone who can write the parent can swap the leaf.
+    let outer = tempURL().deletingLastPathComponent()
+    let url = outer.appendingPathComponent("state")
+        .appendingPathComponent("probe-journal.json")
+    try FileJournalStore(url: url).write(sample())
+
+    #expect(posixMode(of: outer.path) == 0o700)
+    #expect(posixMode(of: url.deletingLastPathComponent().path) == 0o700)
+    #expect(posixMode(of: url.path) == 0o600)
 }
 
 // Root bypasses the permission denial this test depends on, which would leave
