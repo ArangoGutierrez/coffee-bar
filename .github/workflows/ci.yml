@@ -28,9 +28,30 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # TAGS ARE REQUIRED, and the default checkout does not fetch them.
+          #
+          # `SiteClaims_test.swift` asserts the version shown on every page, and
+          # the version inside the DMG download URL, against `git tag`. With the
+          # default `fetch-depth: 1` the runner has zero tags, so that guard
+          # reported "cannot read the newest tag; this guard cannot run and will
+          # not pretend it passed" and failed the suite — correctly. It is written
+          # to fail loudly rather than skip, because a guard that silently skips
+          # is worse than no guard.
+          #
+          # `fetch-tags` rather than `fetch-depth: 0`: the guard needs the tag
+          # NAMES, not the history, so this keeps the checkout shallow.
+          fetch-tags: true
 
       - name: Show toolchain
         run: swift --version
+
+      # Fail here, with a clear message, rather than inside a test. If the tags
+      # ever stop arriving, the version guard's failure text points at the page
+      # rather than at the checkout, which sends the reader to the wrong file.
+      - name: Confirm the tags arrived
+        run: |
+          git tag --sort=-v:refname | head -3
+          test -n "$(git tag)" || { echo "no tags in the checkout; SiteClaims version guards cannot run"; exit 1; }
 
       - name: Build (debug)
         run: swift build
