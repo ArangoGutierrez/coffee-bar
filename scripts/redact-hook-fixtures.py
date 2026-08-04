@@ -54,18 +54,26 @@ CONTENT_KEYS = {"last_assistant_message", "tool_input", "tool_response",
 # fixture then claims turn_id == session_id, which no real payload does. A
 # fixture that invents a shape is the one thing this corpus must never do.
 # `generation_id` is deliberately NOT here, and the reason is the mirror image.
-# An earlier revision mapped it, on the assumption that Cursor's per-response id
-# is distinct. Measured instead of assumed, it is not: across two captures,
-# `generation_id == conversation_id == session_id` on 20 of 20 lines, including
-# a conversation with five tool calls in it. Mapping it made the fixtures claim
-# a difference no observed payload has — the same fault as the paragraph above,
-# pointed the other way. Leaving it out lets the generic UUID rule in
-# scrub_path() give all three the SAME fake, which is what was observed.
+# An earlier revision mapped it, on the ASSUMPTION that a per-response id must
+# be per-response. Measured instead, it is not:
 #
-# Scope of that measurement, so the next reader does not over-read it: every
-# line came from a headless `cursor-agent --print` run, which is one generation
-# per conversation. Whether an interactive session with several generations
-# breaks the equality is UNVERIFIED. Re-capture before relying on it either way.
+#   33 of 33 captured lines have generation_id == conversation_id, and every
+#   line that carries session_id has all three equal.
+#
+# The line that settles it is not the count. A one-shot `cursor-agent --print`
+# run is one generation, so equality there proves nothing about the name. So:
+# `create-chat` for a fixed chat id, then TWO `--resume` turns against it, each
+# issuing its own command and its own reply. Two real generations, one
+# conversation, and the result was ONE distinct generation_id over 8 lines. The
+# conversation_id also came back equal to the chat id `create-chat` printed.
+# Whatever the name suggests, this field tracks the conversation.
+#
+# Mapping it therefore made the fixtures claim a difference no observed payload
+# has — the same fault as the paragraph above, pointed the other way. Leaving it
+# out lets the generic UUID rule in scrub_path() give all three the same fake.
+#
+# Still unmeasured, so do not read this as universal: every line came through
+# the CLI. The interactive editor is a different client and was not driven.
 #
 # `user_email` is not an id in the same sense, but it belongs here and not in
 # CONTENT_KEYS. Cursor puts the signed-in account address on EVERY event. The
