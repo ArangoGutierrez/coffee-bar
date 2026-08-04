@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<!--
+  Copyright 2026 Carlos Eduardo Arango Gutierrez
+  SPDX-License-Identifier: Apache-2.0
+
+  HONESTY CONSTRAINTS — binding. Carried forward from the single-page site and
+  docs/ROADMAP.md. Read before editing a single claim on this page.
+
+  1. No novelty claim in usage monitoring. CodexBar already occupies that space.
+  2. Token accounting is M7 = v0.3. It does not exist. Do not imply it does.
+  3. Do not advertise the "coffee-bar moved your control" panel disclosure as
+     complete. The 2026-07-30 audit proved it is durable only when no agent is
+     running, which is the opposite of when it matters.
+  4. Every claim must be true of the SHIPPED build. If a claim stops being true,
+     the claim is the thing to fix.
+  5. The timeline is an ILLUSTRATION OF BEHAVIOUR, never a measurement. No
+     battery percentage, duration or saving may appear until M6's measurement
+     harness has produced one a user can reproduce.
+  6. The binary is arm64 ONLY. Never write "Intel" or "universal".
+  7. Homebrew currently installs 0.1.0; the DMG is 0.1.1. Do not blur that.
+
+  BRAND — assets/art/README.md is the source of truth.
+  - TWO colours, two jobs. --state (#A2571E / #B8682A dark) is the liquid and
+    means "held awake". --action (#FF9500 / #FF9F0A dark) is Apple systemOrange
+    and means "interactive". Never swap their jobs. Never add a third.
+  - Neither colour carries body text. Measured: --action on the light page
+    background is 1.93:1 and genuinely fails; --state is 4.71 light and 4.57
+    dark and would pass. Both stay out of body text anyway, so the rule is one
+    line and not four exceptions. Ink ON --action is the safe inverse: 8.51
+    light, 9.10 dark.
+  - Menu-bar glyphs stay monochrome. Never ship a coloured variant.
+  - The wordmark is always lowercase and always hyphenated. It is a command name.
+  - No external requests: no web fonts, no analytics, no CDN.
+  - Asset paths are RELATIVE. This is a project Pages site served from
+    /coffee-bar/, so a leading slash resolves to the user root and 404s.
+  - No Apple logo. Apple's guidelines forbid it for third-party promotion.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install coffee-bar</title>
+<meta name="description" content="Download the signed disk image, or build from source with Homebrew, then wire the five Claude Code hooks that coffee-bar learns from.">
+<link rel="canonical" href="https://arangogutierrez.github.io/coffee-bar/install.html">
+<meta property="og:title" content="Install coffee-bar">
+<meta property="og:description" content="Download the signed disk image, or build from source with Homebrew, then wire the five Claude Code hooks that coffee-bar learns from.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://arangogutierrez.github.io/coffee-bar/install.html">
+<meta property="og:image" content="https://arangogutierrez.github.io/coffee-bar/social-preview-1280x640.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon-32.png" sizes="32x32" type="image/png">
+<link rel="icon" href="favicon-16.png" sizes="16x16" type="image/png">
+<link rel="apple-touch-icon" href="apple-touch-icon-180.png">
+<link rel="manifest" href="site.webmanifest">
+<meta name="theme-color" content="#F2F0EB" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#101013" media="(prefers-color-scheme: dark)">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+<div class="shell">
+<nav class="sidebar" aria-label="Site">
+  <a class="sidebar-mark" href="index.html">coffee-bar</a>
+  <ul>
+    <li><a href="index.html">Home</a></li>
+    <li><a href="install.html" aria-current="page">Install</a></li>
+    <li><a href="docs.html">Docs</a></li>
+    <li><a href="changelog.html">Changelog</a></li>
+  </ul>
+  <p class="sidebar-version"><a href="changelog.html">v0.1.1</a></p>
+</nav>
+<div class="wrap">
+<!-- page content starts here -->
+<!--
+  PAGE NOTE — kept OUT of the shared comment above, which must stay byte
+  identical across all four pages.
+
+  The hook block below is a VERBATIM copy of the first fenced json block in
+  docs/QUICKSTART.md. That file is the original. Re-copy it rather than editing
+  it here, and keep the sentence after it counting the block that is actually
+  on this page: two events take a matcher, three take none.
+-->
+
+<h1>Install</h1>
+<p>Two routes to the app, and one step that both routes need. Take the disk
+image unless you have a reason to build from source.</p>
+
+<h2 class="eyebrow">Get the app</h2>
+
+<h3>Download the signed disk image</h3>
+<p>This is the route to prefer. The disk image is signed with a Developer ID,
+notarised by Apple, and stapled, so macOS opens it without a Gatekeeper
+warning.</p>
+
+<a class="btn-download" href="https://github.com/ArangoGutierrez/coffee-bar/releases/download/v0.1.1/coffee-bar-0.1.1.dmg">Download for macOS</a>
+<p class="dl-meta">v0.1.1 · Apple silicon · 292&nbsp;KB · macOS 14 or later</p>
+
+<p>Verify the download before you open it. coffee-bar asks you to trust an app
+that overrides your Mac's own sleep policy, so it gives you the means to test
+that trust first.</p>
+
+<pre>shasum -a 256 coffee-bar-0.1.1.dmg
+# afc1b15f9bde31aad09de80f23ae97b05f6053322b68b89bab36bcfbc641d2e6
+
+spctl --assess --type open --context context:primary-signature -vv coffee-bar-0.1.1.dmg
+# accepted
+# source=Notarized Developer ID</pre>
+
+<p>The notarisation ticket is stapled to the disk image, so the second command
+answers from the ticket in the file. It needs no network connection.</p>
+
+<h3>Or build from source with Homebrew</h3>
+
+<pre>brew tap ArangoGutierrez/coffee-bar
+brew install coffee-bar</pre>
+
+<p><strong>Homebrew installs 0.1.0. The disk image is 0.1.1.</strong> The tap
+formula pins the <code>v0.1.0</code> tag and builds the app from that source,
+so the two routes do not give you the same version string. The version the
+panel shows follows the build you installed.</p>
+
+<p>0.1.1 is the newer of the two, and it changed no code: the difference
+between the two tags over <code>Sources/</code>, <code>Package.swift</code> and
+<code>Tests/</code> is empty. 0.1.1 exists because it is the first artifact
+that is signed, notarised and stapled. The two builds therefore behave the
+same, and only the version string differs.</p>
+
+<p>The formula lives in a separate tap repository,
+<a href="https://github.com/ArangoGutierrez/homebrew-coffee-bar"><code>ArangoGutierrez/homebrew-coffee-bar</code></a>,
+because <code>brew tap user/repo</code> resolves to
+<code>github.com/user/homebrew-repo</code>. Homebrew formulae do not write to
+<code>/Applications</code>, so the app lands in the Homebrew prefix and the
+install prints the one command that links it there.</p>
+
+<h2 class="eyebrow">Wire the five hooks</h2>
+
+<p>Both routes need this step. coffee-bar learns what your agent sessions are
+doing from Claude Code hooks and from nothing else, so until these entries
+exist the app runs and no session event ever reaches it. coffee-bar never
+writes your settings file for you.</p>
+
+<p>Add these to <code>~/.claude/settings.json</code>:</p>
+
+<pre class="hooks">{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+          }
+        ]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+          }
+        ]
+      }
+    ]
+  }
+}</pre>
+
+<p>The two tool events take a matcher; the other three take none.</p>
+
+<p><strong>If your settings file already has a <code>hooks</code> key, merge
+these entries into it.</strong> Pasting the block whole replaces whatever
+hooks you already run.</p>
+
+<h2 class="eyebrow">First run</h2>
+
+<p>Restart Claude Code, so that the new entries load. Start coffee-bar before
+the next session: the app creates the socket, and a hook that finds no socket
+makes Claude Code report an error on every event.</p>
+
+<p>Then open the panel and read its advisory lines. The panel names any hook it
+cannot find in <code>~/.claude/settings.json</code>, and it says separately when
+this copy of coffee-bar is not listening on its socket. Those are two different
+questions, so the panel answers them on two different lines.</p>
+
+<p>coffee-bar has no Dock icon and opens no window. Look for the cup at the
+right end of the menu bar, near the clock, and click it to open the panel. If
+your menu bar is full, macOS drops status items silently and the cup does not
+appear.</p>
+
+<div class="note">
+<p>Read <a href="docs.html">the Docs page</a> next. It defines what each panel
+control does, what coffee-bar asks macOS for, and when it refuses to hold.</p>
+</div>
+
+<h2 class="eyebrow">Requirements</h2>
+<ul class="does">
+<li>macOS 14 or later.</li>
+<li>A Mac with Apple silicon. The binary is <code>arm64</code>.</li>
+<li>Claude Code, with the five hooks above.</li>
+</ul>
+
+<footer>
+<p>Apache-2.0 · <a href="https://github.com/ArangoGutierrez/coffee-bar">Source on GitHub</a><br>
+Built by <a href="https://github.com/ArangoGutierrez">Carlos Eduardo Arango Gutierrez</a>.</p>
+<p class="tm">Apple, macOS and Apple silicon are trademarks of Apple Inc., registered in the U.S. and other countries. coffee-bar is not affiliated with, endorsed by, or sponsored by Apple Inc. or NVIDIA Corporation.</p>
+</footer>
+
+</div><!-- /.wrap -->
+</div><!-- /.shell -->
+</body>
+</html>
