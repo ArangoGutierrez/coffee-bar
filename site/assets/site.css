@@ -168,6 +168,11 @@ h1 {
   margin: 0 0 3rem; max-width: 34ch; text-wrap: balance;
 }
 .tag em { font-style: normal; border-bottom: 2px solid var(--fg); }
+/* On the hero, .hero's own margin supplies the gap under the wordmark. A page
+   that puts the tagline straight after a bare <h1> had no gap at all —
+   measured 0.0px at 375, 768 and 1200. This only fires on that second shape,
+   so the hero is untouched. */
+h1 + .tag { margin-top: .6rem; }
 
 .eyebrow {
   display: flex; align-items: center; gap: .6rem;
@@ -203,7 +208,9 @@ strong { font-weight: 650; }
    action: it sits tight to the button and must not compete with it. --dim on
    --bg measures 6.26 light and 7.26 dark, so it stays legible at this size. */
 .dl-meta {
-  margin: .55rem 0 0;
+  /* Tight to the button above, but keep the normal paragraph gap below: a
+     zero bottom margin collided with the next paragraph at every width. */
+  margin: .55rem 0 1.1rem;
   font-size: .84rem; line-height: 1.5; color: var(--dim);
 }
 
