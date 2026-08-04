@@ -43,7 +43,10 @@ Concretely:
 - Display sleeps normally while the system stays awake — the differentiator, and a
   DEFAULT rather than a promise since issue #12. A Display control in the panel opts
   in, and the setting survives a restart (§6.1)
-- Attention queue for **Claude Code** sessions. Codex and Cursor arrive in v0.2
+- Attention queue for **Claude Code** and **Codex** sessions. Cursor sends no
+  recorded event that says the human is now the bottleneck, so a Cursor session
+  stays `working` until it ends. Its `stop` hook has no captured payload, and
+  this project writes no transition against an event it has never recorded
 - Releases the assertion when every agent is blocked on the human (§5.1, `holdAwakeWhileBlocked` default false)
 - Installs via Homebrew; CI green; Apache-2.0 clean; no network egress
 
