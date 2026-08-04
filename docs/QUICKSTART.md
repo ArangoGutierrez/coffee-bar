@@ -2,9 +2,14 @@
 
 Three steps: install it, wire the hooks, check it is listening.
 
-coffee-bar learns what your agent sessions are doing from Claude Code hooks and
-from nothing else. It never writes your settings file for you. Until you add
-them, the app runs but no session event reaches it.
+coffee-bar learns what your agent sessions are doing from agent hooks and from
+nothing else — it never polls, and it never inspects a running process. It never
+writes your settings file for you. Until you add them, the app runs but no
+session event reaches it.
+
+This page wires Claude Code, which is the agent v0.1 supports. Codex and Cursor
+have adapters in the code and no documented wiring yet; they arrive with the
+`coffeebar-hook` shim in v0.2.
 
 ## 1. Install
 

@@ -72,7 +72,7 @@ public enum SessionHub {
         guard let newState = state(of: event.hookEventName, from: tool) else {
             return sessions
         }
-        let text = message(from: event, tool: tool)
+        let text = message(from: event)
 
         // Matched on (tool, sessionID) and never on position: two tools may use
         // the same session id and must not merge. Codex and Claude Code both use
@@ -221,13 +221,15 @@ public enum SessionHub {
     /// human is now the bottleneck, and on `SessionEnd` it is a terminator code,
     /// recorded as the bare word "other". Rendering the second would overwrite
     /// the first exactly when the user looks to see what happened.
-    /// No Cursor event reaches this with text. Cursor's only `reason` sits on
-    /// `sessionEnd`, where it is a terminator code, and `CursorHookEvent` does
-    /// not decode it at all — so a Cursor session's `lastMessage` stays nil by
-    /// construction rather than by a check here.
-    private static func message(from event: HookEvent, tool: AgentTool) -> String? {
+    /// A Cursor event can never reach this with text, and no check here is
+    /// needed to make that true. Cursor's event names do not resolve to
+    /// `HookEventKind` at all, and `CursorHookEvent` decodes no `reason` — its
+    /// only one sits on `sessionEnd`, where it is a terminator code. So a Cursor
+    /// session's `lastMessage` stays nil by construction. A `tool != .cursor`
+    /// guard was written here first and removed: no test could turn it red,
+    /// because no input can reach it.
+    private static func message(from event: HookEvent) -> String? {
         guard HookEventKind(rawValue: event.hookEventName) == .permissionDenied,
-              tool != .cursor,
               let reason = event.reason
         else { return nil }
         return capped(reason)
