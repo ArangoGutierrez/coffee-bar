@@ -1,0 +1,7 @@
+{
+  "cwd": "/private/tmp/claude/fixtures-10a-2f450f0/codex-ws",
+  "hook_event_name": "SessionEnd",
+  "reason": "REDACTED",
+  "session_id": "11111111-2222-3333-4444-555555555555",
+  "transcript_path": "/Users/USER/.codex/sessions/2026/08/04/rollout-2026-08-04T18-06-39-11111111-2222-3333-4444-555555555555.jsonl"
+}

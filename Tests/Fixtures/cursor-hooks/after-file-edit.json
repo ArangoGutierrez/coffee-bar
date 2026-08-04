@@ -1,0 +1,19 @@
+{
+  "conversation_id": "11111111-2222-3333-4444-555555555555",
+  "cursor_version": "2026.01.23-916f423",
+  "edits": [
+    {
+      "new_string": "REDACTED",
+      "old_string": "REDACTED"
+    }
+  ],
+  "file_path": "/tmp/claude/fixtures-10a-round2/cursor-ws/NOTES.txt",
+  "generation_id": "11111111-2222-3333-4444-555555555555",
+  "hook_event_name": "afterFileEdit",
+  "model": "composer-2.5",
+  "transcript_path": null,
+  "user_email": "user@example.com",
+  "workspace_roots": [
+    "/tmp/claude/fixtures-10a-round2/cursor-ws"
+  ]
+}

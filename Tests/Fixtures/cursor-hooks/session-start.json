@@ -1,0 +1,14 @@
+{
+  "conversation_id": "11111111-2222-3333-4444-555555555555",
+  "cursor_version": "2026.01.23-916f423",
+  "generation_id": "11111111-2222-3333-4444-555555555555",
+  "hook_event_name": "sessionStart",
+  "is_background_agent": false,
+  "model": "composer-2.5",
+  "session_id": "11111111-2222-3333-4444-555555555555",
+  "transcript_path": null,
+  "user_email": "user@example.com",
+  "workspace_roots": [
+    "/tmp/claude/fixtures-10a-round2/cursor-ws"
+  ]
+}
