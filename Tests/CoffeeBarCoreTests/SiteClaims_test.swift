@@ -123,17 +123,24 @@ private func workingSession() -> AgentSession {
 /// `atOrBelowFloor` is tested at EXACTLY the floor, not below it. `decide`
 /// suppresses at `percent <= floor`; a row tested at 5% would still pass if that
 /// comparison were `<`, and the boundary is the part a reader gets wrong.
-@Test func everyPublishedPolicyRowIsWhatPowerBrokerDecides() throws {
-    let page = try surfaceText("site/index.html")
-
+/// The rows of `#policy-table`, the JSON the bench reads.
+///
+/// A throwing helper rather than a check, so both the policy comparison and the
+/// visible-table comparison read the one source. Its own anti-vacuity assertions
+/// live in `everyPublishedPolicyRowIsWhatPowerBrokerDecides`.
+private func publishedPolicyRows(_ page: String) throws -> [PolicyRow] {
     let tables = try matches(
         "<script type=\"application/json\" id=\"policy-table\">([\\s\\S]*?)</script>",
         in: page)
-    #expect(tables.count == 1,
-            "site/index.html has \(tables.count) #policy-table blocks; this guard needs exactly one")
-    guard let raw = tables.first?[1] else { return }
+    guard tables.count == 1, let raw = tables.first?[1] else {
+        throw BadPattern(pattern: "site/index.html has \(tables.count) #policy-table blocks; this guard needs exactly one")
+    }
+    return try JSONDecoder().decode([PolicyRow].self, from: Data(raw.utf8))
+}
 
-    let rows = try JSONDecoder().decode([PolicyRow].self, from: Data(raw.utf8))
+@Test func everyPublishedPolicyRowIsWhatPowerBrokerDecides() throws {
+    let page = try surfaceText("site/index.html")
+    let rows = try publishedPolicyRows(page)
 
     // Anti-vacuity, and the reason it is not optional: a typo that yields `[]`
     // parses cleanly, the loop below runs zero times, and the guard reports
@@ -180,6 +187,103 @@ private func workingSession() -> AgentSession {
     }
 }
 
+/// The seven column headings of the visible table, in order.
+///
+/// Asserted as literals because the row reading below is POSITIONAL. Reordering
+/// two columns would otherwise silently change what every cell means, and the
+/// comparison would go on passing against a table that now says something else.
+private let visibleTableHeadings = [
+    "Serving", "Display", "On battery at or below 20%", "An agent is working",
+    "Holds the system awake", "Holds the display awake",
+    "Held back by the battery floor",
+]
+
+private let intentByLabel = ["Off": "stop", "Auto": "auto", "On": "serve"]
+private let displayOptInByLabel = ["Sleeps": false, "Stays on": true]
+private let boolByLabel = ["No": false, "Yes": true]
+
+/// The table a reader without JavaScript sees says what the bench says.
+///
+/// `bench.js` promises in its own header that "the visitor reads the same 24
+/// rows as a real HTML table". Nothing enforced that: the reviewer flipped one
+/// `<td>` in the visible table, left `#policy-table` untouched, and the suite
+/// stayed green at 495 with the bench's own tests at 23/23.
+///
+/// A wrong cell there is a false claim aimed at the one reader who cannot check
+/// it against anything else — no JavaScript means no bench to cross-read. It is
+/// also the copy that survives in a text browser, in Reader mode, and in a
+/// printout.
+///
+/// Compared against `#policy-table` rather than against `PowerBroker` directly.
+/// `everyPublishedPolicyRowIsWhatPowerBrokerDecides` already pins the JSON to
+/// the product, so pinning the table to the JSON makes the chain complete while
+/// keeping each link's failure message about one thing.
+@Test func theVisibleTableSaysWhatTheBenchTableSays() throws {
+    let page = try surfaceText("site/index.html")
+
+    // Scoped to the bench's own `<details>`. The page carries a second table,
+    // and a bare `<table>` selector would read whichever came first.
+    let blocks = try matches("<details class=\"bench-table\">([\\s\\S]*?)</details>", in: page)
+    #expect(blocks.count == 1,
+            "site/index.html has \(blocks.count) bench-table blocks; this guard needs exactly one")
+    guard let block = blocks.first?[1] else { return }
+
+    let headings = try matches("<th scope=\"col\">([^<]*)</th>", in: block).map { plainValue($0[1]) }
+    #expect(headings == visibleTableHeadings,
+            "the visible table's columns are \(headings); this guard reads them by position and expects \(visibleTableHeadings)")
+
+    let rowMarkup = try matches("<tr><td>([\\s\\S]*?)</td></tr>", in: block).map { $0[1] }
+    #expect(rowMarkup.count == 24,
+            "parsed \(rowMarkup.count) rows from the visible table; a selector matching nothing must fail here rather than compare nothing")
+
+    let published = try publishedPolicyRows(page)
+    #expect(published.count == 24,
+            "#policy-table parsed to \(published.count) rows; this guard cannot compare against a table it could not read")
+
+    var byKey: [String: PolicyRow] = [:]
+    for row in published { byKey[row.key] = row }
+
+    var comparedRows = 0
+    for (index, markup) in rowMarkup.enumerated() {
+        let cells = markup.components(separatedBy: "</td><td>").map { plainValue($0) }
+        guard cells.count == visibleTableHeadings.count else {
+            Issue.record("visible row \(index + 1) has \(cells.count) cells, not \(visibleTableHeadings.count): \(cells)")
+            continue
+        }
+
+        guard let intent = intentByLabel[cells[0]],
+              let displayOptIn = displayOptInByLabel[cells[1]],
+              let atOrBelowFloor = boolByLabel[cells[2]],
+              let sessionsActive = boolByLabel[cells[3]],
+              let system = boolByLabel[cells[4]],
+              let displayHeld = boolByLabel[cells[5]],
+              let suppressed = boolByLabel[cells[6]]
+        else {
+            Issue.record("visible row \(index + 1) uses labels this guard does not know: \(cells)")
+            continue
+        }
+
+        let key = "\(intent)|\(displayOptIn)|\(atOrBelowFloor)|\(sessionsActive)"
+        guard let published = byKey[key] else {
+            Issue.record("visible row \(index + 1) states inputs \(key), which #policy-table has no row for")
+            continue
+        }
+        comparedRows += 1
+
+        #expect(system == published.system,
+                "visible row \(index + 1) (\(key)) says the system hold is \(cells[4]); #policy-table says \(published.system)")
+        #expect(displayHeld == published.displayHeld,
+                "visible row \(index + 1) (\(key)) says the display hold is \(cells[5]); #policy-table says \(published.displayHeld)")
+        #expect(suppressed == published.suppressed,
+                "visible row \(index + 1) (\(key)) says the floor holds it back: \(cells[6]); #policy-table says \(published.suppressed)")
+    }
+
+    // Every row reached a comparison. Without this, rows that failed to map
+    // would be recorded above but the guard would still look thorough.
+    #expect(comparedRows == 24,
+            "compared \(comparedRows) of 24 visible rows against #policy-table")
+}
+
 // MARK: - Guard 3: the version cannot drift
 
 private struct GitUnavailable: Error, CustomStringConvertible {
@@ -189,12 +293,28 @@ private struct GitUnavailable: Error, CustomStringConvertible {
     }
 }
 
-/// The newest release tag, from git.
+/// The shape of a released version tag. Anything else is not a release.
+private let releaseTagPattern = "^v\\d+\\.\\d+\\.\\d+$"
+
+/// The newest RELEASE tag, from git.
 ///
 /// **This throws rather than skipping, and that is the design.** A version guard
 /// that returns "no tags, nothing to check" is worse than no guard: it is green
 /// on a machine where it never ran, so it reports safety it did not establish.
 /// The same false-absence trap `matches` throws over in `DocsClaims_test.swift`.
+///
+/// **Pre-release tags are filtered out, and that filter is load-bearing.**
+/// `--sort=-v:refname` ranks `v0.2.0-rc1` above `v0.1.1`, so without it, cutting
+/// a release candidate — ordinary release engineering, not a mistake — would
+/// make four correct pages look stale. Worse, the failure would name the wrong
+/// culprit: `everyDownloadLinkPointsAtTheNewestReleasedVersion` would report
+/// "site/install.html links into release v0.1.1; the newest release tag is
+/// v0.2.0-rc1", accusing a page of a defect the page does not have. A guard that
+/// cries wolf at correct pages teaches the reader to distrust the whole suite,
+/// which costs more than the guard is worth.
+///
+/// Filtering fails CLOSED: if the pattern ever matches nothing, this throws with
+/// the tags it saw rather than falling back to an unfiltered newest.
 private func newestReleaseTag() throws -> String {
     let git = Process()
     git.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -220,7 +340,13 @@ private func newestReleaseTag() throws -> String {
         .map { $0.trimmingCharacters(in: .whitespaces) }
         .filter { !$0.isEmpty }
 
-    guard let newest = tags.first else { throw GitUnavailable(reason: "no tags in the repository") }
+    guard !tags.isEmpty else { throw GitUnavailable(reason: "no tags in the repository") }
+
+    let releases = tags.filter { $0.range(of: releaseTagPattern, options: .regularExpression) != nil }
+    guard let newest = releases.first else {
+        throw GitUnavailable(
+            reason: "none of the \(tags.count) tag(s) is a vMAJOR.MINOR.PATCH release: \(tags.prefix(8).joined(separator: ", "))")
+    }
     return newest
 }
 
@@ -234,11 +360,12 @@ private func newestReleaseTag() throws -> String {
 /// the pages legitimately name 0.1.0 while telling a reader that Homebrew still
 /// installs it, and a guard that failed on a true sentence would be turned off
 /// within a week.
+/// A pre-release tag is ignored, not treated as the newest release. That is
+/// `newestReleaseTag`'s job, and it is why this test asserts nothing about the
+/// tag's SHAPE: the filter guarantees it, so an assertion here would restate the
+/// filter rather than test it, and would hold whether the filter worked or not.
 @Test func everyPageShowsTheNewestReleasedVersion() throws {
     let tag = try newestReleaseTag()
-    #expect(try !matches("^v\\d+\\.\\d+\\.\\d+$", in: tag).isEmpty,
-            "the newest tag is \"\(tag)\", which is not a vMAJOR.MINOR.PATCH release tag")
-
     let pages = discoveredSitePages()
     #expect(pages.count >= 4, "discovery found \(pages.count) page(s) under site/; this guard would sweep almost nothing")
 
@@ -416,6 +543,35 @@ private func newestReleaseTag() throws -> String {
 private let releaseFacts = ["File", "Size", "SHA-256", "Architecture",
                             "Minimum macOS", "Signature", "Notarisation", "Staple"]
 
+/// The text from the first release heading up to the second one.
+///
+/// Throws rather than returning the whole document when no heading matches.
+/// Falling back to everything is the false-absence trap in its most expensive
+/// form here: the caller would compare two whole files, find the values it
+/// wanted somewhere in each, and report a clean mirror it never checked.
+private func newestReleaseSection(of text: String,
+                                  startingAt heading: String,
+                                  named label: String) throws -> String {
+    let starts = try matches(heading, in: text)
+    guard starts.count >= 1 else {
+        throw BadPattern(pattern: "no release heading in \(label); this guard cannot find a section to compare")
+    }
+
+    let ns = text as NSString
+    guard let first = ns.range(of: starts[0][0]).location as Int?, first != NSNotFound else {
+        throw BadPattern(pattern: "cannot locate the first release heading in \(label)")
+    }
+    let rest = ns.substring(from: first + (starts[0][0] as NSString).length)
+
+    // Up to the next heading, or the end of the file for a single-release
+    // document. Both are legitimate; neither may silently become "everything".
+    if starts.count >= 2, case let next = (rest as NSString).range(of: starts[1][0]),
+       next.location != NSNotFound {
+        return (rest as NSString).substring(to: next.location)
+    }
+    return rest
+}
+
 /// Every release in `CHANGELOG.md` is on the page, and the page invents none.
 ///
 /// **This has already gone wrong on this branch.** Commit `3a3f73e` weakened
@@ -462,9 +618,20 @@ private let releaseFacts = ["File", "Size", "SHA-256", "Architecture",
 /// source is true — a wrong digest written into `CHANGELOG.md` and mirrored
 /// correctly passes here. Verifying the artifact is a different job, and
 /// `site/install.html` prints the `shasum` command for a reader to do it.
+///
+/// **Both sides are narrowed to the newest release first.** Sweeping every
+/// two-column row in the file into one dictionary works only while exactly one
+/// release carries a facts table. The moment 0.1.2 adds its own, the LAST table
+/// read would silently win and this guard would compare the wrong release's
+/// digest while looking green. Narrowing first is what stops that, and it costs
+/// one regex per side.
 @Test func theReleaseFactsOnThePageAreTheOnesInTheChangelog() throws {
-    let source = try surfaceText("CHANGELOG.md")
-    let page = try surfaceText("site/changelog.html")
+    let source = try newestReleaseSection(of: try surfaceText("CHANGELOG.md"),
+                                          startingAt: "(?m)^##\\s+\\[\\d+\\.\\d+\\.\\d+\\]",
+                                          named: "CHANGELOG.md")
+    let page = try newestReleaseSection(of: try surfaceText("site/changelog.html"),
+                                        startingAt: "<h2[^>]*>\\s*\\d+\\.\\d+\\.\\d+\\s*[\u{2014}\u{2013}-]",
+                                        named: "site/changelog.html")
 
     var fromMarkdown: [String: String] = [:]
     for m in try matches("(?m)^\\|\\s*([^|\\n]+?)\\s*\\|\\s*([^|\\n]+?)\\s*\\|\\s*$", in: source) {
