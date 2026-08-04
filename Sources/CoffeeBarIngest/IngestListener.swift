@@ -32,7 +32,7 @@ public enum IngestError: Error, Equatable {
 /// comment from a call.
 public protocol IngestListening: Sendable {
     /// Delivers every decoded event ON THE MAIN THREAD. See `start(queue:)`.
-    func start(onEvent: @escaping @Sendable (HookEvent) -> Void) throws
+    func start(onEvent: @escaping @Sendable (AgentTool, HookEvent) -> Void) throws
     func stop()
 
     /// Whether this listener is serving RIGHT NOW.
@@ -180,7 +180,7 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
         return activeConnections
     }
 
-    public func start(onEvent: @escaping @Sendable (HookEvent) -> Void) throws {
+    public func start(onEvent: @escaping @Sendable (AgentTool, HookEvent) -> Void) throws {
         guard socketPath.utf8.count <= Self.maximumPathBytes else {
             throw IngestError.socketPathTooLong(socketPath.utf8.count)
         }
@@ -305,6 +305,31 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
         boundNode = nil
         lock.unlock()
         cancelling?.cancel()
+    }
+
+    /// Decodes a payload with the decoder its declared origin calls for.
+    ///
+    /// Two envelopes exist, and which one applies is settled by the origin
+    /// rather than by trying both. Claude Code and Codex share
+    /// `HookEvent`. Cursor has its own, because four of its six recorded
+    /// payloads carry no `session_id` at all and `HookEvent` makes that field
+    /// non-optional — so they throw rather than decode.
+    ///
+    /// Trying both decoders in turn would be worse than useless here: a Cursor
+    /// `sessionStart` DOES carry `session_id`, so it would decode as a
+    /// `HookEvent`, resolve against the wrong vocabulary and drive nothing,
+    /// while its four sibling events failed outright. The origin is known, so
+    /// it is used.
+    ///
+    /// `nil` means the bytes are not that tool's envelope, and the caller
+    /// answers 400.
+    private static func decode(_ body: Data, from tool: AgentTool) -> HookEvent? {
+        switch tool {
+        case .claudeCode, .codex:
+            return try? JSONDecoder().decode(HookEvent.self, from: body)
+        case .cursor:
+            return (try? JSONDecoder().decode(CursorHookEvent.self, from: body))?.normalised
+        }
     }
 
     // MARK: - Who owns the node
@@ -493,7 +518,7 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
     }
 
     private func accept(_ connection: NWConnection,
-                        onEvent: @escaping @Sendable (HookEvent) -> Void) {
+                        onEvent: @escaping @Sendable (AgentTool, HookEvent) -> Void) {
         lock.lock()
         let admitted = activeConnections < maximumConnections
         if admitted { activeConnections += 1 }
@@ -569,7 +594,7 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
 
     private func receive(_ connection: NWConnection,
                          state: ConnectionState,
-                         onEvent: @escaping @Sendable (HookEvent) -> Void) {
+                         onEvent: @escaping @Sendable (AgentTool, HookEvent) -> Void) {
         connection.receive(minimumIncompleteLength: 1,
                            maximumLength: Self.receiveChunkBytes) {
             [weak self] data, _, isComplete, error in
@@ -590,8 +615,20 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
                     // listener survives. Cancelling here would let one malformed
                     // post silently stop ingest for the session while the panel
                     // kept looking healthy.
-                    if let event = try? JSONDecoder().decode(HookEvent.self, from: body) {
-                        onEvent(event)
+                    //
+                    // The endpoint is read BEFORE the body. It is how the sender
+                    // declares which agent it is, and a payload whose origin is
+                    // unknown is refused rather than attributed to a default:
+                    // the wrong tool drives the wrong state machine silently,
+                    // which is worse than a visible 400. See
+                    // `AgentTool.declared(byEndpoint:)`.
+                    guard let target = state.framer.requestTarget,
+                          let tool = AgentTool.declared(byEndpoint: target) else {
+                        self.respond(connection, status: "404 Not Found", state: state)
+                        return
+                    }
+                    if let event = Self.decode(body, from: tool) {
+                        onEvent(tool, event)
                         self.respond(connection, status: "204 No Content", state: state)
                     } else {
                         self.respond(connection, status: "400 Bad Request", state: state)

@@ -52,6 +52,18 @@ struct HTTPRequestFramer {
 
     private var buffer = Data()
 
+    /// The path the client posted to, once the header block has arrived.
+    ///
+    /// This is how coffee-bar learns which agent tool sent the payload:
+    /// `AgentTool.declared(byEndpoint:)` turns it into an origin. The user
+    /// pastes a different hook command per tool, so the sender declares itself
+    /// here, in the one place a payload's own bytes cannot.
+    ///
+    /// `nil` until the headers are complete, and `nil` for a request line this
+    /// type cannot parse. Both mean the same thing to the caller — no tool was
+    /// declared — and the caller refuses rather than guessing.
+    private(set) var requestTarget: String?
+
     mutating func append(_ chunk: Data) -> Outcome {
         buffer.append(chunk)
         if buffer.count > Self.maximumBytes { return .tooLarge }
@@ -61,6 +73,7 @@ struct HTTPRequestFramer {
         }
 
         let headers = buffer[..<separator.lowerBound]
+        requestTarget = Self.target(in: headers)
 
         // The declared length is VALIDATED, not merely parsed. `Int` accepts a
         // negative, and a negative length walked straight through the
@@ -91,6 +104,24 @@ struct HTTPRequestFramer {
         // second request would otherwise be concatenated into the first body.
         let bodyEnd = buffer.index(bodyStart, offsetBy: length)
         return .body(Data(buffer[bodyStart..<bodyEnd]))
+    }
+
+    /// The request target from the first line of `headers`, or `nil`.
+    ///
+    /// RFC 9112 §3 fixes the request line as three space-separated fields:
+    /// method, target, version. The arity is checked rather than assumed —
+    /// splitting and reaching for component 1 with no check returns the METHOD
+    /// as the target for a one-field line, and that string would then be handed
+    /// to the origin lookup as if the client had declared it.
+    ///
+    /// Anything else is `nil`, which the caller treats as no declaration at all.
+    private static func target(in headers: Data) -> String? {
+        guard let text = String(data: headers, encoding: .utf8),
+              let line = text.split(separator: "\r\n", maxSplits: 1).first
+        else { return nil }
+        let fields = line.split(separator: " ")
+        guard fields.count == 3 else { return nil }
+        return String(fields[1])
     }
 
     /// RFC 9110 makes field names case-insensitive, so the match is lowercased.

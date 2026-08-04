@@ -3,7 +3,7 @@
 
 import Foundation
 
-/// Turns Claude Code hook events into `AgentSession` values.
+/// Turns hook events from any supported agent into `AgentSession` values.
 ///
 /// A caseless enum of static functions, the shape `PowerBroker` uses: no I/O,
 /// no clock, no stored state. `apply` is a pure function of
@@ -12,13 +12,17 @@ import Foundation
 /// for that reason — a `Date()` read in here would make the result depend on
 /// when it ran.
 ///
-/// **Every transition below is driven by a payload in
-/// `Tests/Fixtures/claude-hooks/`.** Design §9: writing the state machine first
-/// and inventing payloads to match it is the failure mode this project has
-/// already paid for.
+/// **Every transition below is driven by a payload under `Tests/Fixtures/`.**
+/// Design §9: writing the state machine first and inventing payloads to match it
+/// is the failure mode this project has already paid for.
 ///
 /// `PreCompact` is the one `HookEventKind` with no recorded payload, and it maps
-/// to no state — the corpus carries six of the seven kinds.
+/// to no state — the corpus carries seven of the eight kinds, six from Claude
+/// Code and `UserPromptSubmit` from Codex.
+///
+/// The tool a session belongs to arrives as a parameter, not as a guess about
+/// the payload. `AgentTool.declared(byEndpoint:)` carries the reasoning and the
+/// measurement that rejected the alternatives.
 ///
 /// **There is no transition into `.failed`.** Design §3.2: no observed event
 /// reports a failure, so a session that simply stops is retired by the stale
@@ -49,28 +53,39 @@ public enum SessionHub {
     /// menu-bar row. Such text gets shorter here. It never gets corrupted.
     public static let messageByteCap = 1024
 
-    /// Applies one event and returns the new session list.
+    /// Applies one event from `tool` and returns the new session list.
     ///
-    /// Unknown events return the input unchanged, so a Claude Code release that
-    /// adds an event cannot mint a phantom session that holds the machine awake.
-    public static func apply(_ event: HookEvent,
+    /// Unknown events return the input unchanged, so an agent release that adds
+    /// an event cannot mint a phantom session that holds the machine awake.
+    ///
+    /// **`tool` is a parameter and has no default.** It used to be the literal
+    /// `.claudeCode`, written into `make` below, so every session was a Claude
+    /// Code session whatever had sent the payload. A default would put that
+    /// same defect back one level down: the origin has to be stated by whoever
+    /// received the bytes, because that is the only layer that knows it. See
+    /// `AgentTool.declared(byEndpoint:)` for how it is established and for the
+    /// measurement that rules out reading it off the payload.
+    public static func apply(from tool: AgentTool,
+                             _ event: HookEvent,
                              to sessions: [AgentSession],
                              now: Date) -> [AgentSession] {
-        guard let kind = event.kind, let newState = state(for: kind) else {
+        guard let newState = state(of: event.hookEventName, from: tool) else {
             return sessions
         }
+        let text = message(from: event)
 
         // Matched on (tool, sessionID) and never on position: two tools may use
-        // the same session id and must not merge. M2 ingests Claude Code hooks
-        // only, so the tool is pinned here rather than read off the payload.
+        // the same session id and must not merge. Codex and Claude Code both use
+        // plain UUIDs, so this is not hypothetical.
         guard let index = sessions.firstIndex(where: {
-            $0.tool == .claudeCode && $0.sessionID == event.sessionID
+            $0.tool == tool && $0.sessionID == event.sessionID
         }) else {
-            return sessions + [make(event, kind: kind, state: newState, now: now)]
+            return sessions + [make(event, from: tool, message: text,
+                                    state: newState, now: now)]
         }
 
         var updated = sessions
-        updated[index] = advance(sessions[index], with: event, kind: kind,
+        updated[index] = advance(sessions[index], with: event, message: text,
                                  to: newState, now: now)
         return updated
     }
@@ -84,10 +99,16 @@ public enum SessionHub {
     /// Its payload carries `reason: "other"`, the only terminator value seen so
     /// far, so no branch here reads it: an end is an end until a payload shows
     /// otherwise.
+    /// `userPromptSubmit` maps to `.working` because the human has just handed
+    /// the turn back. The payload behind it is Codex's, recorded in
+    /// `Tests/Fixtures/codex-hooks/user-prompt-submit.json`. Without it a
+    /// session stays `.awaitingInput` from the moment the user presses return
+    /// until the model's first tool call, and `.awaitingInput` does not hold the
+    /// machine awake — so the Mac can sleep while the model is generating.
     private static func state(for kind: HookEventKind) -> SessionState? {
         switch kind {
         case .sessionStart: return .starting
-        case .preToolUse, .postToolUse: return .working
+        case .userPromptSubmit, .preToolUse, .postToolUse: return .working
         case .permissionDenied: return .awaitingPermission
         case .stop: return .awaitingInput
         case .sessionEnd: return .done
@@ -95,13 +116,57 @@ public enum SessionHub {
         }
     }
 
+    /// Resolves a wire event name against the vocabulary of the tool that sent
+    /// it, then maps it to a state. `nil` means "this drives nothing".
+    ///
+    /// The name is resolved per TOOL rather than against one merged enum. Cursor
+    /// spells its start event `sessionStart` and Claude Code spells it
+    /// `SessionStart`; merging the two vocabularies would need one of them bent
+    /// into the other's spelling, and a raw-value collision would then be a
+    /// silent mis-route rather than a compile error.
+    ///
+    /// An unrecognised name returns `nil`, so an agent release that adds an
+    /// event cannot mint a phantom session that holds the machine awake.
+    private static func state(of name: String, from tool: AgentTool) -> SessionState? {
+        switch tool {
+        case .claudeCode, .codex:
+            // One vocabulary, deliberately. Codex sends the same event names as
+            // Claude Code, which is exactly why the origin cannot be read off
+            // the payload — see `AgentTool.declared(byEndpoint:)`.
+            return HookEventKind(rawValue: name).flatMap(state(for:))
+        case .cursor:
+            return CursorEventKind(rawValue: name).flatMap(state(for:))
+        }
+    }
+
+    /// Cursor's mapping. Every case here has a recorded payload behind it.
+    ///
+    /// All four work events mean the same thing — the agent has the turn. Cursor
+    /// reports what the agent is DOING rather than whose turn it is, so there is
+    /// no finer distinction to draw and inventing one would not be measurement.
+    ///
+    /// **No case maps to an attention state, and that is a GAP rather than a
+    /// decision.** Cursor's `stop` is the event that would say the human is now
+    /// the bottleneck, and no payload for it was ever captured. A Cursor session
+    /// that finishes its turn therefore stays `.working` — holding the machine
+    /// awake — until `sessionEnd` arrives or `StalePolicy` retires it.
+    private static func state(for kind: CursorEventKind) -> SessionState? {
+        switch kind {
+        case .sessionStart: return .starting
+        case .beforeShellExecution, .afterShellExecution,
+             .beforeReadFile, .afterFileEdit: return .working
+        case .sessionEnd: return .done
+        }
+    }
+
     private static func make(_ event: HookEvent,
-                             kind: HookEventKind,
+                             from tool: AgentTool,
+                             message: String?,
                              state: SessionState,
                              now: Date) -> AgentSession {
         let cwd = event.cwd.map { URL(fileURLWithPath: $0, isDirectory: true) }
         return AgentSession(
-            tool: .claudeCode,
+            tool: tool,
             sessionID: event.sessionID,
             cwd: cwd,
             repoName: cwd?.lastPathComponent,
@@ -109,14 +174,14 @@ public enum SessionHub {
             state: state,
             stateEnteredAt: now,
             lastEventAt: now,
-            lastMessage: message(from: event, kind: kind),
+            lastMessage: message,
             attentionSince: SessionState.attentionStates.contains(state) ? now : nil,
             turnCount: state == .awaitingInput ? 1 : 0)
     }
 
     private static func advance(_ session: AgentSession,
                                 with event: HookEvent,
-                                kind: HookEventKind,
+                                message: String?,
                                 to state: SessionState,
                                 now: Date) -> AgentSession {
         let changed = session.state != state
@@ -144,7 +209,7 @@ public enum SessionHub {
             state: state,
             stateEnteredAt: changed ? now : session.stateEnteredAt,
             lastEventAt: now,
-            lastMessage: message(from: event, kind: kind) ?? session.lastMessage,
+            lastMessage: message ?? session.lastMessage,
             attentionSince: attentionSince,
             turnCount: session.turnCount + (state == .awaitingInput && changed ? 1 : 0))
     }
@@ -156,8 +221,17 @@ public enum SessionHub {
     /// human is now the bottleneck, and on `SessionEnd` it is a terminator code,
     /// recorded as the bare word "other". Rendering the second would overwrite
     /// the first exactly when the user looks to see what happened.
-    private static func message(from event: HookEvent, kind: HookEventKind) -> String? {
-        guard kind == .permissionDenied, let reason = event.reason else { return nil }
+    /// A Cursor event can never reach this with text, and no check here is
+    /// needed to make that true. Cursor's event names do not resolve to
+    /// `HookEventKind` at all, and `CursorHookEvent` decodes no `reason` — its
+    /// only one sits on `sessionEnd`, where it is a terminator code. So a Cursor
+    /// session's `lastMessage` stays nil by construction. A `tool != .cursor`
+    /// guard was written here first and removed: no test could turn it red,
+    /// because no input can reach it.
+    private static func message(from event: HookEvent) -> String? {
+        guard HookEventKind(rawValue: event.hookEventName) == .permissionDenied,
+              let reason = event.reason
+        else { return nil }
         return capped(reason)
     }
 

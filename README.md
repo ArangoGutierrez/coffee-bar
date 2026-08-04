@@ -28,7 +28,7 @@ See [Building](docs/BUILDING.md).
 
 [**docs/QUICKSTART.md**](docs/QUICKSTART.md) — install it, wire the Claude Code
 hooks, and check it is listening. coffee-bar does nothing until those hooks
-exist; it reads session state from them and from nothing else.
+exist; it reads session state from agent hooks and from nothing else.
 
 ## What it does
 

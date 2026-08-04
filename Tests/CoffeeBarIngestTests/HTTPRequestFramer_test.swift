@@ -214,3 +214,68 @@ private func requestWithRawContentLength(_ raw: String, body: String = "") -> Da
     let raw = request(body: "x", contentLength: HTTPRequestFramer.maximumBytes)
     #expect(framer.append(raw) == .needMore)
 }
+
+// MARK: - The request target, which carries the declared origin
+
+// The endpoint a hook posts to is how coffee-bar learns which agent tool sent
+// the payload — see `AgentTool.declared(byEndpoint:)`. The framer already reads
+// the header block to find `Content-Length`, so the request line it has to walk
+// past is where that declaration lives.
+//
+// The target is exposed as a property rather than folded into `Outcome.body`,
+// deliberately. Nine existing call sites match on `.body(data)`, and widening
+// that case would churn every one of them for a value only the listener reads.
+
+private func request(target: String, body: String) -> Data {
+    Data("""
+        POST \(target) HTTP/1.1\r
+        Host: localhost\r
+        Content-Length: \(body.utf8.count)\r
+        \r
+        \(body)
+        """.utf8)
+}
+
+@Test func theRequestTargetIsReadFromTheRequestLine() {
+    var framer = HTTPRequestFramer()
+    #expect(framer.append(request(target: "/event/codex", body: body)) == .body(Data(body.utf8)))
+    #expect(framer.requestTarget == "/event/codex")
+}
+
+@Test func theRequestTargetIsNilBeforeAnyHeaderBlockArrives() {
+    // Named bug this catches: a target parsed from a partial buffer. Half a
+    // request line would resolve to a truncated path, and the listener would
+    // refuse a payload that is merely still in flight.
+    var framer = HTTPRequestFramer()
+    #expect(framer.append(Data("POST /event/cur".utf8)) == .needMore)
+    #expect(framer.requestTarget == nil)
+}
+
+@Test func aTargetSplitAcrossChunksIsReadOnceTheHeadersComplete() {
+    // The framer exists because one request may arrive in several receives. A
+    // target read from the first chunk alone would be wrong exactly then.
+    var framer = HTTPRequestFramer()
+    let whole = request(target: "/event/cursor", body: body)
+    let cut = 8
+    #expect(framer.append(whole.prefix(cut)) == .needMore)
+    #expect(framer.requestTarget == nil)
+    #expect(framer.append(whole.suffix(from: cut)) == .body(Data(body.utf8)))
+    #expect(framer.requestTarget == "/event/cursor")
+}
+
+@Test func aRequestLineOfTheWrongShapeYieldsNoTarget() {
+    // Fail closed. A line this type cannot parse must not resolve to a path,
+    // because `AgentTool.declared(byEndpoint:)` would then be asked about a
+    // string that came from nowhere in the request.
+    //
+    // Named bug this catches: splitting on spaces and taking component 1 with no
+    // arity check. "POST" alone would trap or return the method as the target.
+    for line in ["POST\r", "POST /event\r", "GET\r", "\r",
+                 "POST /event HTTP/1.1 extra\r"] {
+        var framer = HTTPRequestFramer()
+        let raw = Data("\(line)\nContent-Length: 0\r\n\r\n".utf8)
+        _ = framer.append(raw)
+        #expect(framer.requestTarget == nil,
+                "the request line \"\(line)\" produced a target")
+    }
+}

@@ -701,8 +701,8 @@ public final class ServingModel {
     /// `SessionHub.apply` decides everything about the session list. This hands
     /// the array in and takes the answer back, so an event Claude Code adds
     /// later cannot mint a phantom session here.
-    func ingest(_ event: HookEvent) {
-        sessions = SessionHub.apply(event, to: sessions, now: now())
+    func ingest(from tool: AgentTool, _ event: HookEvent) {
+        sessions = SessionHub.apply(from: tool, event, to: sessions, now: now())
         refresh()
     }
 
@@ -782,8 +782,8 @@ public final class ServingModel {
         // listener outlives an orphaned model, and the callback must not be
         // what keeps that model alive.
         do {
-            try listener.start { [weak self] event in
-                MainActor.assumeIsolated { self?.ingest(event) }
+            try listener.start { [weak self] tool, event in
+                MainActor.assumeIsolated { self?.ingest(from: tool, event) }
             }
         } catch {
             // Recorded on the way past, then rethrown unchanged. `main.swift`

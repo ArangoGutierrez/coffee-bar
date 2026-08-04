@@ -31,16 +31,59 @@ public enum HookHealthStatus: Equatable, Sendable {
 /// have to handle.
 public enum HookHealth {
 
-    /// The events `SessionHub` acts on.
+    /// The events `SessionHub` acts on, for **Claude Code**.
     ///
     /// `PreCompact` is excluded because the hub maps it to nothing. `SessionEnd`
-    /// is excluded because design §10.4 leaves it open.
+    /// is excluded because design §10.4 leaves it open. `UserPromptSubmit` is
+    /// excluded because no Claude Code payload for it was ever captured.
     ///
     /// Already sorted, and `Tests/CoffeeBarCoreTests/HookHealth_test.swift`
     /// pins that. `status(ofSettings:)` filters this array and a filter
     /// preserves order, so the sorted panel line rests on this constant.
+    ///
+    /// Kept as a constant, and kept Claude-Code-shaped, because `DocsClaims_test`
+    /// and `SiteClaims_test` check the documented hook block against it. The
+    /// documented block IS the Claude Code one. `requiredEvents(for:)` is the
+    /// general form, and a test pins the two together.
     public static let requiredEvents = ["PermissionDenied", "PostToolUse",
                                         "PreToolUse", "SessionStart", "Stop"]
+
+    /// The hook entries `tool` needs wired, or `nil` when there is no advisory.
+    ///
+    /// **Each list holds only events with a recorded payload for that tool.**
+    /// `everyRequiredEventHasARecordedPayloadForThatTool` enforces it. Telling a
+    /// user to wire an entry their tool may never send would leave the panel
+    /// permanently reporting a fault they cannot clear.
+    ///
+    /// The two lists differ even though Claude Code and Codex share one event
+    /// vocabulary, and the differences are the measurement, not a preference:
+    ///
+    /// - `PermissionDenied` is Claude Code only. No Codex capture recorded one.
+    /// - `UserPromptSubmit` is Codex only. Claude Code sends it, but no Claude
+    ///   Code payload for it was ever captured.
+    ///
+    /// **`nil` is not `[]`.** Every tool has an advisory today, but the return
+    /// stays optional because those are different claims: an empty list would
+    /// satisfy every filter and report `.wired` for a check that never ran,
+    /// whereas `nil` says there is no advice to give.
+    public static func requiredEvents(for tool: AgentTool) -> [String]? {
+        switch tool {
+        case .claudeCode:
+            return requiredEvents
+        case .codex:
+            return ["PostToolUse", "PreToolUse", "SessionStart", "Stop",
+                    "UserPromptSubmit"]
+        case .cursor:
+            // Cursor's own vocabulary, not a translation of Claude Code's.
+            // `sessionEnd` is left out for the same reason `SessionEnd` is.
+            //
+            // Cursor's `stop` is absent because no payload for it exists, not
+            // because it would be unwanted — it is the one event that would tell
+            // the panel a Cursor session is waiting on the human.
+            return ["afterFileEdit", "afterShellExecution", "beforeReadFile",
+                    "beforeShellExecution", "sessionStart"]
+        }
+    }
 
     /// What an installed hook command must contain to be ours.
     ///
@@ -51,6 +94,15 @@ public enum HookHealth {
     public static let commandMarker = "coffee-bar/ingest.sock"
 
     /// Reads a settings file's bytes, or `nil` when there were none to read.
+    ///
+    /// **This parses Claude Code's `~/.claude/settings.json` shape and no
+    /// other.** The nesting it walks — `hooks.<Event>[].hooks[].command` — is
+    /// Claude Code's. Codex keeps its hooks in `~/.codex/config.toml`, which is
+    /// TOML and not JSON at all, and Cursor keeps them in `~/.cursor/hooks.json`
+    /// under a different nesting. Neither of those files has been captured and
+    /// measured the way the payloads were, so no parser for them is written
+    /// here. A reader that guessed at their shape would report a fault the user
+    /// could not clear, or worse, report healthy over a file it misread.
     public static func status(ofSettings data: Data?) -> HookHealthStatus {
         guard let data, let root = decodeObject(data) else { return .unreadable }
 
