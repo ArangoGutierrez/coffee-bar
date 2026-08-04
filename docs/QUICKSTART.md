@@ -13,7 +13,9 @@ them, the app runs but no session event reaches it.
   places that assert whether a release exists. Keep it that way: the tag flips
   these two and nothing else.
 -->
-**No release is tagged yet**, so build from source — see
+**v0.1.1 is released** as a signed, notarised DMG. Homebrew still builds from
+source and installs 0.1.0. The two tags carry the same code, so v0.1.1 is that
+source, newly signed. To build that source yourself, see
 [Building](BUILDING.md). It takes about a minute.
 
 Once the first release is tagged, the install is:

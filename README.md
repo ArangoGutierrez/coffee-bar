@@ -19,7 +19,9 @@ that is the difference from `caffeinate -d`.
   docs/QUICKSTART.md. Before adding a second status claim anywhere, change this
   one instead.
 -->
-**Status: M2. No release is tagged yet, so install means building from source.**
+**Status: M2. v0.1.1 is released as a signed, notarised DMG. Homebrew still
+builds from source and installs 0.1.0. The two tags carry the same code, so
+v0.1.1 is that source, newly signed.**
 See [Building](docs/BUILDING.md).
 
 ## Quick start
