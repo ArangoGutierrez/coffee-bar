@@ -83,12 +83,21 @@ private func sample(prior: Bool = false) -> JournalRecord {
 }
 
 @Test func everyLaterSaveKeepsThePrivateModes() throws {
-    // The REPLACE path, which is a different one: on the second write the
-    // destination already exists, so `replaceItemAt` runs against a live file
-    // rather than an absent one. A replace can carry the destination's
-    // metadata instead of the temp file's, so a store that pins only the
-    // create path reverts the mode on every save after the first — and a test
-    // that stopped at the first write would stay green through it.
+    // The REPLACE path: on the second write the destination already exists, so
+    // `replaceItemAt` runs against a live file rather than an absent one.
+    //
+    // Be precise about what this catches, because the obvious claim is wrong.
+    // It does NOT catch the destination-metadata defect: with the store's own
+    // 0600 file at the destination, dropping `.usingNewMetadataOnly` leaves
+    // this test GREEN — measured. That defect belongs to
+    // `aWriteRepairsAJournalAnEarlierBuildLeftWorldReadable`, which is the only
+    // test that goes red for it.
+    //
+    // What this one catches is a save that stops pinning the mode at all, and
+    // it catches it on the second write rather than the first: removing either
+    // `attributes:` argument turns it red. A future replace that reset the mode
+    // to the umask would land here too, and the create-path test would not see
+    // it.
     let url = tempURL()
     let store = FileJournalStore(url: url)
     try store.write(sample(prior: false))

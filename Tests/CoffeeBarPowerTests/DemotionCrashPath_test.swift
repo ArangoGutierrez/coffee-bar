@@ -15,32 +15,62 @@ import Darwin
 // signal handler runs. The requirement is that a crashed app leaves no process
 // demoted, and only a killed process can answer it.
 //
-// Reading the state from outside is useless here. Measured on macOS 26.5.2
-// (25F84) and already recorded at `DemotionProbe.swift:68`:
-// `getpriority(PRIO_DARWIN_PROCESS, <other pid>)` reads 0 for a third party
-// whatever its real state. So each helper below reports its OWN state and the
-// test reads that report. The helper takes `PRIO_DARWIN_PROCESS` and
-// `PRIO_DARWIN_BG` straight from `<sys/resource.h>`, never through anything
-// `DemotionProbe` exports, so its reading cannot agree with a wrong
-// implementation by sharing its constants — the same discipline as
-// `SpikeProbe_test.swift:16`.
+// There are TWO independent demotion channels, and telling them apart is the
+// whole point of this file. Measured on macOS 26.5.2 (25F84):
+//
+//   untouched                flags=0x1404010
+//   after a SELF demote      flags=0x140c010   PROC_FLAG_DARWINBG     (0x8000)
+//   after an EXTERNAL demote flags=0x1014010   PROC_FLAG_EXT_DARWINBG (0x10000)
+//   after both               flags=0x101c010   both bits
+//
+// `getpriority` reports only the SELF channel. It reads 0 for an externally
+// demoted process even when that process asks about ITSELF. `DemotionProbe.swift:66`
+// already records this as an instrument limit — "the reading is only conclusive
+// when the target is us" — and it is a limit, never a statement about the
+// machine. An earlier version of this file read four consistent zeroes out of
+// that blind instrument and concluded that cross-process demotion does nothing.
+// It does. `getpriorityCannotReportAnotherProcessDarwinBackgroundState` pins the
+// limit so nobody promotes it into a property again.
 //
 // These tests move no process except their own children, so they need no
 // serialization against `DemotionProbeStateTests`.
 
 /// Reports its own Darwin background state to `argv[1]` every 50 ms, forever.
-/// With `argv[2] == "self"` it demotes itself first and never restores: it
-/// stands in for a process that dies inside the demotion window.
+///
+/// `argv[2]` selects the mode:
+///   - absent — only report.
+///   - `self` — demote itself first and never restore.
+///   - `demote <pid>` — demote `argv[3]`, record the return, then block forever
+///     without ever restoring it. Stands in for an app that crashes while
+///     holding a foreign process down.
 private let helperSource = #"""
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
 #include <sys/resource.h>
 
+static void report(const char *path, const char *text) {
+    FILE *f = fopen(path, "w");
+    if (f) { fprintf(f, "%s", text); fclose(f); }
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) return 2;
-    if (argc > 2 && strcmp(argv[2], "self") == 0) {
+    const char *mode = (argc > 2) ? argv[2] : "";
+
+    if (strcmp(mode, "demote") == 0) {
+        if (argc < 4) return 2;
+        errno = 0;
+        int rc = setpriority(PRIO_DARWIN_PROCESS, (id_t)atoi(argv[3]), PRIO_DARWIN_BG);
+        char line[64];
+        snprintf(line, sizeof(line), "demote rc=%d errno=%d", rc, errno);
+        report(argv[1], line);
+        for (;;) pause();
+    }
+
+    if (strcmp(mode, "self") == 0) {
         if (setpriority(PRIO_DARWIN_PROCESS, (id_t)getpid(), PRIO_DARWIN_BG) != 0) {
             return 3;
         }
@@ -48,18 +78,42 @@ int main(int argc, char **argv) {
     for (;;) {
         errno = 0;
         int v = getpriority(PRIO_DARWIN_PROCESS, (id_t)getpid());
-        FILE *f = fopen(argv[1], "w");
-        if (f) {
-            if (v == -1 && errno != 0) fprintf(f, "unreadable");
-            else fprintf(f, "%d", v);
-            fclose(f);
-        }
+        char line[32];
+        if (v == -1 && errno != 0) snprintf(line, sizeof(line), "unreadable");
+        else snprintf(line, sizeof(line), "%d", v);
+        report(argv[1], line);
         usleep(50000);
     }
 }
 """#
 
-/// Compiles `helperSource` and returns the binary's path.
+/// `PROC_FLAG_EXT_DARWINBG` and `PROC_FLAG_DARWINBG`, from XNU
+/// `bsd/sys/proc_info.h`.
+///
+/// The public SDK header stops at `PROC_FLAG_EXEC` (0x4000), so these are
+/// spelled out. Nothing below rests on the names being right: every test reads
+/// the bit BEFORE and AFTER the call it makes, so what is asserted is the
+/// TRANSITION, which is observed rather than assumed.
+private let extDarwinBG: UInt32 = 0x1_0000
+private let selfDarwinBG: UInt32 = 0x8000
+
+/// The `pbsi_flags` word `proc_pidinfo` reports for `pid`, or `nil` when the
+/// call fails.
+///
+/// This is the instrument `getpriority` is not: it reports another process's
+/// darwin background state across process boundaries, for any process of the
+/// same uid, and it needs no entitlement.
+private func bsdFlags(of pid: pid_t) -> UInt32? {
+    var info = proc_bsdshortinfo()
+    let size = Int32(MemoryLayout<proc_bsdshortinfo>.size)
+    guard proc_pidinfo(pid, PROC_PIDT_SHORTBSDINFO, 0, &info, size) == size else {
+        return nil
+    }
+    return info.pbsi_flags
+}
+
+/// Compiles `helperSource` and returns the binary's path with a state file path
+/// beside it.
 ///
 /// `cc` ships with the same command line tools that provide `swift`, so it is
 /// present wherever this suite runs at all. The caller `#require`s the result
@@ -103,9 +157,9 @@ private func readReport(at path: String) -> String? {
 
 @Test func aSelfDemotedProcessLosesItsDemotionWhenItIsSIGKILLed() throws {
     // The requirement, from the handoff: "a crashed app must not leave a
-    // process demoted". The probe demotes only itself (pinned by the test
-    // below), so the crash case is a self-demoted process that dies without
-    // running its restore.
+    // process demoted". The probe demotes only itself — pinned by
+    // `theShippedProbeDemotesOnlyItsOwnProcess` — so the crash case that
+    // matters is a self-demoted process that dies without running its restore.
     let helper = try buildStateReporter()
 
     let child = Process()
@@ -116,10 +170,15 @@ private func readReport(at path: String) -> String? {
 
     // Pins the premise. Without this the kill below would prove nothing: a
     // helper that never reached background state cannot demonstrate that the
-    // state goes away. `1` is what `getpriority` reports for a backgrounded
-    // process, matching `SpikeProbe_test.swift:124`.
+    // state goes away. `1` is what `getpriority` reports for a process that
+    // demoted ITSELF, matching `SpikeProbe_test.swift:124`.
     try #require(reportReaches("1", at: helper.stateFile, within: 10),
                  "the child never entered Darwin background state; every assertion below would be vacuous")
+
+    // Read through the cross-process instrument too, so this test names which
+    // of the two channels it is exercising.
+    let demoted = try #require(bsdFlags(of: child.processIdentifier))
+    #expect(demoted & selfDarwinBG != 0)
 
     kill(child.processIdentifier, SIGKILL)
     child.waitUntilExit()
@@ -136,60 +195,130 @@ private func readReport(at path: String) -> String? {
     // the window rather than after leaving it.
     #expect(readReport(at: helper.stateFile) == "1")
 
-    // And the demotion is gone with the task that carried it. Nothing else can
-    // hold it: the test below measures that a demotion cannot be applied to,
-    // or read from, any other process on this system.
+    // The demotion is gone with the task that carried it. This holds for the
+    // SELF channel, which is state on the process itself, so killing the
+    // process ends it. It is NOT a general claim about demotion: an externally
+    // applied demotion outlives the process that applied it, which is what
+    // `anExternallyDemotedProcessStaysDemotedWhenTheDemoterIsSIGKILLed` shows.
     errno = 0
     #expect(kill(child.processIdentifier, 0) == -1)
     #expect(errno == ESRCH)
 }
 
-@Test func setpriorityOnAnotherProcessReportsSuccessAndChangesNothing() throws {
-    // Why the crash above cannot strand anything, and a finding the M5
-    // `ProcGovernor` design depends on. Handoff §5.6 plans to demote arbitrary
-    // same-uid pids with exactly this call. Measured on macOS 26.5.2 (25F84):
-    // the call returns 0 and the target's own reading never changes — for a
-    // sibling, for a direct child, and for `/usr/sbin/taskpolicy -b -p`, which
-    // is Apple's own tool.
+@Test func getpriorityCannotReportAnotherProcessDarwinBackgroundState() throws {
+    // An INSTRUMENT LIMIT, not a property of the system.
     //
-    // If this test ever goes red, third-party demotion has started working and
-    // the crash path is no longer safe by construction. Do not delete it then:
-    // `ProcGovernor` needs a real restore-on-exit before it may demote anything
-    // it does not own, because nothing in this app restores a foreign pid after
-    // a crash and no supervisor exists that could.
+    // This is a trap worth pinning because the blind reading is so convincing:
+    // the externally demoted process reads 0 through `getpriority` even when it
+    // asks about ITSELF. An earlier version of this file collected four such
+    // zeroes — sibling, direct child, and `taskpolicy -b -p` — and concluded
+    // that cross-process demotion is a no-op. `proc_pidinfo` shows the bit set
+    // on the very same process at the very same moment.
     let helper = try buildStateReporter()
 
     let child = Process()
     child.executableURL = URL(fileURLWithPath: helper.binary)
-    child.arguments = [helper.stateFile]          // no "self": it only reports
+    child.arguments = [helper.stateFile]          // report only
     try child.run()
     defer { if child.isRunning { kill(child.processIdentifier, SIGKILL) } }
 
     // Pins the premise: the target starts un-demoted and is really reporting.
     try #require(reportReaches("0", at: helper.stateFile, within: 10),
                  "the child never reported its state; the reading below would be stale")
+    let before = try #require(bsdFlags(of: child.processIdentifier))
+    try #require(before & extDarwinBG == 0,
+                 "the target is already externally demoted; the transition below would be invisible")
 
     errno = 0
     let rc = setpriority(PRIO_DARWIN_PROCESS,
                          id_t(bitPattern: child.processIdentifier), PRIO_DARWIN_BG)
-    let failure = errno
-
-    // The call claims to have worked. That claim is the trap.
     #expect(rc == 0)
-    #expect(failure == 0)
+    #expect(errno == 0)
 
-    // Ten reporting cycles later the target still reads itself as 0. This is
-    // the load-bearing assertion: a return code is a claim about a call, not
-    // about the machine — `DemotionProbe.swift:61`.
-    usleep(500_000)
+    usleep(500_000)                               // ten reporting cycles
+
+    // The blind instrument, kept deliberately. This is the reading that misled
+    // an earlier version of this file.
     #expect(readReport(at: helper.stateFile) == "0")
+
+    // The instrument that is not blind — same process, same moment. This is the
+    // assertion that makes the test discriminate: without it the test passes
+    // whether or not the demotion happened.
+    let after = try #require(bsdFlags(of: child.processIdentifier))
+    #expect(after & extDarwinBG != 0,
+            "the external demotion did not take effect")
+
+    // And the bit tracks the call rather than drifting on its own: clearing it
+    // puts the process back. Also leaves nothing throttled behind.
+    _ = setpriority(PRIO_DARWIN_PROCESS,
+                    id_t(bitPattern: child.processIdentifier), 0)
+    usleep(200_000)
+    let cleared = try #require(bsdFlags(of: child.processIdentifier))
+    #expect(cleared & extDarwinBG == 0)
+}
+
+@Test func anExternallyDemotedProcessStaysDemotedWhenTheDemoterIsSIGKILLed() throws {
+    // The hazard the shipped probe avoids by only ever targeting itself.
+    //
+    // A demotion applied to a FOREIGN process is state on that process, so it
+    // outlives whatever applied it. No restore-on-exit can help: a SIGKILLed
+    // demoter runs no cleanup at all, by definition.
+    //
+    // Handoff §5.6 plans a `ProcGovernor` that demotes arbitrary same-uid pids.
+    // This measures what that costs when the app crashes. `ProcGovernor` needs a
+    // real restore-on-exit — a supervising process that outlives the app, or a
+    // journal a later run reads back — BEFORE it demotes any pid it does not
+    // own. Nothing in this app restores a foreign pid after a crash today.
+    let victimHelper = try buildStateReporter()
+    let demoterHelper = try buildStateReporter()
+
+    let victim = Process()
+    victim.executableURL = URL(fileURLWithPath: victimHelper.binary)
+    victim.arguments = [victimHelper.stateFile]
+    try victim.run()
+    defer { if victim.isRunning { kill(victim.processIdentifier, SIGKILL) } }
+    try #require(reportReaches("0", at: victimHelper.stateFile, within: 10),
+                 "the victim never started; the readings below would be stale")
+
+    let demoter = Process()
+    demoter.executableURL = URL(fileURLWithPath: demoterHelper.binary)
+    demoter.arguments = [demoterHelper.stateFile, "demote", "\(victim.processIdentifier)"]
+    try demoter.run()
+    defer { if demoter.isRunning { kill(demoter.processIdentifier, SIGKILL) } }
+
+    try #require(reportReaches("demote rc=0 errno=0", at: demoterHelper.stateFile, within: 10),
+                 "the demoter never reported a successful call; nothing below would be about a demotion")
+    let held = try #require(bsdFlags(of: victim.processIdentifier))
+    try #require(held & extDarwinBG != 0,
+                 "the victim was never demoted; its survival below would prove nothing")
+
+    // Crash the demoter. It never restores the victim, and it gets no chance to.
+    kill(demoter.processIdentifier, SIGKILL)
+    demoter.waitUntilExit()
+    #expect(demoter.terminationReason == .uncaughtSignal)
+    #expect(demoter.terminationStatus == SIGKILL)
+    errno = 0
+    #expect(kill(demoter.processIdentifier, 0) == -1)
+    #expect(errno == ESRCH)
+
+    usleep(500_000)
+
+    // The victim is STILL demoted. The demoter is gone and nothing restored it.
+    let stranded = try #require(bsdFlags(of: victim.processIdentifier))
+    #expect(stranded & extDarwinBG != 0,
+            "the demotion did not outlive the demoter; the crash hazard this test records has changed")
+
+    // Undo it, so the suite leaves no process throttled. The test asserts the
+    // hazard; it must not inflict it.
+    _ = setpriority(PRIO_DARWIN_PROCESS,
+                    id_t(bitPattern: victim.processIdentifier), 0)
 }
 
 @Test func theShippedProbeDemotesOnlyItsOwnProcess() throws {
-    // The crash path above is safe for one reason: the only process the probe
-    // ever demotes is itself, so a SIGKILL takes the demotion with it. A probe
-    // that demoted a third party would depend on its own survival to undo the
-    // change.
+    // THE load-bearing test for crash safety. The shipped binary is safe under
+    // a crash for exactly one reason: the only process it ever demotes is
+    // itself, so the demotion lives on the task that dies. The test above shows
+    // what a foreign target would cost, and nothing here restores one.
     //
     // `RunCommand` passes `getpid()`, and it lives in an executable target that
     // no test can import, so a real run of the shipped binary is the only place

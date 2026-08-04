@@ -128,8 +128,14 @@ public struct FileJournalStore: JournalStoring {
         // replace, with it 0600.
         //
         // Chmod'ing after the rename would leave the journal world-readable for
-        // the window in between. The option carries the temp file's mode across
-        // the rename itself, so there is no window.
+        // the window in between — and a crash inside that window would leave it
+        // 0644 permanently, which is worse than the window. The option carries
+        // the temp file's mode across the rename itself, so there is no window.
+        //
+        // It also discards the destination's extended attributes, verified with
+        // a marker xattr that does not survive the replace. That is acceptable
+        // here and is part of the point: this app owns the journal completely,
+        // and an xattr on it came from somewhere else.
         _ = try FileManager.default.replaceItemAt(
             url, withItemAt: tmp, options: .usingNewMetadataOnly)
 
