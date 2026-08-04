@@ -18,7 +18,7 @@ source and installs 0.1.0. The two tags carry the same code, so v0.1.1 is that
 source, newly signed. To build that source yourself, see
 [Building](BUILDING.md). It takes about a minute.
 
-Once the first release is tagged, the install is:
+The install through Homebrew is:
 
     brew tap ArangoGutierrez/coffee-bar
     brew install coffee-bar
