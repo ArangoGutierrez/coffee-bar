@@ -98,7 +98,7 @@
 <h3 class="eyebrow">Added</h3>
 
 <ul class="does">
-  <li>A disk image, <code>coffee-bar-0.1.1.dmg</code>, on the <a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.1.1">GitHub release page</a>. It is the first artifact signed with a Developer ID, notarised by Apple, and stapled. macOS opens it without a Gatekeeper warning.</li>
+  <li>A disk image, <code>coffee-bar-0.1.1.dmg</code>, on the <a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.1.1">GitHub release page</a>. It is the first artifact signed with a Developer ID, notarised by Apple, and stapled.</li>
 </ul>
 
 <div class="table-wrap">
@@ -158,8 +158,8 @@ spctl -a -t open --context context:primary-signature -vv coffee-bar-0.1.1.dmg</p
 <h3 class="eyebrow">Added</h3>
 
 <ul class="does">
-  <li>The wake policy. coffee-bar holds a <code>PreventUserIdleSystemSleep</code> assertion while an agent session is <code>starting</code> or <code>working</code>. It releases the assertion when every session waits on a human. A session that waits on you holds nothing.</li>
-  <li>The Serving control, with three positions. <code>Off</code> never holds, and it outranks an active session. <code>Auto</code> is the default, and the sessions decide. <code>On</code> always holds.</li>
+  <li>The wake policy. Under <code>Auto</code>, coffee-bar holds a <code>PreventUserIdleSystemSleep</code> assertion while an agent session is <code>starting</code> or <code>working</code>. It releases the assertion when every session waits on a human. Under <code>Auto</code>, a session that waits on you holds nothing.</li>
+  <li>The Serving control, with three positions. <code>Off</code> never holds, and it outranks an active session. <code>Auto</code> is the default, and the sessions decide. <code>On</code> holds whatever the sessions do. The battery floor below still applies to <code>Auto</code> and to <code>On</code>.</li>
   <li>The Display control, with two positions. <code>Sleeps</code> is the default, so the screen goes dark while the machine stays awake. <code>Stays on</code> adds a <code>PreventUserIdleDisplaySleep</code> assertion. That assertion rides the system hold and never outlives it.</li>
   <li>The battery floor. On battery, at or below 20%, coffee-bar does not hold. The floor also refuses the display assertion. "At or below" is exact: at 20% itself coffee-bar does not hold.</li>
   <li>Ingest over a unix socket with mode 0600. Five Claude Code hooks feed it: <code>SessionStart</code>, <code>PreToolUse</code>, <code>PostToolUse</code>, <code>PermissionDenied</code> and <code>Stop</code>. The app learns what your sessions do from these hooks and from nothing else.</li>
