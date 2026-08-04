@@ -191,6 +191,14 @@ strong { font-weight: 650; }
 }
 .btn-download:hover { filter: brightness(1.06); }
 
+/* The facts line under the button. Secondary information under a primary
+   action: it sits tight to the button and must not compete with it. --dim on
+   --bg measures 6.26 light and 7.26 dark, so it stays legible at this size. */
+.dl-meta {
+  margin: .55rem 0 0;
+  font-size: .84rem; line-height: 1.5; color: var(--dim);
+}
+
 /* ── Signature: the assertion timeline ─────────────────────────────────── */
 .figure {
   background: var(--panel); border: 1px solid var(--line);
@@ -246,6 +254,50 @@ ul.does li::before {
   color: var(--dim); margin: 1.75rem 0 0;
 }
 
+/* ── Tables ────────────────────────────────────────────────────────────── */
+/* Three consumers: the changelog's release facts, the Docs comparisons, and
+   the policy bench's static 24-row decision table. That last one is the
+   no-JavaScript and crawler path, so it is load-bearing, not decorative. It
+   has to stay readable at 24 rows.
+
+   Rules use --line. Banding uses --panel. NEVER --state or --action: --state
+   means "held awake" on this site, and a striped row means nothing of the
+   kind.
+
+   Wrap a wide table in <div class="table-wrap"> so the overflow lives on the
+   table's own container. Never let a table scroll the page. */
+.table-wrap { overflow-x: auto; margin: 0 0 1.5rem; }
+table {
+  border-collapse: collapse;
+  width: 100%; max-width: 100%;
+  font-size: .88rem; line-height: 1.5;
+  margin: 0 0 1.5rem;
+}
+.table-wrap > table { margin: 0; }
+caption {
+  caption-side: top; text-align: left;
+  font-size: .82rem; color: var(--dim); padding: 0 0 .5rem;
+}
+th, td {
+  text-align: left; vertical-align: top;
+  padding: .45rem .7rem;
+  border-bottom: 1px solid var(--line);
+}
+/* The header row must be told apart at a glance from 24 body rows. */
+thead th {
+  font-size: .72rem; text-transform: uppercase; letter-spacing: .08em;
+  font-weight: 600; color: var(--dim);
+  border-bottom: 2px solid var(--line);
+}
+tbody tr:nth-child(even) { background: var(--panel); }
+tbody tr:last-child > * { border-bottom: 0; }
+/* A row-label column, as the release facts use. Short strings, so keeping
+   them on one line costs nothing. */
+tbody th { font-weight: 650; white-space: nowrap; }
+/* The hard case: a 64-character SHA-256. It wraps inside its own cell rather
+   than pushing the table wider than the column it sits in. */
+td code, td .mono { overflow-wrap: anywhere; word-break: break-word; }
+
 /* ── Install: a real sequence, so the numbering carries meaning ────────── */
 ol.steps { list-style: none; counter-reset: s; padding: 0; margin: 0; }
 ol.steps > li { counter-increment: s; position: relative; padding-left: 2.4rem; margin-bottom: 1.8rem; }
@@ -269,6 +321,15 @@ footer {
   margin-top: 4.5rem; padding-top: 1.5rem; border-top: 1px solid var(--line);
   color: var(--dim); font-size: .85rem;
 }
+/* The trademark line. The quietest text on the page, and it must stay that
+   way: it is legal boilerplate, not something to read first. It still has to
+   be readable, so it holds --dim (6.26 light, 7.26 dark) and stops at
+   .75rem rather than shrinking further. */
+.tm {
+  margin: .9rem 0 0;
+  font-size: .75rem; line-height: 1.5; color: var(--dim);
+  max-width: 62ch;
+}
 
 @media (max-width: 34rem) {
   .row, .axis { grid-template-columns: 1fr; gap: .35rem; }
@@ -276,4 +337,7 @@ footer {
   .axis { display: none; }
   .hero { gap: 1rem; }
   .appicon { width: 64px; height: 64px; }
+  /* Let a row label wrap here. Holding it on one line costs the value column
+     the width a 64-character SHA-256 needs most on a phone. */
+  tbody th { white-space: normal; }
 }
