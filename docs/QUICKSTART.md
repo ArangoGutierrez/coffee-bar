@@ -156,4 +156,19 @@ it starts, look for the cup at the right end of the menu bar, near the clock.
 Click the cup to open the panel. If your menu bar is full, macOS drops status
 items silently and the cup will not appear.
 
-The panel holds a Serving switch, a battery line, and Quit.
+The panel holds three controls, a battery line, and Quit.
+
+| Control | What it decides |
+|---|---|
+| Serving | Whether to hold at all. Off is an absolute veto. |
+| Display | Whether a hold covers the screen as well as the machine. |
+| Battery floor | How much battery a hold may spend. |
+
+The Battery floor control ships at 20%.
+On battery, coffee-bar does not hold at or below 20%.
+Move it up if you want the machine to sleep sooner, or down if you are beside a
+charger. The floor governs every Serving position, including Auto, and it
+outranks the Display control — a screen held below the floor drains the battery
+faster than the hold the floor has just refused.
+
+Your choice is remembered across launches.
