@@ -31,9 +31,16 @@ DST = pathlib.Path(sys.argv[2])
 CONTENT_KEYS = {"last_assistant_message", "tool_input", "tool_response",
                 "prompt", "message", "background_tasks", "reason"}
 # Identifiers replaced with stable fakes so tests can assert on them.
+#
+# `turn_id` is Codex's per-turn identifier and the analogue of Claude Code's
+# `prompt_id`. It is here because it is UUID-shaped: without an entry the
+# generic UUID rule in scrub_path() rewrites it to the SESSION id, and the
+# fixture then claims turn_id == session_id, which no real payload does. A
+# fixture that invents a shape is the one thing this corpus must never do.
 ID_MAP = {
     "session_id": "11111111-2222-3333-4444-555555555555",
     "prompt_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    "turn_id": "99999999-8888-7777-6666-555555555555",
     "tool_use_id": "toolu_FIXTUREFIXTUREFIXTURE01",
 }
 
