@@ -656,7 +656,8 @@ public final class ServingModel {
         attention = AttentionList.rows(from: sessions)
         working = AttentionList.working(from: sessions)
         desired = state
-        suppression = Self.reason(controller.lastSuppression, stillTrueOf: reading)
+        suppression = Self.reason(controller.lastSuppression, stillTrueOf: reading,
+                                  underFloor: batteryFloorPercentStorage)
         // Gated on the FILTERED value above, not on the controller alone, so the
         // claim dies with the sentence that explains it. A recovery above the
         // floor drops both together —
@@ -826,14 +827,44 @@ public final class ServingModel {
     /// `theSuppressionLineSurvivesARecoveryToExactlyTheFloor` exist to catch,
     /// and it would leave a user who clicked On with no session running looking
     /// at a refusal and no reason for it.
+    /// **The floor comes from the SETTING, not from the record, and issue #11
+    /// is why.** Until the floor was settable the two were always the same
+    /// number, so reading it off the record was free. A floor the user can move
+    /// makes them different, and the record is the stale one:
+    ///
+    ///   - lowered, the recorded floor still suppresses the current reading
+    ///     while the real one does not, so the panel explains a refusal while
+    ///     the machine is held. Measured, not reasoned:
+    ///     `loweringTheFloorDropsTheSentenceThatNamedTheOldOne` catches
+    ///     `isServing` true and the sentence on screen together.
+    ///   - raised with nothing running, no fresh suppression is produced, so
+    ///     the record keeps the old number and the change the user just made
+    ///     looks lost.
+    ///
+    /// So the returned reason carries the floor IN FORCE. The percent is left
+    /// alone and stays the reading the DECISION was made on, which is the older
+    /// deliberate half — the battery keeps draining after a release, and the
+    /// panel's battery line carries the current value.
+    ///
+    /// Gating on the setting rather than dropping every reason when the floor
+    /// moves is deliberate. Dropping would take the line away from a user who
+    /// has just RAISED the floor on a quiet machine, which is the moment they
+    /// most need it. `raisingTheFloorRestatesTheSentenceWithTheNewNumber` and
+    /// `theLeftoverSentenceQuotesTheFloorInForceNotTheOneItWasRecordedUnder`
+    /// hold that from both sides.
+    ///
+    /// The floor arrives here UNBOUNDED, and that is correct rather than an
+    /// oversight: this asks what the user set, not what the decision enforces.
+    /// `BatteryFloor` states why bounding happens once, in `PowerInputs.init`.
     private static func reason(_ suppression: HoldSuppression?,
-                               stillTrueOf reading: PowerReading) -> HoldSuppression? {
-        guard case .batteryFloor(_, let floor) = suppression,
+                               stillTrueOf reading: PowerReading,
+                               underFloor floor: Int) -> HoldSuppression? {
+        guard case .batteryFloor(let measured, _) = suppression,
               reading.source == .battery,
               let percent = reading.percent,
               percent <= floor
         else { return nil }
 
-        return suppression
+        return .batteryFloor(percent: measured, floor: floor)
     }
 }
