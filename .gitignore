@@ -7,3 +7,10 @@ DerivedData/
 .DS_Store
 docs/probe-results.local.md
 .worktrees/
+
+# Signing and notarisation secrets. Never commit these; keep API keys under
+# ~/.appstoreconnect/private_keys/ instead of the working tree.
+*.p8
+*.p12
+*.cer
+*.mobileprovision
