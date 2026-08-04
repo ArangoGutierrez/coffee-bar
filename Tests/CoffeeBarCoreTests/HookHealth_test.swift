@@ -159,28 +159,54 @@ private let toolExclusions: [AgentTool: Set<String>] = [
     //              build. Requiring an entry the tool may never send would leave
     //              the advisory permanently red with nothing the user could do.
     .codex: ["PreCompact", "SessionEnd", "PermissionDenied"],
+
+    // sessionEnd — the same optional terminator as the other two tools'.
+    //              Cursor's four events with no recorded payload are not listed
+    //              here at all: `CursorEventKind` has no case for them, so there
+    //              is nothing to classify. That is the stronger position.
+    .cursor: ["sessionEnd"],
 ]
+
+/// The wire names the hub can act on for `tool`.
+///
+/// Read from the tool's own vocabulary, because Cursor does not share Claude
+/// Code's. Comparing a Cursor advisory against `HookEventKind` would find every
+/// entry unclassified and say nothing true.
+private func vocabulary(of tool: AgentTool) -> [String] {
+    switch tool {
+    case .claudeCode, .codex: return HookEventKind.allCases.map(\.rawValue)
+    case .cursor: return CursorEventKind.allCases.map(\.rawValue)
+    }
+}
 
 @Test(arguments: toolExclusions.keys.sorted { $0.rawValue < $1.rawValue })
 func everyHookEventIsEitherRequiredOrDeliberatelyExcluded(_ tool: AgentTool) throws {
     let required = try #require(HookHealth.requiredEvents(for: tool),
                                 "\(tool.rawValue) has no advisory but is listed with exclusions")
     let excluded = try #require(toolExclusions[tool])
+    let known = vocabulary(of: tool)
+    #expect(known.count >= 6, "\(tool.rawValue) has \(known.count) known events; this loop would be thin")
 
-    for kind in HookEventKind.allCases {
-        let isRequired = required.contains(kind.rawValue)
-        let isExcluded = excluded.contains(kind.rawValue)
+    for name in known {
+        let isRequired = required.contains(name)
+        let isExcluded = excluded.contains(name)
         #expect(isRequired || isExcluded,
-                "\(kind.rawValue) is neither required nor a documented exclusion for \(tool.rawValue); classify it")
+                "\(name) is neither required nor a documented exclusion for \(tool.rawValue); classify it")
         #expect(!(isRequired && isExcluded),
-                "\(kind.rawValue) is both required and excluded for \(tool.rawValue)")
+                "\(name) is both required and excluded for \(tool.rawValue)")
     }
 
     // An exclusion naming an event that does not exist is a stale waiver, and it
     // would quietly widen the list above.
     for name in excluded {
-        #expect(HookEventKind(rawValue: name) != nil,
-                "\(name) is excluded for \(tool.rawValue) but is not a HookEventKind")
+        #expect(known.contains(name),
+                "\(name) is excluded for \(tool.rawValue) but is not one of its events")
+    }
+
+    // Every required entry must be one the hub can actually act on.
+    for name in required {
+        #expect(known.contains(name),
+                "\(tool.rawValue) requires \(name), which is not in its vocabulary")
     }
 }
 
@@ -191,12 +217,18 @@ func everyHookEventIsEitherRequiredOrDeliberatelyExcluded(_ tool: AgentTool) thr
 /// their tool send. Named bug this catches: an event copied from one tool's list
 /// into another's because the vocabulary looks the same. `PermissionDenied` is
 /// exactly that trap — it is real for Claude Code and unrecorded for Codex.
-@Test(arguments: [AgentTool.claudeCode, .codex])
+@Test(arguments: AgentTool.allCases)
 func everyRequiredEventHasARecordedPayloadForThatTool(_ tool: AgentTool) throws {
+    let corpus: String
+    switch tool {
+    case .claudeCode: corpus = "claude-hooks"
+    case .codex: corpus = "codex-hooks"
+    case .cursor: corpus = "cursor-hooks"
+    }
     let directory = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
         .deletingLastPathComponent()
-        .appending(path: "Fixtures/\(tool == .claudeCode ? "claude" : "codex")-hooks")
+        .appending(path: "Fixtures/\(corpus)")
 
     let names = try FileManager.default
         .contentsOfDirectory(atPath: directory.path)
@@ -229,10 +261,14 @@ func everyRequiredEventHasARecordedPayloadForThatTool(_ tool: AgentTool) throws 
     #expect(HookHealth.requiredEvents(for: .claudeCode) == HookHealth.requiredEvents)
 }
 
-@Test func aToolWithNoAdvisoryAnswersNilRatherThanAnEmptyList() {
-    // `nil` and `[]` are different claims. An empty list would make
-    // `status(ofSettings:)` report `.wired` for a tool coffee-bar cannot advise
-    // on at all — a green light for a check that never ran.
+@Test func everyAdvisoryAsksForSomethingAndIsAlreadySorted() {
+    // All three tools have an advisory today. The optional return stays the way
+    // to say "no advice": `nil` and `[]` are different claims, and an empty list
+    // would make a filter match everything and report `.wired` for a check that
+    // never ran.
+    //
+    // Sorted matters because `status(ofSettings:)` filters the array and a
+    // filter preserves order, so the panel's line rests on the source list.
     for tool in AgentTool.allCases {
         if let events = HookHealth.requiredEvents(for: tool) {
             #expect(!events.isEmpty, "\(tool.rawValue) has an advisory that asks for nothing")

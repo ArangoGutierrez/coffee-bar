@@ -62,9 +62,10 @@ public enum HookHealth {
     /// - `UserPromptSubmit` is Codex only. Claude Code sends it, but no Claude
     ///   Code payload for it was ever captured.
     ///
-    /// **`nil` is not `[]`.** An empty list would satisfy every filter and make
-    /// the panel report `.wired` for a tool this app cannot advise on at all —
-    /// a green light for a check that never ran. `nil` says there is no advice.
+    /// **`nil` is not `[]`.** Every tool has an advisory today, but the return
+    /// stays optional because those are different claims: an empty list would
+    /// satisfy every filter and report `.wired` for a check that never ran,
+    /// whereas `nil` says there is no advice to give.
     public static func requiredEvents(for tool: AgentTool) -> [String]? {
         switch tool {
         case .claudeCode:
@@ -73,12 +74,14 @@ public enum HookHealth {
             return ["PostToolUse", "PreToolUse", "SessionStart", "Stop",
                     "UserPromptSubmit"]
         case .cursor:
-            // Cursor's payloads are recorded, but nothing in this build ingests
-            // them yet, and `~/.cursor/hooks.json` is a different file in a
-            // different shape from the one `status(ofSettings:)` parses. An
-            // advisory here would tell the user to wire hooks this app would
-            // then drop.
-            return nil
+            // Cursor's own vocabulary, not a translation of Claude Code's.
+            // `sessionEnd` is left out for the same reason `SessionEnd` is.
+            //
+            // Cursor's `stop` is absent because no payload for it exists, not
+            // because it would be unwanted — it is the one event that would tell
+            // the panel a Cursor session is waiting on the human.
+            return ["afterFileEdit", "afterShellExecution", "beforeReadFile",
+                    "beforeShellExecution", "sessionStart"]
         }
     }
 

@@ -307,6 +307,31 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
         cancelling?.cancel()
     }
 
+    /// Decodes a payload with the decoder its declared origin calls for.
+    ///
+    /// Two envelopes exist, and which one applies is settled by the origin
+    /// rather than by trying both. Claude Code and Codex share
+    /// `HookEvent`. Cursor has its own, because four of its six recorded
+    /// payloads carry no `session_id` at all and `HookEvent` makes that field
+    /// non-optional — so they throw rather than decode.
+    ///
+    /// Trying both decoders in turn would be worse than useless here: a Cursor
+    /// `sessionStart` DOES carry `session_id`, so it would decode as a
+    /// `HookEvent`, resolve against the wrong vocabulary and drive nothing,
+    /// while its four sibling events failed outright. The origin is known, so
+    /// it is used.
+    ///
+    /// `nil` means the bytes are not that tool's envelope, and the caller
+    /// answers 400.
+    private static func decode(_ body: Data, from tool: AgentTool) -> HookEvent? {
+        switch tool {
+        case .claudeCode, .codex:
+            return try? JSONDecoder().decode(HookEvent.self, from: body)
+        case .cursor:
+            return (try? JSONDecoder().decode(CursorHookEvent.self, from: body))?.normalised
+        }
+    }
+
     // MARK: - Who owns the node
 
     private enum Occupant {
@@ -602,7 +627,7 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
                         self.respond(connection, status: "404 Not Found", state: state)
                         return
                     }
-                    if let event = try? JSONDecoder().decode(HookEvent.self, from: body) {
+                    if let event = Self.decode(body, from: tool) {
                         onEvent(tool, event)
                         self.respond(connection, status: "204 No Content", state: state)
                     } else {
