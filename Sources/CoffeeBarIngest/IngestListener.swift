@@ -32,7 +32,7 @@ public enum IngestError: Error, Equatable {
 /// comment from a call.
 public protocol IngestListening: Sendable {
     /// Delivers every decoded event ON THE MAIN THREAD. See `start(queue:)`.
-    func start(onEvent: @escaping @Sendable (HookEvent) -> Void) throws
+    func start(onEvent: @escaping @Sendable (AgentTool, HookEvent) -> Void) throws
     func stop()
 
     /// Whether this listener is serving RIGHT NOW.
@@ -180,7 +180,7 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
         return activeConnections
     }
 
-    public func start(onEvent: @escaping @Sendable (HookEvent) -> Void) throws {
+    public func start(onEvent: @escaping @Sendable (AgentTool, HookEvent) -> Void) throws {
         guard socketPath.utf8.count <= Self.maximumPathBytes else {
             throw IngestError.socketPathTooLong(socketPath.utf8.count)
         }
@@ -493,7 +493,7 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
     }
 
     private func accept(_ connection: NWConnection,
-                        onEvent: @escaping @Sendable (HookEvent) -> Void) {
+                        onEvent: @escaping @Sendable (AgentTool, HookEvent) -> Void) {
         lock.lock()
         let admitted = activeConnections < maximumConnections
         if admitted { activeConnections += 1 }
@@ -569,7 +569,7 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
 
     private func receive(_ connection: NWConnection,
                          state: ConnectionState,
-                         onEvent: @escaping @Sendable (HookEvent) -> Void) {
+                         onEvent: @escaping @Sendable (AgentTool, HookEvent) -> Void) {
         connection.receive(minimumIncompleteLength: 1,
                            maximumLength: Self.receiveChunkBytes) {
             [weak self] data, _, isComplete, error in
@@ -590,8 +590,20 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
                     // listener survives. Cancelling here would let one malformed
                     // post silently stop ingest for the session while the panel
                     // kept looking healthy.
+                    //
+                    // The endpoint is read BEFORE the body. It is how the sender
+                    // declares which agent it is, and a payload whose origin is
+                    // unknown is refused rather than attributed to a default:
+                    // the wrong tool drives the wrong state machine silently,
+                    // which is worse than a visible 400. See
+                    // `AgentTool.declared(byEndpoint:)`.
+                    guard let target = state.framer.requestTarget,
+                          let tool = AgentTool.declared(byEndpoint: target) else {
+                        self.respond(connection, status: "404 Not Found", state: state)
+                        return
+                    }
                     if let event = try? JSONDecoder().decode(HookEvent.self, from: body) {
-                        onEvent(event)
+                        onEvent(tool, event)
                         self.respond(connection, status: "204 No Content", state: state)
                     } else {
                         self.respond(connection, status: "400 Bad Request", state: state)

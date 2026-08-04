@@ -25,12 +25,12 @@ import CoffeeBarPower
 /// It keeps the handler it is given, so a check can post an event by hand.
 private final class StubListener: IngestListening, @unchecked Sendable {
     private let lock = NSLock()
-    private var handler: (@Sendable (HookEvent) -> Void)?
+    private var handler: (@Sendable (AgentTool, HookEvent) -> Void)?
     private var started = 0
     private var stopped = 0
     private var ready = false
 
-    func start(onEvent: @escaping @Sendable (HookEvent) -> Void) throws {
+    func start(onEvent: @escaping @Sendable (AgentTool, HookEvent) -> Void) throws {
         lock.lock(); defer { lock.unlock() }
         handler = onEvent
         started += 1
@@ -56,11 +56,14 @@ private final class StubListener: IngestListening, @unchecked Sendable {
     /// is the thread `UnixSocketIngestListener` delivers on — see
     /// `deliveryHappensOnTheMainThread`. A double that delivered anywhere else
     /// would let `MainActor.assumeIsolated` pass here and trap in production.
-    func deliver(_ event: HookEvent) {
+    /// `from` defaults to Claude Code so the checks written before adapters
+    /// existed still read cleanly. Every check that cares about the origin
+    /// passes it explicitly.
+    func deliver(_ event: HookEvent, from tool: AgentTool = .claudeCode) {
         lock.lock()
         let handler = self.handler
         lock.unlock()
-        handler?(event)
+        handler?(tool, event)
     }
 }
 
@@ -70,7 +73,7 @@ private final class StubListener: IngestListening, @unchecked Sendable {
 private struct ListenerRefused: Error {}
 
 private final class RefusingListener: IngestListening, @unchecked Sendable {
-    func start(onEvent: @escaping @Sendable (HookEvent) -> Void) throws {
+    func start(onEvent: @escaping @Sendable (AgentTool, HookEvent) -> Void) throws {
         throw ListenerRefused()
     }
     func stop() {}
@@ -88,7 +91,7 @@ private final class RefusingListener: IngestListening, @unchecked Sendable {
 private final class AlreadyServingListener: IngestListening, @unchecked Sendable {
     static let takenPath = "/Users/example/Library/Application Support/coffee-bar/ingest.sock"
 
-    func start(onEvent: @escaping @Sendable (HookEvent) -> Void) throws {
+    func start(onEvent: @escaping @Sendable (AgentTool, HookEvent) -> Void) throws {
         throw IngestError.alreadyServing(Self.takenPath)
     }
     func stop() {}
@@ -104,7 +107,7 @@ private final class FlakyListener: IngestListening, @unchecked Sendable {
     private var attempts = 0
     private var ready = false
 
-    func start(onEvent: @escaping @Sendable (HookEvent) -> Void) throws {
+    func start(onEvent: @escaping @Sendable (AgentTool, HookEvent) -> Void) throws {
         lock.lock(); defer { lock.unlock() }
         attempts += 1
         if attempts == 1 { throw IngestError.alreadyServing(AlreadyServingListener.takenPath) }

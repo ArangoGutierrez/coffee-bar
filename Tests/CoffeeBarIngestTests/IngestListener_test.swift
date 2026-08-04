@@ -113,7 +113,7 @@ private func post(_ json: String, to socketPath: String) throws -> Int32 {
                          "-X", "POST",
                          "-H", "Content-Type: application/json",
                          "--data", json,
-                         "http://localhost/ingest"]
+                         "http://localhost/event"]
     process.standardOutput = FileHandle.nullDevice
     process.standardError = FileHandle.nullDevice
     try process.run()
@@ -140,7 +140,7 @@ private func post(contentsOfFile path: String, to socketPath: String) throws -> 
                          "-X", "POST",
                          "-H", "Content-Type: application/json",
                          "--data-binary", "@\(path)",
-                         "http://localhost/ingest"]
+                         "http://localhost/event"]
     process.standardOutput = FileHandle.nullDevice
     process.standardError = FileHandle.nullDevice
     try process.run()
@@ -374,7 +374,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
 
-    try listener.start { event in
+    try listener.start { _, event in
         collected.record(event, onMain: Thread.isMainThread)
     }
     try requireReady(listener)
@@ -397,7 +397,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let collected = Collected()
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
-    try listener.start { event in
+    try listener.start { _, event in
         collected.record(event, onMain: Thread.isMainThread)
     }
     try requireReady(listener)
@@ -417,7 +417,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let collected = Collected()
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
-    try listener.start { event in
+    try listener.start { _, event in
         collected.record(event, onMain: Thread.isMainThread)
     }
     try requireReady(listener)
@@ -443,13 +443,13 @@ private func waitUntilNothingAnswers(at path: String) {
     let collected = Collected()
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
-    try listener.start { event in
+    try listener.start { _, event in
         collected.record(event, onMain: Thread.isMainThread)
     }
     try requireReady(listener)
 
     let attacker = try #require(RawClient(path: sandbox.path))
-    attacker.transmit("POST /ingest HTTP/1.1\r\nHost: localhost\r\nContent-Length: -1\r\n\r\n")
+    attacker.transmit("POST /event HTTP/1.1\r\nHost: localhost\r\nContent-Length: -1\r\n\r\n")
     pump(until: { attacker.peerClosed })
     attacker.close()
 
@@ -468,7 +468,7 @@ private func waitUntilNothingAnswers(at path: String) {
     defer { sandbox.remove() }
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
-    try listener.start { _ in }
+    try listener.start { _, _ in }
     try requireReady(listener)
 
     #expect(mode(ofItemAtPath: sandbox.path) == 0o600,
@@ -484,7 +484,7 @@ private func waitUntilNothingAnswers(at path: String) {
     defer { sandbox.remove() }
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
-    try listener.start { _ in }
+    try listener.start { _, _ in }
     try requireReady(listener)
 
     #expect(mode(ofItemAtPath: sandbox.directory.path) == 0o700,
@@ -506,7 +506,7 @@ private func waitUntilNothingAnswers(at path: String) {
 
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
-    try listener.start { _ in }
+    try listener.start { _, _ in }
     try requireReady(listener)
 
     #expect(mode(ofItemAtPath: sandbox.directory.path) == 0o700)
@@ -526,7 +526,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let sandbox = SocketSandbox()
     defer { sandbox.remove() }
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
-    try listener.start { _ in }
+    try listener.start { _, _ in }
     try requireReady(listener)
     #expect(FileManager.default.fileExists(atPath: sandbox.path))
 
@@ -550,12 +550,12 @@ private func waitUntilNothingAnswers(at path: String) {
 
     let first = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { first.stop() }
-    try first.start { event in collected.record(event, onMain: Thread.isMainThread) }
+    try first.start { _, event in collected.record(event, onMain: Thread.isMainThread) }
     try requireReady(first)
 
     let second = UnixSocketIngestListener(socketPath: sandbox.path)
     #expect(throws: IngestError.alreadyServing(sandbox.path)) {
-        try second.start { _ in }
+        try second.start { _, _ in }
     }
 
     #expect(try post(#"{"hook_event_name":"Stop","session_id":"first"}"#,
@@ -599,7 +599,7 @@ private func waitUntilNothingAnswers(at path: String) {
 
     do {
         let listener = UnixSocketIngestListener(socketPath: sandbox.path)
-        try listener.start { _ in }
+        try listener.start { _, _ in }
         try requireReady(listener)
         // Precondition, not the point: the socket really was bound, so what the
         // assertions below measure is a RELEASE and not a failed bind.
@@ -643,7 +643,7 @@ private func waitUntilNothingAnswers(at path: String) {
     try control.makeDirectory()
 
     let stopped = UnixSocketIngestListener(socketPath: control.path)
-    try stopped.start { _ in }
+    try stopped.start { _, _ in }
     try requireReady(stopped)
     let answering = try #require(RawClient(path: control.path), "the control never bound")
     answering.close()
@@ -666,7 +666,7 @@ private func waitUntilNothingAnswers(at path: String) {
     defer { sandbox.remove() }
 
     let first = UnixSocketIngestListener(socketPath: sandbox.path)
-    try first.start { _ in }
+    try first.start { _, _ in }
     try requireReady(first)
     first.stop()
     waitUntilNothingAnswers(at: sandbox.path)
@@ -676,7 +676,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let collected = Collected()
     let second = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { second.stop() }
-    try second.start { event in collected.record(event, onMain: Thread.isMainThread) }
+    try second.start { _, event in collected.record(event, onMain: Thread.isMainThread) }
     try requireReady(second)
 
     #expect(try post(#"{"hook_event_name":"Stop","session_id":"second"}"#,
@@ -697,7 +697,7 @@ private func waitUntilNothingAnswers(at path: String) {
 
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
-    try listener.start { _ in }
+    try listener.start { _, _ in }
     try requireReady(listener)
 
     #expect(mode(ofItemAtPath: sandbox.path) == 0o600)
@@ -718,7 +718,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
     #expect(throws: IngestError.socketPathBlocked(sandbox.path)) {
-        try listener.start { _ in }
+        try listener.start { _, _ in }
     }
     #expect(FileManager.default.fileExists(atPath: witness),
             "start() deleted a directory it found at the socket path")
@@ -757,7 +757,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let collected = Collected()
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
-    try listener.start { event in collected.record(event, onMain: Thread.isMainThread) }
+    try listener.start { _, event in collected.record(event, onMain: Thread.isMainThread) }
     try requireReady(listener)
 
     #expect(!FileManager.default.fileExists(atPath: target.path),
@@ -811,7 +811,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
     #expect(throws: IngestError.socketPathBlocked(sandbox.path)) {
-        try listener.start { _ in }
+        try listener.start { _, _ in }
     }
 
     // A short budget of its own, because this condition must NEVER hold.
@@ -840,7 +840,7 @@ private func waitUntilNothingAnswers(at path: String) {
 
     // An unserved socket node. `stop()` leaves one behind on purpose.
     let dead = UnixSocketIngestListener(socketPath: target.path)
-    try dead.start { _ in }
+    try dead.start { _, _ in }
     try requireReady(dead)
     dead.stop()
     waitUntilNothingAnswers(at: target.path)
@@ -853,7 +853,7 @@ private func waitUntilNothingAnswers(at path: String) {
 
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
-    try listener.start { _ in }
+    try listener.start { _, _ in }
     try requireReady(listener)
 
     #expect(fileType(ofItemAtPath: sandbox.path) == .typeSocket,
@@ -879,7 +879,7 @@ private func waitUntilNothingAnswers(at path: String) {
 
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
-    try listener.start { _ in }
+    try listener.start { _, _ in }
     try requireReady(listener)
 
     #expect(fileType(ofItemAtPath: sandbox.path) == .typeSocket,
@@ -912,7 +912,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
     #expect(throws: IngestError.socketPathBlocked(sandbox.path)) {
-        try listener.start { _ in }
+        try listener.start { _, _ in }
     }
     #expect(FileManager.default.fileExists(atPath: witness),
             "start() reached a directory through the link and deleted what was under it")
@@ -939,7 +939,7 @@ private func waitUntilNothingAnswers(at path: String) {
     defer { sandbox.remove() }
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
-    try listener.start { _ in }
+    try listener.start { _, _ in }
     try requireReady(listener)
 
     try FileManager.default.removeItem(atPath: sandbox.path)
@@ -962,7 +962,7 @@ private func waitUntilNothingAnswers(at path: String) {
     defer { sandbox.remove() }
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
-    try listener.start { _ in }
+    try listener.start { _, _ in }
     try requireReady(listener)
 
     try FileManager.default.removeItem(atPath: sandbox.path)
@@ -993,7 +993,7 @@ private func waitUntilNothingAnswers(at path: String) {
     defer { sandbox.remove() }
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
-    try listener.start { _ in }
+    try listener.start { _, _ in }
     try requireReady(listener)
 
     let foreign = try #require(ForeignListener(takingOver: sandbox.path),
@@ -1035,7 +1035,7 @@ private func waitUntilNothingAnswers(at path: String) {
 
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
-    try listener.start { _ in }
+    try listener.start { _, _ in }
     try requireReady(listener)
 
     try FileManager.default.moveItem(atPath: sandbox.path, toPath: target.path)
@@ -1056,11 +1056,11 @@ private func waitUntilNothingAnswers(at path: String) {
     defer { sandbox.remove() }
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
-    try listener.start { _ in }
+    try listener.start { _, _ in }
     try requireReady(listener)
 
     #expect(throws: IngestError.alreadyServing(sandbox.path)) {
-        try listener.start { _ in }
+        try listener.start { _, _ in }
     }
 }
 
@@ -1076,12 +1076,12 @@ private func waitUntilNothingAnswers(at path: String) {
     let listener = UnixSocketIngestListener(socketPath: sandbox.path,
                                             idleTimeout: 0.5)
     defer { listener.stop() }
-    try listener.start { _ in }
+    try listener.start { _, _ in }
     try requireReady(listener)
 
     let client = try #require(RawClient(path: sandbox.path))
     defer { client.close() }
-    client.transmit("POST /ingest HTTP/1.1\r\nHost: localhost\r\n")
+    client.transmit("POST /event HTTP/1.1\r\nHost: localhost\r\n")
 
     pump(until: { client.peerClosed })
     #expect(client.peerClosed, "the listener parked a half-open connection forever")
@@ -1099,14 +1099,14 @@ private func waitUntilNothingAnswers(at path: String) {
                                             idleTimeout: 60,
                                             maximumConnections: 2)
     defer { listener.stop() }
-    try listener.start { _ in }
+    try listener.start { _, _ in }
     try requireReady(listener)
 
     var parked: [RawClient] = []
     defer { parked.forEach { $0.close() } }
     for _ in 0..<2 {
         let client = try #require(RawClient(path: sandbox.path))
-        client.transmit("POST /ingest HTTP/1.1\r\nHost: localhost\r\n")
+        client.transmit("POST /event HTTP/1.1\r\nHost: localhost\r\n")
         parked.append(client)
     }
     // Both must be ADMITTED before the third arrives, or this measures a race
@@ -1133,7 +1133,7 @@ private func waitUntilNothingAnswers(at path: String) {
 
     let extra = try #require(RawClient(path: sandbox.path))
     defer { extra.close() }
-    extra.transmit("POST /ingest HTTP/1.1\r\nHost: localhost\r\n")
+    extra.transmit("POST /event HTTP/1.1\r\nHost: localhost\r\n")
 
     // `peerClosed` is a CLIENT-side observation of a close that has to cross
     // Network.framework's async cancellation and then the socket. On this
@@ -1168,7 +1168,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let listener = UnixSocketIngestListener(socketPath: sandbox.path,
                                             maximumConnections: 2)
     defer { listener.stop() }
-    try listener.start { event in collected.record(event, onMain: Thread.isMainThread) }
+    try listener.start { _, event in collected.record(event, onMain: Thread.isMainThread) }
     try requireReady(listener)
 
     for index in 0..<3 {
@@ -1210,7 +1210,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let listener = UnixSocketIngestListener(socketPath: sandbox.path,
                                             idleTimeout: 1)
     defer { listener.stop() }
-    try listener.start { event in collected.record(event, onMain: Thread.isMainThread) }
+    try listener.start { _, event in collected.record(event, onMain: Thread.isMainThread) }
     try requireReady(listener)
 
     let posts = 5
@@ -1248,7 +1248,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let collected = Collected()
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
-    try listener.start { event in collected.record(event, onMain: Thread.isMainThread) }
+    try listener.start { _, event in collected.record(event, onMain: Thread.isMainThread) }
     try requireReady(listener)
 
     let filler = String(repeating: "x", count: 262_144)
@@ -1282,7 +1282,7 @@ private func waitUntilNothingAnswers(at path: String) {
     let long = "/tmp/" + String(repeating: "a", count: 120) + ".sock"
     let listener = UnixSocketIngestListener(socketPath: long)
     #expect(throws: IngestError.socketPathTooLong(long.utf8.count)) {
-        try listener.start { _ in }
+        try listener.start { _, _ in }
     }
 }
 

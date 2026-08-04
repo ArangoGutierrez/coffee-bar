@@ -12,13 +12,17 @@ import Foundation
 /// for that reason — a `Date()` read in here would make the result depend on
 /// when it ran.
 ///
-/// **Every transition below is driven by a payload in
-/// `Tests/Fixtures/claude-hooks/`.** Design §9: writing the state machine first
-/// and inventing payloads to match it is the failure mode this project has
-/// already paid for.
+/// **Every transition below is driven by a payload under `Tests/Fixtures/`.**
+/// Design §9: writing the state machine first and inventing payloads to match it
+/// is the failure mode this project has already paid for.
 ///
 /// `PreCompact` is the one `HookEventKind` with no recorded payload, and it maps
-/// to no state — the corpus carries six of the seven kinds.
+/// to no state — the corpus carries seven of the eight kinds, six from Claude
+/// Code and `UserPromptSubmit` from Codex.
+///
+/// The tool a session belongs to arrives as a parameter, not as a guess about
+/// the payload. `AgentTool.declared(byEndpoint:)` carries the reasoning and the
+/// measurement that rejected the alternatives.
 ///
 /// **There is no transition into `.failed`.** Design §3.2: no observed event
 /// reports a failure, so a session that simply stops is retired by the stale
@@ -49,11 +53,20 @@ public enum SessionHub {
     /// menu-bar row. Such text gets shorter here. It never gets corrupted.
     public static let messageByteCap = 1024
 
-    /// Applies one event and returns the new session list.
+    /// Applies one event from `tool` and returns the new session list.
     ///
-    /// Unknown events return the input unchanged, so a Claude Code release that
-    /// adds an event cannot mint a phantom session that holds the machine awake.
-    public static func apply(_ event: HookEvent,
+    /// Unknown events return the input unchanged, so an agent release that adds
+    /// an event cannot mint a phantom session that holds the machine awake.
+    ///
+    /// **`tool` is a parameter and has no default.** It used to be the literal
+    /// `.claudeCode`, written into `make` below, so every session was a Claude
+    /// Code session whatever had sent the payload. A default would put that
+    /// same defect back one level down: the origin has to be stated by whoever
+    /// received the bytes, because that is the only layer that knows it. See
+    /// `AgentTool.declared(byEndpoint:)` for how it is established and for the
+    /// measurement that rules out reading it off the payload.
+    public static func apply(from tool: AgentTool,
+                             _ event: HookEvent,
                              to sessions: [AgentSession],
                              now: Date) -> [AgentSession] {
         guard let kind = event.kind, let newState = state(for: kind) else {
@@ -61,12 +74,13 @@ public enum SessionHub {
         }
 
         // Matched on (tool, sessionID) and never on position: two tools may use
-        // the same session id and must not merge. M2 ingests Claude Code hooks
-        // only, so the tool is pinned here rather than read off the payload.
+        // the same session id and must not merge. Codex and Claude Code both use
+        // plain UUIDs, so this is not hypothetical.
         guard let index = sessions.firstIndex(where: {
-            $0.tool == .claudeCode && $0.sessionID == event.sessionID
+            $0.tool == tool && $0.sessionID == event.sessionID
         }) else {
-            return sessions + [make(event, kind: kind, state: newState, now: now)]
+            return sessions + [make(event, from: tool, kind: kind,
+                                    state: newState, now: now)]
         }
 
         var updated = sessions
@@ -84,10 +98,16 @@ public enum SessionHub {
     /// Its payload carries `reason: "other"`, the only terminator value seen so
     /// far, so no branch here reads it: an end is an end until a payload shows
     /// otherwise.
+    /// `userPromptSubmit` maps to `.working` because the human has just handed
+    /// the turn back. The payload behind it is Codex's, recorded in
+    /// `Tests/Fixtures/codex-hooks/user-prompt-submit.json`. Without it a
+    /// session stays `.awaitingInput` from the moment the user presses return
+    /// until the model's first tool call, and `.awaitingInput` does not hold the
+    /// machine awake — so the Mac can sleep while the model is generating.
     private static func state(for kind: HookEventKind) -> SessionState? {
         switch kind {
         case .sessionStart: return .starting
-        case .preToolUse, .postToolUse: return .working
+        case .userPromptSubmit, .preToolUse, .postToolUse: return .working
         case .permissionDenied: return .awaitingPermission
         case .stop: return .awaitingInput
         case .sessionEnd: return .done
@@ -96,12 +116,13 @@ public enum SessionHub {
     }
 
     private static func make(_ event: HookEvent,
+                             from tool: AgentTool,
                              kind: HookEventKind,
                              state: SessionState,
                              now: Date) -> AgentSession {
         let cwd = event.cwd.map { URL(fileURLWithPath: $0, isDirectory: true) }
         return AgentSession(
-            tool: .claudeCode,
+            tool: tool,
             sessionID: event.sessionID,
             cwd: cwd,
             repoName: cwd?.lastPathComponent,

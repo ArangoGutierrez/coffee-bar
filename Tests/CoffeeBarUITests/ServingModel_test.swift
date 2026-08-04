@@ -22,7 +22,7 @@ import CoffeeBarPower
 /// one exists only to keep the socket out of the tests that are about the
 /// ticker.
 private final class NoopIngestListener: IngestListening, @unchecked Sendable {
-    func start(onEvent: @escaping @Sendable (HookEvent) -> Void) throws {}
+    func start(onEvent: @escaping @Sendable (AgentTool, HookEvent) -> Void) throws {}
     func stop() {}
     /// It binds nothing, so it serves nothing. The checks in this file are
     /// about the ticker and read nothing off this; the honest answer is still
@@ -929,7 +929,7 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     let model = ServingModel(holder: SpyHolder(), reader: reader,
                              health: fixtureHealth(), settings: FakeSettings())
 
-    model.ingest(HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
+    model.ingest(from: .claudeCode, HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
 
     #expect(model.intent == .auto, "no click happened")
     #expect(model.suppression == .batteryFloor(percent: 19, floor: 20),
@@ -1076,7 +1076,7 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     let model = ServingModel(holder: SpyHolder(), reader: reader,
                              health: fixtureHealth(), settings: FakeSettings())
 
-    model.ingest(HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
+    model.ingest(from: .claudeCode, HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
     model.intent = .serve
     #expect(model.isServing == true, "precondition: an earlier On click asked for, and got, a hold")
 
@@ -1172,7 +1172,7 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     let model = ServingModel(holder: SpyHolder(), reader: reader,
                              health: fixtureHealth(), settings: FakeSettings())
 
-    model.ingest(HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
+    model.ingest(from: .claudeCode, HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
     model.intent = .serve
 
     let refusal = """
@@ -1183,7 +1183,7 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
 
     // The next hook event. The session is still working, so the floor refuses a
     // hold this user never asked for — and that must not speak for their click.
-    model.ingest(HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
+    model.ingest(from: .claudeCode, HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
     #expect(model.suppression == .batteryFloor(percent: 19, floor: 20),
             "precondition: that refresh really did suppress")
     #expect(model.suppressionAdvisory == refusal)
@@ -1761,7 +1761,7 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     let model = ServingModel(holder: SpyHolder(), reader: reader,
                              health: fixtureHealth(), settings: FakeSettings())
 
-    model.ingest(HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
+    model.ingest(from: .claudeCode, HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
 
     #expect(model.isServing == false, "precondition: the default floor refused at 15%")
     #expect(model.suppressionAdvisory == "At 15% — coffee-bar does not hold at or below 20%.",
@@ -1788,7 +1788,7 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     let model = ServingModel(holder: SpyHolder(), reader: reader,
                              health: fixtureHealth(), settings: FakeSettings())
 
-    model.ingest(HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
+    model.ingest(from: .claudeCode, HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
     #expect(model.isServing == true, "precondition: 25% cleared the default floor")
 
     model.batteryFloorPercent = 30

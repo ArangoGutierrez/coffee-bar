@@ -128,38 +128,116 @@ private func settings(_ name: String) throws -> Data {
     #expect(HookHealth.status(ofSettings: Data(#"[1, 2, 3]"#.utf8)) == .unreadable)
 }
 
-/// Every event the hub knows is either required or a documented exclusion.
+/// Every event the hub knows is either required or a documented exclusion —
+/// **per agent tool**.
 ///
-/// This is the guard the previous version of this test only claimed to be. That
+/// This is the guard the earliest version of this test only claimed to be. That
 /// version asserted a literal list plus `required ⊆ known`. Both stay GREEN when
 /// `HookEventKind` gains a case, so the bug it named — "the hub gaining an event
 /// while the check keeps asking for the old five" — walked straight through it.
 ///
 /// The assertion below is the converse, and that is the direction that catches a
 /// new event: an unclassified case is neither required nor excluded, so it goes
-/// RED until somebody decides which it is.
-@Test func everyHookEventIsEitherRequiredOrDeliberatelyExcluded() {
-    // Each exclusion carries the reason it is not required.
-    //   PreCompact — `SessionHub.state(for:)` maps it to nil. It drives nothing.
-    //   SessionEnd — optional. It retires a session as soon as it ends; the
-    //                staleness timeout is the fallback when it is absent.
-    //                Design §10.4.
-    let excluded: Set<String> = ["PreCompact", "SessionEnd"]
+/// RED until somebody decides which it is. It caught `UserPromptSubmit` on the
+/// commit that added it.
+///
+/// It now runs once per tool that has an advisory, because the two tools sharing
+/// this vocabulary do NOT need the same entries wired.
+private let toolExclusions: [AgentTool: Set<String>] = [
+    // PreCompact — `SessionHub.state(for:)` maps it to nil. It drives nothing.
+    // SessionEnd — optional. It retires a session as soon as it ends; the
+    //              staleness timeout is the fallback when it is absent.
+    //              Design §10.4.
+    // UserPromptSubmit — Claude Code sends it, but NO Claude Code payload for it
+    //              was ever captured. The transition rests on the Codex capture,
+    //              so a Claude Code user is not asked to wire an event this
+    //              project has never seen that tool send.
+    .claudeCode: ["PreCompact", "SessionEnd", "UserPromptSubmit"],
+
+    // PermissionDenied — no Codex payload carries one, and
+    //              `noCodexPayloadCarriesAPermissionDenial` re-checks that every
+    //              build. Requiring an entry the tool may never send would leave
+    //              the advisory permanently red with nothing the user could do.
+    .codex: ["PreCompact", "SessionEnd", "PermissionDenied"],
+]
+
+@Test(arguments: toolExclusions.keys.sorted { $0.rawValue < $1.rawValue })
+func everyHookEventIsEitherRequiredOrDeliberatelyExcluded(_ tool: AgentTool) throws {
+    let required = try #require(HookHealth.requiredEvents(for: tool),
+                                "\(tool.rawValue) has no advisory but is listed with exclusions")
+    let excluded = try #require(toolExclusions[tool])
 
     for kind in HookEventKind.allCases {
-        let isRequired = HookHealth.requiredEvents.contains(kind.rawValue)
+        let isRequired = required.contains(kind.rawValue)
         let isExcluded = excluded.contains(kind.rawValue)
         #expect(isRequired || isExcluded,
-                "\(kind.rawValue) is neither required nor a documented exclusion; classify it")
+                "\(kind.rawValue) is neither required nor a documented exclusion for \(tool.rawValue); classify it")
         #expect(!(isRequired && isExcluded),
-                "\(kind.rawValue) is both required and excluded")
+                "\(kind.rawValue) is both required and excluded for \(tool.rawValue)")
     }
 
     // An exclusion naming an event that does not exist is a stale waiver, and it
     // would quietly widen the list above.
     for name in excluded {
         #expect(HookEventKind(rawValue: name) != nil,
-                "\(name) is excluded but is not a HookEventKind")
+                "\(name) is excluded for \(tool.rawValue) but is not a HookEventKind")
+    }
+}
+
+/// The advisory may only ask for events this project has actually recorded.
+///
+/// The rule that governs the whole adapter effort, applied to the panel's own
+/// advice: coffee-bar must not tell a user to wire an entry it has never seen
+/// their tool send. Named bug this catches: an event copied from one tool's list
+/// into another's because the vocabulary looks the same. `PermissionDenied` is
+/// exactly that trap — it is real for Claude Code and unrecorded for Codex.
+@Test(arguments: [AgentTool.claudeCode, .codex])
+func everyRequiredEventHasARecordedPayloadForThatTool(_ tool: AgentTool) throws {
+    let directory = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appending(path: "Fixtures/\(tool == .claudeCode ? "claude" : "codex")-hooks")
+
+    let names = try FileManager.default
+        .contentsOfDirectory(atPath: directory.path)
+        .filter { $0.hasSuffix(".json") }
+    #expect(names.count == 6,
+            "read \(names.count) fixtures at \(directory.path); the checks below would be vacuous")
+
+    var recorded: Set<String> = []
+    for name in names {
+        let object = try JSONSerialization.jsonObject(
+            with: try Data(contentsOf: directory.appending(path: name)))
+        let payload = try #require(object as? [String: Any])
+        let event = try #require(payload["hook_event_name"] as? String,
+                                 "\(name) carries no hook_event_name")
+        recorded.insert(event)
+    }
+
+    let required = try #require(HookHealth.requiredEvents(for: tool))
+    for event in required {
+        #expect(recorded.contains(event),
+                "\(tool.rawValue) requires \(event), but no payload for it exists in \(directory.lastPathComponent). Recorded: \(recorded.sorted())")
+    }
+}
+
+@Test func theClaudeCodeAdvisoryIsTheConstantTheDocumentsAreCheckedAgainst() {
+    // `DocsClaims_test` and `SiteClaims_test` both read `HookHealth`
+    // `.requiredEvents`. Named bug this catches: the per-tool function and the
+    // constant drifting apart, which would let the documented block and the
+    // advisory the panel prints disagree while both guards stayed green.
+    #expect(HookHealth.requiredEvents(for: .claudeCode) == HookHealth.requiredEvents)
+}
+
+@Test func aToolWithNoAdvisoryAnswersNilRatherThanAnEmptyList() {
+    // `nil` and `[]` are different claims. An empty list would make
+    // `status(ofSettings:)` report `.wired` for a tool coffee-bar cannot advise
+    // on at all — a green light for a check that never ran.
+    for tool in AgentTool.allCases {
+        if let events = HookHealth.requiredEvents(for: tool) {
+            #expect(!events.isEmpty, "\(tool.rawValue) has an advisory that asks for nothing")
+            #expect(events == events.sorted(), "\(tool.rawValue)'s advisory is not sorted")
+        }
     }
 }
 

@@ -47,7 +47,7 @@ private func rawPayload(_ name: String) throws -> [String: Any] {
 private func stateAfter(_ fixture: String,
                         from sessions: [AgentSession] = [],
                         at now: Date = t0) throws -> SessionState? {
-    SessionHub.apply(try recorded(fixture), to: sessions, now: now).first?.state
+    SessionHub.apply(from: .claudeCode, try recorded(fixture), to: sessions, now: now).first?.state
 }
 
 private func session(_ state: SessionState,
@@ -109,7 +109,7 @@ private func recordedSessionID() throws -> String {
 @Test func sessionStartCreatesAStartingSession() throws {
     // Written only because a real SessionStart payload landed in the corpus on
     // 2026-07-28. Design §3.2 forbids a transition no observed event produces.
-    let out = SessionHub.apply(try recorded("session-start.json"), to: [], now: t0)
+    let out = SessionHub.apply(from: .claudeCode, try recorded("session-start.json"), to: [], now: t0)
     #expect(out.count == 1)
     #expect(out.first?.state == .starting)
     #expect(out.first?.tool == .claudeCode)
@@ -148,7 +148,7 @@ private func recordedSessionID() throws -> String {
     // The recorded `reason` is "other". No fixture carries `clear`, `logout` or
     // `prompt_input_exit`, so no branch below reads `reason` on this event: an
     // end is an end until a payload says otherwise.
-    let out = SessionHub.apply(try recorded("session-end.json"),
+    let out = SessionHub.apply(from: .claudeCode, try recorded("session-end.json"),
                                to: [session(.working, id: try recordedSessionID())],
                                now: t0.addingTimeInterval(60))
     #expect(out.first?.state == .done)
@@ -172,7 +172,7 @@ private func recordedSessionID() throws -> String {
     // maps `.preCompact` to a state turns it red.
     let before = [session(.working)]
     let event = HookEvent(hookEventName: "PreCompact", sessionID: "s1")
-    #expect(SessionHub.apply(event, to: before, now: t0.addingTimeInterval(60)) == before)
+    #expect(SessionHub.apply(from: .claudeCode, event, to: before, now: t0.addingTimeInterval(60)) == before)
 }
 
 @Test func anUnknownEventChangesNothing() {
@@ -181,7 +181,7 @@ private func recordedSessionID() throws -> String {
     // that holds the machine awake until the stale timeout retires it.
     let before = [session(.working)]
     let unknown = HookEvent(hookEventName: "SomeFutureEvent", sessionID: "s2")
-    #expect(SessionHub.apply(unknown, to: before, now: t0) == before)
+    #expect(SessionHub.apply(from: .claudeCode, unknown, to: before, now: t0) == before)
 }
 
 // MARK: - Identity and ordering
@@ -191,7 +191,7 @@ private func recordedSessionID() throws -> String {
     // into one row. The user then sees one session while two machines-worth of
     // work runs.
     let first = [session(.working, id: "already-running")]
-    let out = SessionHub.apply(try recorded("session-start.json"), to: first, now: t0)
+    let out = SessionHub.apply(from: .claudeCode, try recorded("session-start.json"), to: first, now: t0)
     #expect(out.count == 2)
     #expect(out.map(\.sessionID) == ["already-running", try recordedSessionID()])
 }
@@ -206,17 +206,18 @@ private func recordedSessionID() throws -> String {
     let before = [session(.working, id: "a"),
                   session(.working, id: middle),
                   session(.working, id: "c")]
-    let out = SessionHub.apply(try recorded("stop.json"), to: before, now: t0)
+    let out = SessionHub.apply(from: .claudeCode, try recorded("stop.json"), to: before, now: t0)
     #expect(out.map(\.sessionID) == ["a", middle, "c"])
     #expect(out.map(\.state) == [.working, .awaitingInput, .working])
 }
 
 @Test func theSameSessionIDUnderADifferentToolDoesNotMerge() throws {
-    // M1 keyed sessions by (tool, sessionID) for this reason. M2 only produces
-    // `.claudeCode`, so this pins the key BEFORE M3 adds a second tool.
+    // M1 keyed sessions by (tool, sessionID) for this reason. The hub now
+    // produces every tool, and `CodexAdapter_test` drives the same pairing from
+    // the Codex side, so both halves of the key are exercised by real payloads.
     let shared = try recordedSessionID()
     let existing = [session(.working, id: shared, tool: .codex)]
-    let out = SessionHub.apply(try recorded("stop.json"), to: existing, now: t0)
+    let out = SessionHub.apply(from: .claudeCode, try recorded("stop.json"), to: existing, now: t0)
     #expect(out.count == 2)
     #expect(out.map(\.id) == ["codex:\(shared)", "claudeCode:\(shared)"])
     #expect(out.first?.state == .working, "the codex session must not have moved")
@@ -231,8 +232,8 @@ private func recordedSessionID() throws -> String {
     // panel would jitter, and Task 4's staleness rule would be untestable.
     let before = [session(.working, id: try recordedSessionID())]
     let event = try recorded("stop.json")
-    #expect(SessionHub.apply(event, to: before, now: t0)
-            == SessionHub.apply(event, to: before, now: t0))
+    #expect(SessionHub.apply(from: .claudeCode, event, to: before, now: t0)
+            == SessionHub.apply(from: .claudeCode, event, to: before, now: t0))
 }
 
 // MARK: - The timestamps staleness depends on
@@ -246,7 +247,7 @@ private func recordedSessionID() throws -> String {
     #expect(names.count >= 6, "read \(names.count) fixtures; this loop would pass vacuously")
 
     for name in names {
-        let out = SessionHub.apply(try recorded(name),
+        let out = SessionHub.apply(from: .claudeCode, try recorded(name),
                                    to: [session(.working, id: try recordedSessionID())],
                                    now: later)
         #expect(out.first?.lastEventAt == later, "\(name) did not refresh lastEventAt")
@@ -258,13 +259,13 @@ private func recordedSessionID() throws -> String {
     // for 40 minutes" would then read "working for 3 seconds" forever, and any
     // later rule keyed on time-in-state silently never fires.
     let later = t0.addingTimeInterval(120)
-    let out = SessionHub.apply(try recorded("pre-tool-use.json"),
+    let out = SessionHub.apply(from: .claudeCode, try recorded("pre-tool-use.json"),
                                to: [session(.working, id: try recordedSessionID())],
                                now: later)
     #expect(out.first?.state == .working)
     #expect(out.first?.stateEnteredAt == t0)
 
-    let changed = SessionHub.apply(try recorded("stop.json"),
+    let changed = SessionHub.apply(from: .claudeCode, try recorded("stop.json"),
                                    to: [session(.working, id: try recordedSessionID())],
                                    now: later)
     #expect(changed.first?.state == .awaitingInput)
@@ -273,12 +274,12 @@ private func recordedSessionID() throws -> String {
 
 @Test func attentionSinceIsSetOnEntryAndClearedOnExit() throws {
     let later = t0.addingTimeInterval(60)
-    let blocked = SessionHub.apply(try recorded("stop.json"),
+    let blocked = SessionHub.apply(from: .claudeCode, try recorded("stop.json"),
                                    to: [session(.working, id: try recordedSessionID())],
                                    now: later)
     #expect(blocked.first?.attentionSince == later)
 
-    let resumed = SessionHub.apply(try recorded("pre-tool-use.json"),
+    let resumed = SessionHub.apply(from: .claudeCode, try recorded("pre-tool-use.json"),
                                    to: blocked, now: later.addingTimeInterval(30))
     #expect(resumed.first?.state == .working)
     #expect(resumed.first?.attentionSince == nil)
@@ -289,10 +290,10 @@ private func recordedSessionID() throws -> String {
     // the state is unchanged. The panel orders the attention list by how long
     // the human has been the bottleneck, so a session that keeps receiving
     // events would forever look freshly blocked and never rise to the top.
-    let blocked = SessionHub.apply(try recorded("stop.json"),
+    let blocked = SessionHub.apply(from: .claudeCode, try recorded("stop.json"),
                                    to: [session(.working, id: try recordedSessionID())],
                                    now: t0)
-    let again = SessionHub.apply(try recorded("stop.json"),
+    let again = SessionHub.apply(from: .claudeCode, try recorded("stop.json"),
                                  to: blocked, now: t0.addingTimeInterval(300))
     #expect(again.first?.state == .awaitingInput)
     #expect(again.first?.attentionSince == t0)
@@ -301,13 +302,13 @@ private func recordedSessionID() throws -> String {
 @Test func turnCountRisesOncePerStop() throws {
     let sid = try recordedSessionID()
     var sessions = [session(.working, id: sid)]
-    sessions = SessionHub.apply(try recorded("stop.json"), to: sessions, now: t0)
+    sessions = SessionHub.apply(from: .claudeCode, try recorded("stop.json"), to: sessions, now: t0)
     #expect(sessions.first?.turnCount == 1)
-    sessions = SessionHub.apply(try recorded("stop.json"), to: sessions, now: t0)
+    sessions = SessionHub.apply(from: .claudeCode, try recorded("stop.json"), to: sessions, now: t0)
     #expect(sessions.first?.turnCount == 1, "a repeated Stop is the same turn")
-    sessions = SessionHub.apply(try recorded("pre-tool-use.json"), to: sessions, now: t0)
+    sessions = SessionHub.apply(from: .claudeCode, try recorded("pre-tool-use.json"), to: sessions, now: t0)
     #expect(sessions.first?.turnCount == 1)
-    sessions = SessionHub.apply(try recorded("stop.json"), to: sessions, now: t0)
+    sessions = SessionHub.apply(from: .claudeCode, try recorded("stop.json"), to: sessions, now: t0)
     #expect(sessions.first?.turnCount == 2)
 }
 
@@ -321,7 +322,7 @@ private func recordedSessionID() throws -> String {
     #expect(reason.count > 140,
             "the recorded reason is \(reason.count) characters; it can no longer prove a cap")
 
-    let out = SessionHub.apply(try recorded("permission-denied.json"),
+    let out = SessionHub.apply(from: .claudeCode, try recorded("permission-denied.json"),
                                to: [session(.working, id: try recordedSessionID())],
                                now: t0)
     #expect(out.first?.lastMessage?.count == 140)
@@ -335,7 +336,7 @@ private func recordedSessionID() throws -> String {
     // The reason text is synthesized because no recorded PermissionDenied
     // carries a short one. The event's SHAPE is still the measured one: design
     // §3 claimed `message`, and the capture showed `reason`.
-    let out = SessionHub.apply(
+    let out = SessionHub.apply(from: .claudeCode, 
         HookEvent(hookEventName: "PermissionDenied", sessionID: "s1", reason: "no"),
         to: [session(.working)], now: t0)
     #expect(out.first?.lastMessage == "no")
@@ -357,7 +358,7 @@ private func recordedSessionID() throws -> String {
     #expect(hostile.utf8.count == 42_140,
             "precondition: the input is \(hostile.utf8.count) bytes; the audit measurement this test rests on has moved")
 
-    let out = SessionHub.apply(
+    let out = SessionHub.apply(from: .claudeCode, 
         HookEvent(hookEventName: "PermissionDenied", sessionID: "s1", reason: hostile),
         to: [session(.working)], now: t0)
     let message = try #require(out.first?.lastMessage)
@@ -387,7 +388,7 @@ private func recordedSessionID() throws -> String {
     #expect(family.utf8.count == 25,
             "precondition: the family emoji is \(family.utf8.count) bytes, so the numbers below no longer hold")
 
-    let out = SessionHub.apply(
+    let out = SessionHub.apply(from: .claudeCode, 
         HookEvent(hookEventName: "PermissionDenied", sessionID: "s1",
                   reason: String(repeating: family, count: 140)),
         to: [session(.working)], now: t0)
@@ -406,7 +407,7 @@ private func recordedSessionID() throws -> String {
     // Named bug this catches: a byte cap at or below 420, or a truncation that
     // counts bytes first. U+6F22 is 3 UTF-8 bytes and one Character, so 140 of
     // them are 420 bytes and a correct cap hands back every one.
-    let out = SessionHub.apply(
+    let out = SessionHub.apply(from: .claudeCode, 
         HookEvent(hookEventName: "PermissionDenied", sessionID: "s1",
                   reason: String(repeating: "\u{6F22}", count: 200)),
         to: [session(.working)], now: t0)
@@ -425,9 +426,9 @@ private func recordedSessionID() throws -> String {
     // session overwrites "Claude needs permission to run …" with "other" —
     // exactly at the moment the user looks to see what happened.
     let denial = try recorded("permission-denied.json")
-    let denied = SessionHub.apply(denial, to: [session(.working, id: try recordedSessionID())],
+    let denied = SessionHub.apply(from: .claudeCode, denial, to: [session(.working, id: try recordedSessionID())],
                                   now: t0)
-    let ended = SessionHub.apply(try recorded("session-end.json"), to: denied, now: t0)
+    let ended = SessionHub.apply(from: .claudeCode, try recorded("session-end.json"), to: denied, now: t0)
 
     #expect(try rawPayload("session-end.json")["reason"] as? String == "other",
             "the recorded SessionEnd lost its reason; this test no longer discriminates")
@@ -443,7 +444,7 @@ private func recordedSessionID() throws -> String {
     #expect(raw.hasSuffix("/coffee-bar"),
             "the recorded cwd is \(raw); the literal below no longer matches it")
 
-    let out = SessionHub.apply(try recorded("session-start.json"), to: [], now: t0)
+    let out = SessionHub.apply(from: .claudeCode, try recorded("session-start.json"), to: [], now: t0)
     #expect(out.first?.repoName == "coffee-bar")
 
     // Compare the PATH, not the URL. This used to read
@@ -461,8 +462,8 @@ private func recordedSessionID() throws -> String {
     // optional path the decoder allows rather than an observed payload: a Stop
     // that arrives without one must not blank the repository name out of the
     // attention list.
-    let start = SessionHub.apply(try recorded("session-start.json"), to: [], now: t0)
-    let stopped = SessionHub.apply(
+    let start = SessionHub.apply(from: .claudeCode, try recorded("session-start.json"), to: [], now: t0)
+    let stopped = SessionHub.apply(from: .claudeCode, 
         HookEvent(hookEventName: "Stop", sessionID: try recordedSessionID()),
         to: start, now: t0)
     #expect(stopped.first?.state == .awaitingInput)
@@ -508,13 +509,13 @@ private func recordedSessionID() throws -> String {
                           cwd: base.path,
                           source: "startup")
 
-    let whenPresent = SessionHub.apply(event, to: [], now: t0).first?.cwd
+    let whenPresent = SessionHub.apply(from: .claudeCode, event, to: [], now: t0).first?.cwd
 
     try fm.removeItem(at: base)
     #expect(fm.fileExists(atPath: base.path) == false,
             "precondition failed: the directory is still on disk, so this cannot discriminate")
 
-    let whenAbsent = SessionHub.apply(event, to: [], now: t0).first?.cwd
+    let whenAbsent = SessionHub.apply(from: .claudeCode, event, to: [], now: t0).first?.cwd
 
     #expect(whenPresent != nil)
     #expect(whenPresent == whenAbsent,

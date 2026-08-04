@@ -3,19 +3,36 @@
 
 import Foundation
 
-/// The Claude Code hook events M2 acts on. Design §3.
+/// The hook events M2 and M3 act on, in the PascalCase envelope. Design §3.
 ///
 /// Raw values are the wire names, pinned to literals rather than derived from
-/// the case names, so renaming a case cannot silently stop matching what
-/// Claude Code sends.
+/// the case names, so renaming a case cannot silently stop matching what the
+/// agent sends.
 ///
-/// Six of the seven have a recorded payload in `Tests/Fixtures/claude-hooks/`,
-/// including `sessionStart` and `sessionEnd`: a later capture crossed a real
-/// session boundary and closed the gap design §3.2 recorded. `preCompact` is
-/// the one with no payload behind it. Write no transition against an event
-/// until a real payload lands in that directory.
+/// **This vocabulary is shared by Claude Code AND Codex CLI.** Both send these
+/// exact names under the `hook_event_name` key, which is why one enum and one
+/// decoder serve both. It is also why neither the names nor the payload can say
+/// which of the two sent it — see `AgentTool.declared(byEndpoint:)`. Cursor uses
+/// a different vocabulary and has its own enum, `CursorEventKind`.
+///
+/// Seven of the eight have a recorded payload. Six are in
+/// `Tests/Fixtures/claude-hooks/`, including `sessionStart` and `sessionEnd`: a
+/// later capture crossed a real session boundary and closed the gap design §3.2
+/// recorded. `userPromptSubmit` is recorded in `Tests/Fixtures/codex-hooks/`.
+/// `preCompact` is the one with no payload behind it. Write no transition
+/// against an event until a real payload lands in one of those directories.
 public enum HookEventKind: String, Sendable, CaseIterable {
     case sessionStart = "SessionStart"
+
+    /// The human has handed a prompt back to the agent.
+    ///
+    /// Added for Codex CLI, which sends it and whose capture recorded it. Claude
+    /// Code sends this event too, but no Claude Code payload for it was ever
+    /// captured, so `HookHealth` does not ask a Claude Code user to wire it. The
+    /// transition is the same for both, because nothing measured distinguishes
+    /// the two tools on this event.
+    case userPromptSubmit = "UserPromptSubmit"
+
     case preToolUse = "PreToolUse"
     case postToolUse = "PostToolUse"
     case permissionDenied = "PermissionDenied"
