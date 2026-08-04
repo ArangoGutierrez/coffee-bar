@@ -1741,3 +1741,88 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
             "two floors share a label: \(labels)")
     #expect(ServingModel.floorLabel(for: 20) == "20%")
 }
+
+@MainActor
+@Test func loweringTheFloorDropsTheSentenceThatNamedTheOldOne() {
+    // A defect issue #11 CREATES, and the reason `reason(_:stillTrueOf:)` had
+    // to change. Before the floor was settable it could not move, so judging a
+    // recorded refusal against the floor recorded WITH it was always the same
+    // as judging it against the floor in force.
+    //
+    // Named bug this catches: the panel explaining a refusal under the OLD
+    // floor while the machine is held under the NEW one. `lastSuppression`
+    // latches and `userToggled(to: .serve)` is the only thing that clears it —
+    // so under `.auto`, which is the position the product ships in, the stale
+    // record survives the change.
+    //
+    // `.auto` with a working session, deliberately. Clicking On a second time
+    // would clear the record on its way past and prove nothing.
+    let reader = FakeReader(source: .battery, percent: 15)
+    let model = ServingModel(holder: SpyHolder(), reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
+
+    model.ingest(HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
+
+    #expect(model.isServing == false, "precondition: the default floor refused at 15%")
+    #expect(model.suppressionAdvisory == "At 15% — coffee-bar does not hold at or below 20%.",
+            "precondition: the panel explained that refusal")
+
+    model.batteryFloorPercent = 10
+
+    // The machine is now held, so any sentence saying it is not is false.
+    #expect(model.isServing == true, "the lowered floor did not let the hold through")
+    #expect(model.suppressionAdvisory == nil, """
+        the panel explains a refusal under the OLD floor while the machine is \
+        held under the new one: \(model.suppressionAdvisory ?? "nil")
+        """)
+    #expect(model.suppression == nil)
+}
+
+@MainActor
+@Test func raisingTheFloorRestatesTheSentenceWithTheNewNumber() {
+    // The other direction, and the control for the check above. A filter that
+    // simply dropped every sentence whenever the floor moved would satisfy that
+    // one and leave a user who has just raised the floor with no explanation
+    // for the hold that stopped.
+    let reader = FakeReader(source: .battery, percent: 25)
+    let model = ServingModel(holder: SpyHolder(), reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
+
+    model.ingest(HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
+    #expect(model.isServing == true, "precondition: 25% cleared the default floor")
+
+    model.batteryFloorPercent = 30
+
+    #expect(model.isServing == false)
+    // The NEW number, not the old one. The record is rewritten by the
+    // suppression this change produced.
+    #expect(model.suppressionAdvisory == "At 25% — coffee-bar does not hold at or below 30%.")
+}
+
+@MainActor
+@Test func theLeftoverSentenceQuotesTheFloorInForceNotTheOneItWasRecordedUnder() {
+    // The sentence is a PRESENT-TENSE claim about what coffee-bar does, so the
+    // number in it has to be the floor in force. The measured percent stays the
+    // reading the decision was made on — that half is deliberate and unchanged.
+    //
+    // Named bug this catches: a user raises the floor, nothing is running to
+    // produce a fresh suppression, and the leftover line keeps quoting the old
+    // number — so the change they just made appears not to have taken.
+    let reader = FakeReader(source: .battery, percent: 19)
+    let model = ServingModel(holder: SpyHolder(), reader: reader,
+                             health: fixtureHealth(), settings: FakeSettings())
+
+    // A refused On click, which leaves a record and no session behind it.
+    model.intent = .serve
+    #expect(model.intent == .auto, "precondition: the refused click landed back on Auto")
+    #expect(model.suppressionAdvisory?.contains("at or below 20%") == true,
+            "precondition: the panel explained the refusal under the old floor")
+
+    model.batteryFloorPercent = 30
+
+    // Nothing wants a hold, so no fresh suppression was produced and only the
+    // latched record is left. It must still describe the policy in force.
+    #expect(model.suppression == .batteryFloor(percent: 19, floor: 30))
+    #expect(model.suppressionAdvisory?.contains("at or below 30%") == true,
+            "the leftover line quotes a floor nobody is enforcing: \(model.suppressionAdvisory ?? "nil")")
+}
