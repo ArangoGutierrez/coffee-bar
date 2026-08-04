@@ -656,8 +656,14 @@ public final class ServingModel {
         attention = AttentionList.rows(from: sessions)
         working = AttentionList.working(from: sessions)
         desired = state
+        // `controller.floorInForce`, never `batteryFloorPercentStorage`. The
+        // stored setting is UNBOUNDED, so passing it here printed "at or below
+        // 1000%" beside a decision made on 100, and dropped the reason entirely
+        // for a stored 0 — leaving a refused On click to snap back to Auto in
+        // silence. The controller reports the floor the broker was actually
+        // given.
         suppression = Self.reason(controller.lastSuppression, stillTrueOf: reading,
-                                  underFloor: batteryFloorPercentStorage)
+                                  underFloor: controller.floorInForce)
         // Gated on the FILTERED value above, not on the controller alone, so the
         // claim dies with the sentence that explains it. A recovery above the
         // floor drops both together —
@@ -853,9 +859,24 @@ public final class ServingModel {
     /// `theLeftoverSentenceQuotesTheFloorInForceNotTheOneItWasRecordedUnder`
     /// hold that from both sides.
     ///
-    /// The floor arrives here UNBOUNDED, and that is correct rather than an
-    /// oversight: this asks what the user set, not what the decision enforces.
-    /// `BatteryFloor` states why bounding happens once, in `PowerInputs.init`.
+    /// **`floor` is the BOUNDED floor the decision used, from
+    /// `HoldController.floorInForce`. Never the stored setting.** An earlier
+    /// version of this comment claimed the raw setting was correct here,
+    /// "because this asks what the user set". That was wrong, and it shipped
+    /// two defects:
+    ///
+    ///   - a stored 1000 printed "at or below 1000%" — a percentage that cannot
+    ///     exist — beside a decision made on 100;
+    ///   - a stored 0 dropped the reason altogether, because `3 <= 0` is false
+    ///     while the decision refused on the bounded 5. `cancelledServe` is
+    ///     gated on this value, so a refused On click snapped back to Auto and
+    ///     said nothing.
+    ///
+    /// The panel reports what the decision DID. It does not re-derive the
+    /// decision's inputs in parallel — a second derivation agrees until it does
+    /// not, and the disagreement is invisible.
+    /// `aFloorHandWrittenAboveTheMaximumIsQuotedAsTheOneEnforced` and
+    /// `aFloorHandWrittenBelowTheMinimumStillExplainsTheRefusal` hold both.
     private static func reason(_ suppression: HoldSuppression?,
                                stillTrueOf reading: PowerReading,
                                underFloor floor: Int) -> HoldSuppression? {
