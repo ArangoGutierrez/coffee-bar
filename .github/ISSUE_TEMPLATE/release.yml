@@ -80,6 +80,16 @@ body:
     attributes:
       label: Phase 1 — preconditions
       value: |
+        RESUMING A HALF-CUT RELEASE? Establish where you actually are before
+        ticking anything. These four answer it, and none of them changes state:
+
+        ```
+        git ls-remote --tags origin | grep vX.Y.Z                      # tag pushed?
+        gh api repos/ArangoGutierrez/coffee-bar/releases --jq 'length' # release exists?
+        grep 'tags/v' <tap>/Formula/coffee-bar.rb                      # tap version
+        curl -sS https://arangogutierrez.github.io/coffee-bar/ | grep -o '0\.[0-9]*\.[0-9]*'
+        ```
+
         - [ ] `main` is clean and pushed — `git status -sb` shows no divergence.
         - [ ] The suite is green against the FINAL commit, not an earlier one:
               ```
@@ -92,7 +102,9 @@ body:
               ```
               Empty output means this release ships no code change. Say so in the
               notes and set the dropdown above accordingly.
-        - [ ] The version is unused. Both must come back empty:
+        - [ ] The version is unused. **Applies only before the tag exists** — on a
+              resumed release the tag is supposed to be there, and this check
+              inverts. Both must come back empty on a fresh cut:
               ```
               git tag -l vX.Y.Z
               git ls-remote --tags origin | grep vX.Y.Z
@@ -141,6 +153,44 @@ body:
               ```
               shasum -a 256 build/dist/coffee-bar-X.Y.Z.dmg
               ```
+
+  # The release notes live HERE, not in a scratch file. v0.1.1's notes sat in
+  # /tmp between drafting and publishing, where a reboot would have destroyed
+  # them and they would have been rewritten from memory. Drafting them in the
+  # issue makes them durable, reviewable before the release exists, and diffable
+  # in the issue history.
+  - type: textarea
+    id: notes
+    attributes:
+      label: Release notes (draft here, then publish from this text)
+      description: >-
+        Write them before creating the release. Save with
+        `gh issue view <N> --json body` and extract this section, or paste into
+        `--notes-file`. Do not keep the only copy in a scratch file.
+      value: |
+        <!-- What changed, and what it means for someone installing it. -->
+
+        ## Install
+
+        <!--
+        Download and Homebrew are DIFFERENT artifacts. Say which is signed.
+        A source build is ad-hoc signed and Gatekeeper does not accept it.
+        -->
+
+        ## Requirements
+
+        - macOS <version> or later.
+        - Architectures: <paste `lipo -archs` output — do NOT assume universal>.
+
+        ## Verifying the download
+
+        ```
+        shasum -a 256 coffee-bar-X.Y.Z.dmg
+        # <paste the digest>
+        spctl --assess --type open --context context:primary-signature -vv coffee-bar-X.Y.Z.dmg
+        # accepted
+        # source=Notarized Developer ID
+        ```
 
   - type: textarea
     id: phase3
@@ -267,24 +317,28 @@ body:
               ```
               Expect `draft: false` and the DMG in the asset list.
 
+  # NOT `required: true`. A required checkbox must be ticked to SUBMIT the form,
+  # which makes it an entry gate. Release issue #20 opened with all four already
+  # ticked, so it asserted "every claim above was pasted from a command run
+  # against the final state" at a moment when nothing had been run yet. These are
+  # exit conditions: they submit unticked and get ticked when they become true.
   - type: checkboxes
     id: invariants
     attributes:
       label: Before you close this issue
+      description: >-
+        Tick these at the END, when each one is true. They arrive unticked on
+        purpose.
       options:
         - label: >-
             Every outward action above got its own explicit approval. Approving a
             step number is not approving the action.
-          required: true
         - label: >-
             No signing key, keychain password, API key or private path appears in
             this issue.
-          required: true
         - label: >-
             The release notes state the architectures the binary actually
             carries, taken from `lipo -archs` and not assumed.
-          required: true
         - label: >-
             Every claim above was pasted from a command run against the final
             state. A remembered number is not evidence.
-          required: true
