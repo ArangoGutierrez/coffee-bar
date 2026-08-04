@@ -101,16 +101,24 @@
   <li>A disk image, <code>coffee-bar-0.1.1.dmg</code>, on the <a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.1.1">GitHub release page</a>. It is the first artifact signed with a Developer ID, notarised by Apple, and stapled. macOS opens it without a Gatekeeper warning.</li>
 </ul>
 
-<ul class="does">
-  <li><strong>File</strong> — <code>coffee-bar-0.1.1.dmg</code></li>
-  <li><strong>Size</strong> — 299302 bytes</li>
-  <li><strong>SHA-256</strong> — <code>afc1b15f9bde31aad09de80f23ae97b05f6053322b68b89bab36bcfbc641d2e6</code></li>
-  <li><strong>Architecture</strong> — Apple silicon (<code>arm64</code>) only</li>
-  <li><strong>Minimum macOS</strong> — 14.0</li>
-  <li><strong>Signature</strong> — Developer ID Application, team <code>85FN4Z37V8</code></li>
-  <li><strong>Notarisation</strong> — <code>spctl</code> accepts it, source <code>Notarized Developer ID</code></li>
-  <li><strong>Staple</strong> — <code>xcrun stapler validate</code> passes</li>
-</ul>
+<div class="table-wrap">
+<table>
+  <caption>The 0.1.1 disk image</caption>
+  <thead>
+    <tr><th scope="col">Fact</th><th scope="col">Value</th></tr>
+  </thead>
+  <tbody>
+    <tr><th scope="row">File</th><td><code>coffee-bar-0.1.1.dmg</code></td></tr>
+    <tr><th scope="row">Size</th><td>299302 bytes</td></tr>
+    <tr><th scope="row">SHA-256</th><td><code>afc1b15f9bde31aad09de80f23ae97b05f6053322b68b89bab36bcfbc641d2e6</code></td></tr>
+    <tr><th scope="row">Architecture</th><td>Apple silicon (<code>arm64</code>) only</td></tr>
+    <tr><th scope="row">Minimum macOS</th><td>14.0</td></tr>
+    <tr><th scope="row">Signature</th><td>Developer ID Application, team <code>85FN4Z37V8</code></td></tr>
+    <tr><th scope="row">Notarisation</th><td><code>spctl</code> accepts it, source <code>Notarized Developer ID</code></td></tr>
+    <tr><th scope="row">Staple</th><td><code>xcrun stapler validate</code> passes</td></tr>
+  </tbody>
+</table>
+</div>
 
 <p>Verify the download before you open it:</p>
 
