@@ -36,7 +36,6 @@ The first signed and notarised download. This release ships no code change.
 
 - A disk image, `coffee-bar-0.1.1.dmg`, on the GitHub release page. It is the
   first artifact signed with a Developer ID, notarised by Apple, and stapled.
-  macOS opens it without a Gatekeeper warning.
 
 | Fact | Value |
 |---|---|
@@ -83,13 +82,14 @@ while a coding agent works, and lets it sleep when every agent waits on you.
 
 ### Added
 
-- The wake policy. coffee-bar holds a `PreventUserIdleSystemSleep` assertion
-  while an agent session is `starting` or `working`. It releases the assertion
-  when every session waits on a human. A session that waits on you holds
-  nothing.
+- The wake policy. Under `Auto`, coffee-bar holds a
+  `PreventUserIdleSystemSleep` assertion while an agent session is `starting` or
+  `working`. It releases the assertion when every session waits on a human.
+  Under `Auto`, a session that waits on you holds nothing.
 - The Serving control, with three positions. `Off` never holds, and it outranks
-  an active session. `Auto` is the default, and the sessions decide. `On` always
-  holds.
+  an active session. `Auto` is the default, and the sessions decide. `On` holds
+  whatever the sessions do. The battery floor below still applies to `Auto` and
+  to `On`.
 - The Display control, with two positions. `Sleeps` is the default, so the
   screen goes dark while the machine stays awake. `Stays on` adds a
   `PreventUserIdleDisplaySleep` assertion. That assertion rides the system hold
