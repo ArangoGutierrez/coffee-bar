@@ -28,9 +28,30 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # TAGS ARE REQUIRED, and the default checkout does not fetch them.
+          #
+          # `SiteClaims_test.swift` asserts the version shown on every page, and
+          # the version inside the DMG download URL, against `git tag`. With the
+          # default `fetch-depth: 1` the runner has zero tags, so that guard
+          # reported "cannot read the newest tag; this guard cannot run and will
+          # not pretend it passed" and failed the suite — correctly. It is written
+          # to fail loudly rather than skip, because a guard that silently skips
+          # is worse than no guard.
+          #
+          # `fetch-tags` rather than `fetch-depth: 0`: the guard needs the tag
+          # NAMES, not the history, so this keeps the checkout shallow.
+          fetch-tags: true
 
       - name: Show toolchain
         run: swift --version
+
+      # Fail here, with a clear message, rather than inside a test. If the tags
+      # ever stop arriving, the version guard's failure text points at the page
+      # rather than at the checkout, which sends the reader to the wrong file.
+      - name: Confirm the tags arrived
+        run: |
+          git tag --sort=-v:refname | head -3
+          test -n "$(git tag)" || { echo "no tags in the checkout; SiteClaims version guards cannot run"; exit 1; }
 
       - name: Build (debug)
         run: swift build
@@ -40,3 +61,40 @@ jobs:
 
       - name: Test
         run: swift test
+
+  # A SEPARATE job, on ubuntu, deliberately. The policy bench is pure logic with
+  # no macOS dependency, and the comment above records that macOS runners bill at
+  # 10x. This runs at 1x and in parallel with the Swift build.
+  bench-test:
+    name: Policy bench unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The runner's preinstalled Node is deliberate. `node:test` is built in, so
+      # this needs no package.json, no dependency and no third-party setup action
+      # — one fewer pinned supply-chain surface in a repository that pins every
+      # `uses:` by SHA for exactly that reason.
+      #
+      # The version is ASSERTED rather than assumed: site/assets/bench.test.js
+      # uses `import.meta.dirname`, which lands in Node 20.11. A runner downgrade
+      # must fail loudly here instead of skipping the suite silently.
+      - name: Require Node 20.11 or later
+        run: |
+          node --version
+          node -e 'const [a,b] = process.versions.node.split(".").map(Number); if (a < 20 || (a === 20 && b < 11)) { console.error("import.meta.dirname needs Node >= 20.11"); process.exit(1); }'
+
+      # NAMED EXPLICITLY. Never a directory, never a glob. Measured 2026-08-04 on
+      # Node 26, and the same three lines sit in the test file's own header:
+      #   node --test site/assets/              -> rc=1, "Cannot find module". Broken.
+      #   node --test 'site/assets/*.test.js'   -> rc=0 when NOTHING matches. Vacuous.
+      #   node --test site/assets/bench.test.js -> rc=1 when the file is absent.
+      # Only the explicit path fails closed, so a rename cannot silently disable
+      # this check while the job stays green.
+      - name: Bench module tests
+        run: node --test site/assets/bench.test.js

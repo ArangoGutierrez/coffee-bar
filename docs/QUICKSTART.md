@@ -13,10 +13,12 @@ them, the app runs but no session event reaches it.
   places that assert whether a release exists. Keep it that way: the tag flips
   these two and nothing else.
 -->
-**No release is tagged yet**, so build from source — see
+**v0.1.1 is released** as a signed, notarised DMG. Homebrew still builds from
+source and installs 0.1.0. The two tags carry the same code, so v0.1.1 is that
+source, newly signed. To build that source yourself, see
 [Building](BUILDING.md). It takes about a minute.
 
-Once the first release is tagged, the install is:
+The install through Homebrew is:
 
     brew tap ArangoGutierrez/coffee-bar
     brew install coffee-bar
@@ -156,7 +158,8 @@ it starts, look for the cup at the right end of the menu bar, near the clock.
 Click the cup to open the panel. If your menu bar is full, macOS drops status
 items silently and the cup will not appear.
 
-The panel holds three controls, a battery line, and Quit.
+The panel holds three controls, a battery line, the Waiting on you list, the
+version, and Quit.
 
 | Control | What it decides |
 |---|---|

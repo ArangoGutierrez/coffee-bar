@@ -19,7 +19,9 @@ that is the difference from `caffeinate -d`.
   docs/QUICKSTART.md. Before adding a second status claim anywhere, change this
   one instead.
 -->
-**Status: M2. No release is tagged yet, so install means building from source.**
+**Status: v0.1.1 is released as a signed, notarised DMG. Homebrew still
+builds from source and installs 0.1.0. The two tags carry the same code, so
+v0.1.1 is that source, newly signed.**
 See [Building](docs/BUILDING.md).
 
 ## Quick start
@@ -30,11 +32,13 @@ exist; it reads session state from them and from nothing else.
 
 ## What it does
 
-- Holds `PreventUserIdleSystemSleep`, bound to live agent session state.
+- Under `Auto`, holds `PreventUserIdleSystemSleep`, bound to live agent session
+  state.
 - **Holds no display assertion by default.** Your screen sleeps normally while
   the work continues. A Display control in the panel opts in when you do want
   the screen kept on.
-- Releases when every agent is blocked on a human, not when a timer expires.
+- Under `Auto`, releases when every agent is blocked on a human, not when a
+  timer expires.
 - Shows how many sessions are working, and which ones are waiting on you.
 - Retires a session whose agent crashed, so a dead process cannot pin the
   machine awake forever.

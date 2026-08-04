@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<!--
+  Copyright 2026 Carlos Eduardo Arango Gutierrez
+  SPDX-License-Identifier: Apache-2.0
+
+  HONESTY CONSTRAINTS — binding. Carried forward from the single-page site and
+  docs/ROADMAP.md. Read before editing a single claim on this page.
+
+  1. No novelty claim in usage monitoring. CodexBar already occupies that space.
+  2. Token accounting is M7 = v0.3. It does not exist. Do not imply it does.
+  3. Do not advertise the "coffee-bar moved your control" panel disclosure as
+     complete. The 2026-07-30 audit proved it is durable only when no agent is
+     running, which is the opposite of when it matters.
+  4. Every claim must be true of the SHIPPED build. If a claim stops being true,
+     the claim is the thing to fix.
+  5. The timeline is an ILLUSTRATION OF BEHAVIOUR, never a measurement. No
+     battery percentage, duration or saving may appear until M6's measurement
+     harness has produced one a user can reproduce.
+  6. The binary is arm64 ONLY. Never write "Intel" or "universal".
+  7. Homebrew currently installs 0.1.0; the DMG is 0.1.1. Do not blur that.
+
+  BRAND — assets/art/README.md is the source of truth.
+  - TWO colours, two jobs. --state (#A2571E / #B8682A dark) is the liquid and
+    means "held awake". --action (#FF9500 / #FF9F0A dark) is Apple systemOrange
+    and means "interactive". Never swap their jobs. Never add a third.
+  - Neither colour carries body text. Measured: --action on the light page
+    background is 1.93:1 and genuinely fails; --state is 4.71 light and 4.57
+    dark and would pass. Both stay out of body text anyway, so the rule is one
+    line and not four exceptions. Ink ON --action is the safe inverse: 8.51
+    light, 9.10 dark.
+  - Menu-bar glyphs stay monochrome. Never ship a coloured variant.
+  - The wordmark is always lowercase and always hyphenated. It is a command name.
+  - No external requests: no web fonts, no analytics, no CDN.
+  - Asset paths are RELATIVE. This is a project Pages site served from
+    /coffee-bar/, so a leading slash resolves to the user root and 404s.
+  - No Apple logo. Apple's guidelines forbid it for third-party promotion.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How coffee-bar works</title>
+<meta name="description" content="What Off, Auto and On do, what the Display control covers, the Battery floor control and where it ships, and the two IOKit power assertions coffee-bar holds on your Mac.">
+<link rel="canonical" href="https://arangogutierrez.github.io/coffee-bar/docs.html">
+<meta property="og:title" content="How coffee-bar works">
+<meta property="og:description" content="What Off, Auto and On do, what the Display control covers, the Battery floor control and where it ships, and the two IOKit power assertions coffee-bar holds on your Mac.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://arangogutierrez.github.io/coffee-bar/docs.html">
+<meta property="og:image" content="https://arangogutierrez.github.io/coffee-bar/social-preview-1280x640.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon-32.png" sizes="32x32" type="image/png">
+<link rel="icon" href="favicon-16.png" sizes="16x16" type="image/png">
+<link rel="apple-touch-icon" href="apple-touch-icon-180.png">
+<link rel="manifest" href="site.webmanifest">
+<meta name="theme-color" content="#F2F0EB" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#101013" media="(prefers-color-scheme: dark)">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+<div class="shell">
+<nav class="sidebar" aria-label="Site">
+  <a class="sidebar-mark" href="index.html">coffee-bar</a>
+  <ul>
+    <li><a href="index.html">Home</a></li>
+    <li><a href="install.html">Install</a></li>
+    <li><a href="docs.html" aria-current="page">Docs</a></li>
+    <li><a href="changelog.html">Changelog</a></li>
+  </ul>
+  <p class="sidebar-version"><a href="changelog.html">v0.1.1</a></p>
+</nav>
+<div class="wrap">
+<!-- page content starts here -->
+<!--
+  PAGE NOTES — kept OUT of the shared comment above, which must stay byte
+  identical across all four pages. Three rules are specific to this page.
+
+  A. THE BATTERY SENTENCE. Write "at or below 20%", with the % SIGN.
+     `PowerBroker` suppresses at `percent <= floor`, so the exclusive wording
+     states the opposite of what happens at exactly 20. A grep for the exclusive
+     phrase must find nothing on this page, so this note does not spell it out.
+     Two guards read that sentence and BOTH match on a literal % —
+     `(at or below|below|under)\s*(\d+)\s*%` and `(\d+)\s*%`. Spelled out as the
+     word "percent" the sentence slips past both silently, so the page would
+     look checked while nothing had checked it.
+
+  A2. 20 IS THE ONLY PERCENTAGE THIS PAGE MAY WRITE IN PROSE, and issue #11 is
+     why. `theBatteryFloorStatedIsTheRealDefault` reads EVERY `(\d+)\s*%` in the
+     prose of every documented surface and asserts that a serve at that charge
+     is refused and a serve one point above it is granted. That is true of 20
+     and of no other number, so the guard treats every percentage on the page as
+     a claimed floor. The floor is now a SETTING, so the page has to name values
+     that are not the default: the five control positions, and the ends of the
+     permitted range.
+
+     Those live in <code>, deliberately, and `htmlProse` strips <code> before
+     the guard reads the prose. <code> is the element this page already uses for
+     a literal lifted out of the product — see the assertion names below — and
+     these are exactly that: `ServingModel.floorLabel(for:)` renders the string
+     "30%" onto the control, and `BatteryFloor.permitted` is `5...100`.
+
+     Do NOT unwrap them into plain prose. The suite goes RED with a message
+     about a 30% floor that does not exist, which is the guard working. Do NOT
+     "fix" that red by spelling the number as a word either — that hides it from
+     the guard the way note A describes, and leaves the page looking checked.
+     A percentage that is neither 20 nor a quoted product literal does not
+     belong on this page at all.
+
+  B. EVERY FAQ ANSWER IS A SENTENCE THAT ALSO APPEARS VISIBLY ON THIS PAGE.
+     Each lifted sentence sits on ONE source line and carries NO inline markup,
+     so the answer survives a plain tag-strip byte for byte. Wrapping such a line
+     or putting a word of it in <code> breaks that, and a JSON-LD answer that
+     contradicts the visible text is worse than no JSON-LD at all.
+-->
+
+<h1>How coffee-bar works</h1>
+
+<p>coffee-bar holds your Mac awake while a coding agent is working, and lets it
+sleep the moment every agent is waiting on you. This page defines all three
+controls in the panel, states exactly what coffee-bar asks macOS for, and says
+when it refuses to hold at all.</p>
+
+<h2 class="eyebrow">The Serving control</h2>
+
+<p>Three positions, and they rank differently. The ranking is the whole
+policy.</p>
+
+<h3>Off</h3>
+<p>Off never holds. It is absolute, and an active agent session does not override it. coffee-bar overrides your Mac's own sleep policy, so a product that ignored its own off position because some background session disagreed would be a trust failure rather than a convenience.</p>
+
+<h3>Auto</h3>
+<p>Auto is the default, and the sessions decide. coffee-bar holds the Mac awake while at least one session is starting or working, and it releases the hold when every session is done or waiting on you.</p>
+<p>This is what the product is for. The two working states are the same two the
+panel counts, so the line that says how many sessions are working and the hold
+itself can never disagree.</p>
+
+<h3>On</h3>
+<p>On always holds, even when no session is running. An explicit request outranks
+a quiet session list, so a hold you asked for does not end the moment the last
+session goes idle. The battery floor below still applies to it.</p>
+
+<h2 class="eyebrow">The Display control</h2>
+
+<p>Two positions. This control answers a different question from Serving: that
+one says whether to hold at all, this one says what a hold covers.</p>
+
+<h3>Sleeps</h3>
+<p>Sleeps is the default. coffee-bar holds the machine awake and your screen still goes dark.</p>
+<p>That default is the product's central difference from <code>caffeinate -d</code>.
+An agent can work through the night without the display burning power all night
+with it.</p>
+
+<h3>Stays on</h3>
+<p>Stays on adds the display assertion. It rides the system hold and never outlives it, so the Off position and the battery floor govern your screen exactly as they govern the machine.</p>
+<p>Some work is worth watching, so this is a setting rather than a promise. It is
+also the reason the two are separate controls: asking for the screen is not the
+same as asking coffee-bar to hold unconditionally.</p>
+
+<h2 class="eyebrow">The Battery floor control</h2>
+
+<p>Five positions, and a third question. Serving says whether to hold at all,
+Display says what a hold covers, and this one says how much battery a hold may
+spend.</p>
+
+<p>The Battery floor control ships at 20%, and that is a default rather than a fixed limit. The panel lets you move it, and your choice is remembered across launches.</p>
+
+<p>The control offers <code>10%</code>, <code>20%</code>, <code>30%</code>,
+<code>40%</code> and <code>50%</code>. The app accepts any floor from
+<code>5</code> to <code>100</code>, and brings a value outside that range inside
+it before the decision reads it.</p>
+
+<p>On battery, at or below 20%, coffee-bar does not hold. That is where the floor ships, and it outranks an explicit On, because the floor is a safety limit on the machine rather than a veto on one control position.</p>
+
+<p>At or below is exact. The decision suppresses the hold when the charge is
+less than or equal to the floor, so at the floor itself coffee-bar does not
+hold — at 20% on a fresh install. The floor outranks the Display control as
+well, and withdraws the display assertion at the same moment, because a screen
+held through the floor drains the battery faster than the hold the floor has
+just refused.</p>
+
+<p>The panel names the reading the decision was made on. When a hold you asked
+for was refused outright, or was honoured and then released as the battery
+drained, it also names the position your control landed on — and it words those
+two cases differently, because a click that worked for hours was not a refusal.</p>
+
+<p>A Mac on mains power has no floor, and a machine with no battery at all never
+reaches this rule.</p>
+
+<h2 class="eyebrow">What coffee-bar asks macOS for</h2>
+
+<p>coffee-bar asks macOS for two IOKit power assertions and nothing else. It holds PreventUserIdleSystemSleep whenever it is serving, and PreventUserIdleDisplaySleep beside it only under Stays on.</p>
+
+<p>Both are named, so <code>pmset -g assertions</code> tells you who is keeping
+your Mac awake:</p>
+
+<ul class="does">
+<li><code>PreventUserIdleSystemSleep</code>, named <code>coffee-bar is serving</code>.</li>
+<li><code>PreventUserIdleDisplaySleep</code>, named <code>coffee-bar is keeping the display awake</code>. It carries a different sentence on purpose, so that a second line reads as a second thing rather than as a duplicate of the first.</li>
+</ul>
+
+<p>These are the same mechanism <code>caffeinate</code> uses. coffee-bar needs no
+root, no password and no kernel extension, and it writes nothing to your power
+settings. Releasing an assertion restores your normal behaviour exactly.</p>
+
+<h2 class="eyebrow">Waiting on you</h2>
+
+<p>Waiting on you is the panel heading for the sessions that are blocked on a human. Under Auto these sessions do not hold the Mac awake, and that release is the entire product.</p>
+
+<p>Two session states reach that heading: <code>awaitingPermission</code>, where
+the agent is asking you to approve a tool, and <code>awaitingInput</code>, where
+the agent is asking you a question. A session that waits on you holds
+nothing.</p>
+
+<p>The panel carries a second line beside it, counting the sessions that are
+actually holding the Mac awake — the ones that are starting or working. The two
+lines answer different questions and are true independently, which is the only
+way two lines like these can sit together and stay honest.</p>
+
+<h2 class="eyebrow">Where the app's knowledge comes from</h2>
+
+<p>Five Claude Code hooks, and nothing else. <a href="install.html">The Install
+page has the block to paste</a>, and until those entries exist the app runs and
+no session event ever reaches it.</p>
+
+<p>coffee-bar reads hook events to learn whether an agent is working, and it does not read your conversations.</p>
+
+<p>Two fields in those payloads carry conversation content, and coffee-bar
+declares no property for either one. <code>transcript_path</code> and
+<code>last_assistant_message</code> reach no stored property, no log line and no
+part of the screen: they are discarded where the payload is decoded, and tests
+hold that boundary against recorded payloads that really carry both fields.</p>
+
+<div class="note">
+<p>coffee-bar reports what it can see, and says so when it cannot see something.
+The panel tells you which hooks are missing from your settings file, and tells
+you separately when this copy of the app is not listening on its socket. A
+settings file that looks correct proves nothing about events arriving, so those
+two answers never merge into one.</p>
+</div>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "What does the Auto position do in coffee-bar?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Auto is the default, and the sessions decide. coffee-bar holds the Mac awake while at least one session is starting or working, and it releases the hold when every session is done or waiting on you."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What does the Stays on position do?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Stays on adds the display assertion. It rides the system hold and never outlives it, so the Off position and the battery floor govern your screen exactly as they govern the machine."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What does waiting on you mean in the coffee-bar panel?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Waiting on you is the panel heading for the sessions that are blocked on a human. Under Auto these sessions do not hold the Mac awake, and that release is the entire product."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What does coffee-bar set on my Mac?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "coffee-bar asks macOS for two IOKit power assertions and nothing else. It holds PreventUserIdleSystemSleep whenever it is serving, and PreventUserIdleDisplaySleep beside it only under Stays on."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Does coffee-bar hold the Mac awake on a low battery?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "On battery, at or below 20%, coffee-bar does not hold. That is where the floor ships, and it outranks an explicit On, because the floor is a safety limit on the machine rather than a veto on one control position."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Can I change the coffee-bar battery floor?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "The Battery floor control ships at 20%, and that is a default rather than a fixed limit. The panel lets you move it, and your choice is remembered across launches."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Does coffee-bar read my conversations?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "coffee-bar reads hook events to learn whether an agent is working, and it does not read your conversations."
+      }
+    }
+  ]
+}
+</script>
+
+<footer>
+<p>Apache-2.0 · <a href="https://github.com/ArangoGutierrez/coffee-bar">Source on GitHub</a><br>
+Built by <a href="https://github.com/ArangoGutierrez">Carlos Eduardo Arango Gutierrez</a>.</p>
+<p class="tm">Apple, macOS and Apple silicon are trademarks of Apple Inc., registered in the U.S. and other countries. coffee-bar is not affiliated with, endorsed by, or sponsored by Apple Inc. or NVIDIA Corporation.</p>
+</footer>
+
+</div><!-- /.wrap -->
+</div><!-- /.shell -->
+</body>
+</html>

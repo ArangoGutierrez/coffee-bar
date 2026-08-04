@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Copyright 2026 Carlos Eduardo Arango Gutierrez
+  SPDX-License-Identifier: Apache-2.0
+
+  Exactly the four pages that exist under site/. A sitemap that names a 404 is
+  worse than no sitemap, so add an entry only after the file lands.
+
+  lastmod comes from git, never from memory:
+    git log -1 --format=%ad --date=short -- site/
+-->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://arangogutierrez.github.io/coffee-bar/</loc>
+    <lastmod>2026-08-04</lastmod>
+  </url>
+  <url>
+    <loc>https://arangogutierrez.github.io/coffee-bar/install.html</loc>
+    <lastmod>2026-08-04</lastmod>
+  </url>
+  <url>
+    <loc>https://arangogutierrez.github.io/coffee-bar/docs.html</loc>
+    <lastmod>2026-08-04</lastmod>
+  </url>
+  <url>
+    <loc>https://arangogutierrez.github.io/coffee-bar/changelog.html</loc>
+    <lastmod>2026-08-04</lastmod>
+  </url>
+</urlset>

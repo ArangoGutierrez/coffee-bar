@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://arangogutierrez.github.io/coffee-bar/sitemap.xml

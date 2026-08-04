@@ -4,7 +4,46 @@ One object at three scales: a 16×16 template glyph (menu bar), a 1024 layered a
 icon (Apple grid), and a web/GitHub set cut from the same geometry.
 
 **Colours** — ink `#121214` (light appearance) / `#F2F1EE` (dark), warm neutral base
-`#EFEDE7`, web tile `#F2F0EB`, single accent `#76B900` used **only** for the liquid.
+`#EFEDE7`, web tile `#F2F0EB`.
+
+Three roles. **`state` and `action` are the two accents.** `rest` is a neutral
+grey, not an accent — it is what the palette uses to say "nothing is held".
+
+| Role | Light | Dark | Job | Accent? |
+|---|---|---|---|---|
+| state | `#A2571E` | `#B8682A` | the liquid; held awake | yes |
+| action | `#FF9500` | `#FF9F0A` | Apple `systemOrange`; buttons, links, focus | yes |
+| rest | `#6B7683` | `#6B7683` | released; free to sleep | no |
+
+**Never mix `state` and `action`.** `state` colours the liquid and the held
+segments — in the icon system it is used **only** for the liquid. `action`
+colours buttons, links and focus rings, and appears on the web only.
+
+**Neither accent carries body text.** That is a design rule, not a measurement.
+Only one of the four combinations actually fails 4.5:1:
+
+| combination | ratio | verdict |
+|---|---|---|
+| `action` `#FF9500` on light `#F2F0EB` | 1.93 | fails |
+| `action` `#FF9F0A` on dark `#101013` | 9.24 | passes |
+| `state` `#A2571E` on light `#F2F0EB` | 4.71 | passes |
+| `state` `#B8682A` on dark `#101013` | 4.57 | passes |
+
+Holding both accents out of body text in both appearances keeps this one rule
+instead of four exceptions. Ink **on** `action` is the safe inverse — 8.51
+(light) and 9.10 (dark) — so a filled button carries body text.
+
+The accent moved off `#76B900` on 2026-08-04. That green is NVIDIA's brand
+colour and this is a personal Apache-2.0 product, so it can read as corporate
+endorsement — and coffee is not green.
+
+> **The recolour is not finished.** `site/**` carries the new accents. The app
+> icon sources under `assets/art/appicon/**`, the web set under
+> `assets/art/web/**`, and the GitHub art under `assets/art/github/**` all still
+> carry `#76B900`. Re-cutting them, and rebuilding `AppIcon.icns`, is a tracked
+> follow-up and is out of scope for the site redesign (design §8). Until it
+> lands, the installed app icon stays green while the site is roast.
+
 The menu-bar glyph has no colour at all — it is alpha only.
 
 > **Filenames:** the export pipeline strips `@` from filenames, so `@2x`/`@3x` assets
@@ -43,6 +82,11 @@ Never tint these yourself, never ship a coloured menu-bar variant.
 `apple-touch-icon-180.png`, `icon-192/512.png`, `icon-512-maskable.png`,
 `site.webmanifest`, `head-snippet.html` (paste into `<head>`).
 
+The web rasters shipped in `site/` are cut from `site/appicon-web.svg`, which is
+the same geometry as the app icon on the **web tile** `#F2F0EB` rather than the
+appicon base `#EFEDE7`. `icon-512-maskable.png` insets that art by 0.72 about
+the canvas centre for the platform safe zone.
+
 ## wordmark/
 `coffee-bar-wordmark-{light,dark}.png` (+`-2x`). Always lowercase, always
 hyphenated — it is a command name. Clear space either side = one glyph width.
@@ -55,4 +99,4 @@ hyphenated — it is a command name. Clear space either side = one glyph width.
 
 ## Don't
 Skeuomorphic beans, saucers or latte art; sparkles, neural nets or other AI motifs;
-gradients; a second accent colour; any colour in the menu-bar glyph.
+gradients; a third accent colour; any colour in the menu-bar glyph.
