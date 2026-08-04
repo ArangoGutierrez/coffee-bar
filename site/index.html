@@ -15,18 +15,29 @@
      running, which is the opposite of when it matters.
   4. Every claim below must be true of the SHIPPED build. If a claim stops being
      true, the claim is the thing to fix.
-  5. The state diagram below is an ILLUSTRATION OF BEHAVIOUR, never a
-     measurement. No battery percentage, duration, or saving may appear on this
-     page until M6's measurement harness has produced one a user can reproduce.
+  5. The state diagram is an ILLUSTRATION OF BEHAVIOUR, never a measurement. No
+     battery percentage, duration or saving may appear here until M6's
+     measurement harness has produced one a user can reproduce.
+  6. The hook block below is COPIED FROM docs/QUICKSTART.md and must stay
+     identical to it. An earlier version of this page said "the README carries
+     the exact block". The README carries no hook block at all, so that sentence
+     was false and is now replaced by the block itself.
 
-  DESIGN NOTES — so the next editor does not undo the choices by accident.
-  - Two functional colours only: amber = the assertion is HELD, slate = it is
-    RELEASED. Colour encodes product state. Do not add a third accent.
-  - Amber is a GRAPHIC colour. It never carries body text, because it does not
-    reach 4.5:1 on the light background.
-  - Monospace is the display face. That is deliberate, not a code style.
+  BRAND RULES — from assets/art/README.md. That file is the source of truth.
+  - ONE accent: #76B900, and in the icon system it is used only for the liquid.
+    This page therefore spends green on exactly one idea — the wake assertion is
+    HELD — because that is the liquid in the cup. Slate means released. There is
+    no third colour and no second accent.
+  - Green is a GRAPHIC colour here. It never carries body text: #76B900 does not
+    reach 4.5:1 on either background.
+  - Ink #121214 / #F2F1EE, warm base #EFEDE7, web tile #F2F0EB.
+  - The menu-bar glyphs are reproduced MONOCHROME, because the real ones are
+    alpha-only template images. "Never ship a coloured menu-bar variant."
+  - The wordmark is always lowercase and always hyphenated. It is a command name.
   - No external requests: no web fonts, no analytics, no CDN. This page claims
     the app sends nothing anywhere, so the page must not leak visitors either.
+  - Icon paths are RELATIVE. This is a project Pages site served from
+    /coffee-bar/, so a leading slash resolves to the user root and 404s.
 -->
 <html lang="en">
 <head>
@@ -38,166 +49,155 @@
 <meta property="og:title" content="coffee-bar — your Mac sleeps while the agent waits on you">
 <meta property="og:description" content="Keeps your Mac awake exactly while a coding agent is working. Releases the moment every agent is blocked on a human.">
 <meta property="og:type" content="website">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon-32.png" sizes="32x32" type="image/png">
+<link rel="icon" href="favicon-16.png" sizes="16x16" type="image/png">
+<link rel="apple-touch-icon" href="apple-touch-icon-180.png">
+<link rel="manifest" href="site.webmanifest">
+<meta name="theme-color" content="#F2F0EB" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#101013" media="(prefers-color-scheme: dark)">
 <style>
   :root {
     color-scheme: light dark;
-    /* Amber: the wake assertion is HELD. Slate: it is RELEASED. */
-    --hold:   #b06f10;   /* light-mode amber, darkened to carry small text */
-    --hold-g: #e9a33c;   /* the graphic amber, for tracks and marks */
-    --rest:   #6b7683;
-    --ink:    #0e1116;   /* a display that has gone to sleep, not pure black */
-    --paper:  #faf9f6;
+    --liquid: #76b900;   /* the one accent: the liquid, and so "held awake" */
+    --rest:   #6b7683;   /* released, free to sleep */
+    --ink:    #121214;
+    --paper:  #f2f0eb;   /* the web tile from the art package */
     --fg:     var(--ink);
     --bg:     var(--paper);
-    --dim:    #565e6b;
-    --line:   #e4e2dd;
-    --panel:  #f2f0eb;
+    --dim:    #55585f;
+    --line:   #e0ddd5;
+    --panel:  #e9e6de;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --hold:   #e9a33c;
-      --fg:     #e9e7e2;
-      --bg:     var(--ink);
-      --dim:    #99a2ae;
-      --line:   #23272f;
-      --panel:  #161a21;
+      --fg:    #f2f1ee;
+      --bg:    #101013;
+      --dim:   #9aa0a8;
+      --line:  #24242a;
+      --panel: #191920;
     }
   }
 
   *, *::before, *::after { box-sizing: border-box; }
 
   body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--fg);
+    margin: 0; background: var(--bg); color: var(--fg);
     font: 16.5px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
   }
-  .wrap { max-width: 46rem; margin: 0 auto; padding: 4.5rem 1.5rem 6rem; }
+  .wrap { max-width: 46rem; margin: 0 auto; padding: 4rem 1.5rem 6rem; }
 
-  /* ── Type ──────────────────────────────────────────────────────────────── */
-  .mono, h1, .eyebrow, code, pre, .track-label, .phase {
+  .mono, h1, .eyebrow, code, pre, .track-label, .phase, .state-name {
     font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
   }
-  h1 {
-    font-size: clamp(2.1rem, 8vw, 3.25rem);
-    font-weight: 700;
-    letter-spacing: -0.045em;
-    line-height: 1.02;
-    margin: 0 0 1rem;
-  }
-  h1 .dash { color: var(--hold); }
-  .tag {
-    font-size: clamp(1.05rem, 2.6vw, 1.3rem);
-    line-height: 1.45;
-    color: var(--fg);
-    margin: 0 0 3.25rem;
-    max-width: 32ch;
-    text-wrap: balance;
-  }
-  .tag em { font-style: normal; box-shadow: inset 0 -0.42em 0 rgba(233,163,60,.32); }
 
-  h2 { margin: 0; font-size: 1rem; }
+  /* ── Hero ──────────────────────────────────────────────────────────────── */
+  .hero { display: flex; align-items: center; gap: 1.25rem; margin-bottom: 1.1rem; }
+  .appicon {
+    width: 84px; height: 84px; flex: none; border-radius: 19%;
+    display: block; box-shadow: 0 1px 3px rgba(0,0,0,.18);
+  }
+  h1 {
+    font-size: clamp(2rem, 7vw, 3rem); font-weight: 700;
+    letter-spacing: -0.045em; line-height: 1; margin: 0;
+  }
+  .tag {
+    font-size: clamp(1.05rem, 2.6vw, 1.28rem); line-height: 1.45;
+    margin: 0 0 3rem; max-width: 34ch; text-wrap: balance;
+  }
+  .tag em { font-style: normal; border-bottom: 2px solid var(--fg); }
+
   .eyebrow {
     display: flex; align-items: center; gap: .6rem;
-    font-size: .72rem; font-weight: 600;
-    text-transform: uppercase; letter-spacing: .16em;
-    color: var(--dim);
-    margin: 3.5rem 0 1rem;
+    font-size: .72rem; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .16em; color: var(--dim); margin: 3.5rem 0 1rem;
   }
   .eyebrow::before {
-    content: ""; width: .5rem; height: .5rem; flex: none;
-    background: var(--hold-g);
+    content: ""; width: .5rem; height: .5rem; flex: none; background: var(--liquid);
   }
+  h2 { margin: 0; font-size: 1rem; }
   p { margin: 0 0 1.1rem; }
-  a { color: inherit; text-underline-offset: 3px; text-decoration-thickness: 1px; }
-  a:focus-visible, summary:focus-visible {
-    outline: 2px solid var(--hold); outline-offset: 3px; border-radius: 2px;
-  }
+  a { color: inherit; text-underline-offset: 3px; }
+  a:focus-visible { outline: 2px solid var(--liquid); outline-offset: 3px; border-radius: 2px; }
   strong { font-weight: 650; }
 
   /* ── Signature: the assertion timeline ─────────────────────────────────── */
   .figure {
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    padding: 1.4rem 1.35rem 1.15rem;
-    margin: 0 0 1.25rem;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 1.4rem 1.35rem 1.15rem; margin: 0 0 1.25rem;
   }
   .row { display: grid; grid-template-columns: 6.5rem 1fr; align-items: center; gap: .9rem; }
   .row + .row { margin-top: .55rem; }
   .track-label { font-size: .74rem; color: var(--dim); text-align: right; white-space: nowrap; }
   .track { display: flex; gap: 3px; height: 1.05rem; }
   .seg { border-radius: 2px; }
-  .seg.work { background: var(--hold-g); }
+  .seg.work { background: var(--liquid); }
   .seg.wait { background: var(--rest); opacity: .38; }
-  /* caffeinate holds CONTINUOUSLY, through every phase including the ones you
-     are the bottleneck for. It is drawn as one unbroken bar because that is
-     what it does — segmenting it would imply it ever lets go. */
-  .track.caffeinate .seg { background: var(--hold-g); opacity: .5; }
+  /* caffeinate holds CONTINUOUSLY. One unbroken bar, because segmenting it
+     would imply it ever lets go. */
+  .track.caffeinate .seg { background: var(--liquid); opacity: .45; }
 
   .axis { display: grid; grid-template-columns: 6.5rem 1fr; gap: .9rem; margin-top: .45rem; }
   .phases { display: flex; gap: 3px; }
   .phase {
     font-size: .62rem; letter-spacing: .02em; color: var(--dim);
-    padding: .3rem 0 0 .4rem;
-    border-left: 1px solid var(--line);   /* a tick, so phase boundaries read */
+    padding: .3rem 0 0 .4rem; border-left: 1px solid var(--line);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .caption { font-size: .82rem; color: var(--dim); margin: 0 0 2rem; }
   .caption b { color: var(--fg); font-weight: 600; }
 
-  /* One orchestrated moment: the wait phases start held, then release. */
   @media (prefers-reduced-motion: no-preference) {
     .track.coffeebar .seg.wait {
-      background: var(--hold-g); opacity: .55;
+      background: var(--liquid); opacity: .45;
       animation: release .5s ease-out forwards;
     }
     .track.coffeebar .seg.wait.w1 { animation-delay: .75s; }
     .track.coffeebar .seg.wait.w2 { animation-delay: 1.15s; }
   }
-  @keyframes release {
-    to { background: var(--rest); opacity: .38; }
-  }
+  @keyframes release { to { background: var(--rest); opacity: .38; } }
+
+  /* ── The menu-bar states, in the real artwork ──────────────────────────── */
+  .states { display: flex; flex-wrap: wrap; gap: 1.6rem; margin: 0 0 1rem; }
+  .state { display: flex; align-items: flex-start; gap: .7rem; min-width: 13rem; flex: 1; }
+  .state svg { width: 26px; height: 26px; flex: none; color: var(--fg); margin-top: .1rem; }
+  .state-name { display: block; font-size: .78rem; font-weight: 600; letter-spacing: -.01em; }
+  .state-what { display: block; font-size: .84rem; color: var(--dim); line-height: 1.5; }
 
   /* ── Lists ─────────────────────────────────────────────────────────────── */
   ul.does { list-style: none; padding: 0; margin: 0; }
-  ul.does li {
-    position: relative; padding-left: 1.5rem; margin: 0 0 .8rem;
-  }
+  ul.does li { position: relative; padding-left: 1.5rem; margin: 0 0 .8rem; }
   ul.does li::before {
     content: ""; position: absolute; left: 0; top: .62em;
-    width: .45rem; height: .45rem; background: var(--hold-g); border-radius: 1px;
+    width: .45rem; height: .45rem; background: var(--liquid); border-radius: 1px;
   }
-
   .note {
-    border-left: 2px solid var(--hold-g);
-    padding: .15rem 0 .15rem 1.1rem;
-    color: var(--dim);
-    margin: 1.75rem 0 0;
+    border-left: 2px solid var(--liquid); padding: .15rem 0 .15rem 1.1rem;
+    color: var(--dim); margin: 1.75rem 0 0;
   }
 
   /* ── Install: a real sequence, so the numbering carries meaning ────────── */
   ol.steps { list-style: none; counter-reset: s; padding: 0; margin: 0; }
-  ol.steps > li { counter-increment: s; position: relative; padding-left: 2.4rem; margin-bottom: 1.6rem; }
+  ol.steps > li { counter-increment: s; position: relative; padding-left: 2.4rem; margin-bottom: 1.8rem; }
   ol.steps > li::before {
     content: counter(s, decimal-leading-zero);
-    position: absolute; left: 0; top: .1em;
+    position: absolute; left: 0; top: .15em;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: .78rem; color: var(--hold); font-weight: 600;
+    font-size: .78rem; color: var(--dim); font-weight: 600;
   }
-  ol.steps p { margin: .35rem 0 0; }
+  ol.steps p { margin: .35rem 0 .6rem; }
   pre {
     background: var(--panel); border: 1px solid var(--line);
     padding: .8rem .95rem; border-radius: 6px; overflow-x: auto;
-    font-size: .84rem; margin: 0;
+    font-size: .82rem; margin: 0; line-height: 1.5;
   }
+  pre.hooks { max-height: 22rem; overflow-y: auto; }
   code { font-size: .875em; }
   p code, li code { background: var(--panel); padding: .1em .35em; border-radius: 3px; }
 
   footer {
-    margin-top: 4.5rem; padding-top: 1.5rem;
-    border-top: 1px solid var(--line);
+    margin-top: 4.5rem; padding-top: 1.5rem; border-top: 1px solid var(--line);
     color: var(--dim); font-size: .85rem;
   }
 
@@ -205,6 +205,8 @@
     .row, .axis { grid-template-columns: 1fr; gap: .35rem; }
     .track-label { text-align: left; }
     .axis { display: none; }
+    .hero { gap: 1rem; }
+    .appicon { width: 64px; height: 64px; }
   }
 </style>
 </head>
@@ -212,18 +214,23 @@
 <div class="wrap">
 
 <header>
-  <h1>coffee<span class="dash">-</span>bar</h1>
+  <div class="hero">
+    <picture>
+      <source srcset="appicon-dark.svg" media="(prefers-color-scheme: dark)">
+      <img class="appicon" src="appicon-light.svg" width="84" height="84"
+           alt="The coffee-bar app icon: a cup filled with green liquid.">
+    </picture>
+    <h1>coffee-bar</h1>
+  </div>
   <p class="tag">Your Mac stays awake while a coding agent is working, and sleeps the moment the agent is waiting on <em>you</em>.</p>
 </header>
 
 <!-- The thesis, shown before it is argued. -->
 <figure class="figure" role="img"
-        aria-label="Two timelines across one agent session. caffeinate holds the wake assertion through all four phases. coffee-bar holds it only through the two phases where the agent is working, and releases it while the agent waits on you.">
+        aria-label="Two timelines across one agent session. caffeinate holds the wake assertion unbroken through all four phases. coffee-bar holds it only through the two phases where the agent is working, and releases it while the agent waits on you.">
   <div class="row">
     <span class="track-label">caffeinate</span>
-    <div class="track caffeinate" aria-hidden="true">
-      <span class="seg" style="flex:11"></span>
-    </div>
+    <div class="track caffeinate" aria-hidden="true"><span class="seg" style="flex:11"></span></div>
   </div>
   <div class="row">
     <span class="track-label">coffee-bar</span>
@@ -245,9 +252,50 @@
   </div>
 </figure>
 <p class="caption">
-  <b>Amber holds the machine awake. Slate lets it sleep.</b>
+  <b>Green holds the machine awake. Slate lets it sleep.</b>
   An illustration of when the assertion is held — not a measurement.
 </p>
+
+<h2 class="eyebrow">What you see in the menu bar</h2>
+<p>
+The cup tells you the state at a glance. These are the real glyphs, and they are
+monochrome on purpose: macOS tints template images to match your menu bar, so
+they stay legible on any wallpaper and in either appearance.
+</p>
+<div class="states">
+  <div class="state">
+    <svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
+      <path fill-rule="evenodd" d="M2 6 H11 V11.9 Q11 14.2 8.7 14.2 H4.3 Q2 14.2 2 11.9 Z M3.5 7.5 H9.5 V12.7 H3.5 Z"></path>
+      <path fill="none" stroke="currentColor" stroke-width="1.6" d="M11 8.1 a2.6 2.6 0 0 1 0 4.2"></path>
+      <rect x="3.5" y="9.06" width="6" height="3.64" rx="0.5"></rect>
+    </svg>
+    <span><span class="state-name">idle</span>
+    <span class="state-what">No agent is working. Nothing is holding your Mac awake.</span></span>
+  </div>
+  <div class="state">
+    <svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
+      <path fill-rule="evenodd" d="M2 6 H11 V11.9 Q11 14.2 8.7 14.2 H4.3 Q2 14.2 2 11.9 Z M3.5 7.5 H9.5 V12.7 H3.5 Z"></path>
+      <path fill="none" stroke="currentColor" stroke-width="1.6" d="M11 8.1 a2.6 2.6 0 0 1 0 4.2"></path>
+      <rect x="3.5" y="9.06" width="6" height="3.64" rx="0.5"></rect>
+      <g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+        <path d="M4.7 5 C3.7 3.9 5.7 3.3 4.7 2.2"></path>
+        <path d="M8.3 4.7 C7.3 3.6 9.3 3 8.3 1.9"></path>
+      </g>
+    </svg>
+    <span><span class="state-name">serving</span>
+    <span class="state-what">An agent is working. The wake assertion is held.</span></span>
+  </div>
+  <div class="state">
+    <svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
+      <path fill-rule="evenodd" d="M2 6 H11 V11.9 Q11 14.2 8.7 14.2 H4.3 Q2 14.2 2 11.9 Z M3.5 7.5 H9.5 V12.7 H3.5 Z"></path>
+      <path fill="none" stroke="currentColor" stroke-width="1.6" d="M11 8.1 a2.6 2.6 0 0 1 0 4.2"></path>
+      <rect x="3.5" y="9.06" width="6" height="3.64" rx="0.5"></rect>
+      <circle cx="12.7" cy="3.1" r="2.3"></circle>
+    </svg>
+    <span><span class="state-name">attention</span>
+    <span class="state-what">An agent is blocked on you. Answer it and the work resumes.</span></span>
+  </div>
+</div>
 
 <h2 class="eyebrow">The behaviour</h2>
 <p>
@@ -296,26 +344,82 @@ nothing anywhere.
 -->
 <ol class="steps">
   <li>
+    <p>Install it. Homebrew builds from source on your machine, so there is no
+    Gatekeeper prompt and nothing to notarise.</p>
     <pre>brew tap ArangoGutierrez/coffee-bar
 brew install coffee-bar</pre>
-    <p>
-    Homebrew builds it from source on your machine, so there is no Gatekeeper
-    prompt and nothing to notarise. It installs the menu-bar app and a capability
-    probe.
-    </p>
   </li>
   <li>
-    <p>
-    Link it into <code>/Applications</code>. The app lands in the Homebrew prefix;
-    the install prints the one command that does this.
-    </p>
+    <p>Link it into <code>/Applications</code>. The app lands in the Homebrew
+    prefix, and the install prints the one command that does this.</p>
   </li>
   <li>
-    <p>
-    Add the five Claude Code hooks so coffee-bar can see session state. The
-    README carries the exact block — coffee-bar never writes your settings file
-    for you.
-    </p>
+    <p>Wire the five Claude Code hooks. coffee-bar learns what your sessions are
+    doing from these and from nothing else, and it never writes your settings
+    file for you. Until you add them the app runs but no event reaches it.
+    Add this to <code>~/.claude/settings.json</code>:</p>
+<pre class="hooks">{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+          }
+        ]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+          }
+        ]
+      }
+    ]
+  }
+}</pre>
+    <p>The command is the same for all five. Only
+    <code>PreToolUse</code> and <code>PostToolUse</code> take a
+    <code>matcher</code>. Restart Claude Code afterwards, then open the panel:
+    it tells you whether the hooks are reaching the app.
+    <a href="https://github.com/ArangoGutierrez/coffee-bar/blob/main/docs/QUICKSTART.md">The
+    quick start</a> has the full walkthrough and the first-run check.</p>
   </li>
 </ol>
 
@@ -329,9 +433,10 @@ rendered on screen — that boundary is held by tests, not by intention.
 
 <h2 class="eyebrow">What this version is not</h2>
 <p>
-v0.1 supports <strong>Claude Code</strong>. Codex and Cursor adapters are planned, and
-are not here yet. Token and usage accounting is a later milestone and does not
-exist in this release — if that is what you want today,
+v0.1 supports <strong>Claude Code</strong>, and only Claude Code. There are no Codex
+or Cursor hooks yet: those adapters and the <code>coffeebar-hook</code> shim are
+planned for v0.2. Token and usage accounting is a later milestone again and does
+not exist in this release — if that is what you want today,
 <a href="https://codexbar.app/">CodexBar</a> already does it well.
 </p>
 <p>
@@ -342,7 +447,7 @@ for a release that asks for no elevated privilege.
 <h2 class="eyebrow">Requirements</h2>
 <ul class="does">
   <li>macOS 14 or later</li>
-  <li>Claude Code, with the five hooks installed</li>
+  <li>Claude Code, with the five hooks above installed</li>
 </ul>
 
 <footer>
