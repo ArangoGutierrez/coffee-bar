@@ -13,6 +13,14 @@ public struct PowerInputs: Equatable, Sendable {
     public let batteryPercent: Int?
     public let userIntent: UserIntent
     public let holdAwakeWhileBlocked: Bool
+
+    /// The charge at or below which no hold is granted, already bounded.
+    ///
+    /// Issue #11 made this a user setting, so the value arrives from outside the
+    /// program rather than from an author's literal. `init` puts it through
+    /// `BatteryFloor.bounded`, which is the ONE bounding rule in this module and
+    /// is applied at the ONE door to a decision — see `BatteryFloor` for the
+    /// three placements weighed and why this is the choke point.
     public let batteryFloorPercent: Int
 
     /// Whether the user opted in to keeping the screen lit as well (issue #12).
@@ -32,14 +40,18 @@ public struct PowerInputs: Equatable, Sendable {
                 batteryPercent: Int?,
                 userIntent: UserIntent = .auto,
                 holdAwakeWhileBlocked: Bool = false,
-                batteryFloorPercent: Int = 20,
+                batteryFloorPercent: Int = BatteryFloor.default,
                 holdDisplayAwake: Bool = false) {
         self.sessions = sessions
         self.powerSource = powerSource
         self.batteryPercent = batteryPercent
         self.userIntent = userIntent
         self.holdAwakeWhileBlocked = holdAwakeWhileBlocked
-        self.batteryFloorPercent = batteryFloorPercent
+        // The ONE place a user-supplied floor is bounded. Not at the UI, which
+        // is one caller of a public API and not the only possible one; not at
+        // the settings read, which would miss the in-memory path. Here, because
+        // `decide` cannot be reached without crossing this initialiser.
+        self.batteryFloorPercent = BatteryFloor.bounded(batteryFloorPercent)
         self.holdDisplayAwake = holdDisplayAwake
     }
 }

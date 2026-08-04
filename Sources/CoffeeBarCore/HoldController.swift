@@ -271,7 +271,7 @@ public struct HoldController: Equatable, Sendable {
                                   batteryPercent: Int?,
                                   sessions: [AgentSession] = [],
                                   holdAwakeWhileBlocked: Bool = false,
-                                  batteryFloorPercent: Int = 20,
+                                  batteryFloorPercent: Int = BatteryFloor.default,
                                   holdDisplayAwake: Bool = false,
                                   assertionIsHeld: Bool = false) -> DesiredPowerState {
         let state = PowerBroker.decide(PowerInputs(

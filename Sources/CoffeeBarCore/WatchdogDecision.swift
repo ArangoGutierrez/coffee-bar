@@ -34,7 +34,7 @@ public struct WatchdogPolicy: Equatable, Sendable {
     public let knownSchemaVersion: Int
 
     public static let `default` = WatchdogPolicy(heartbeatTimeout: 45,
-                                                 batteryFloorPercent: 20)
+                                                 batteryFloorPercent: BatteryFloor.default)
 
     // `knownSchemaVersion` DEFAULTS to the record type's own constant rather
     // than making every caller repeat its literal: a bump to
@@ -44,7 +44,12 @@ public struct WatchdogPolicy: Equatable, Sendable {
     public init(heartbeatTimeout: TimeInterval, batteryFloorPercent: Int,
                 knownSchemaVersion: Int = JournalRecord.currentSchemaVersion) {
         self.heartbeatTimeout = Self.clampTimeout(heartbeatTimeout)
-        self.batteryFloorPercent = Self.clampFloor(batteryFloorPercent)
+        // `BatteryFloor.bounded`, not a clamp of this type's own. Issue #11 made
+        // the floor a user setting, so `PowerInputs.init` had to start bounding
+        // it too — and a second clamp with its own literals drifts the moment
+        // one of the two is edited. One rule, two callers.
+        // `bothFloorPathsBoundTheSameValueTheSameWay` goes red on a split.
+        self.batteryFloorPercent = BatteryFloor.bounded(batteryFloorPercent)
         self.knownSchemaVersion = knownSchemaVersion
     }
 
@@ -68,12 +73,6 @@ public struct WatchdogPolicy: Equatable, Sendable {
         // 300. Testing `isFinite` first would collapse the two and throw the
         // legitimate infinite case away as well.
         return bounded.isFinite ? bounded : 45
-    }
-
-    private static func clampFloor(_ percent: Int) -> Int {
-        // 0 would fire only at exactly 0%, i.e. once the machine is already
-        // dead; above 100 is not a percentage at all.
-        min(max(percent, 5), 100)
     }
 }
 
