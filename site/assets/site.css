@@ -1,0 +1,260 @@
+/*
+  Copyright 2026 Carlos Eduardo Arango Gutierrez
+  SPDX-License-Identifier: Apache-2.0
+
+  The shared stylesheet for the coffee-bar site. Extracted from the inline
+  <style> block of site/index.html and recoloured per the 2026-08-04 design,
+  section 3.2. This was a move plus a recolour, not a rewrite.
+
+  TWO COLOURS, TWO JOBS. Never mix them.
+
+    --state   the liquid in the icon, held segments on the timeline, the
+              .eyebrow square, list bullets. It means "held awake".
+    --action  button backgrounds, link underlines and hover, :focus-visible
+              outlines, the sidebar's current-page marker. It means
+              "you can operate this".
+
+  The old --liquid token is now --state. The name changed because the colour
+  now means "held", and a second colour now means "interactive".
+
+  NEITHER COLOUR MAY CARRY TEXT. Both fail 4.5:1 as a foreground on --bg. A
+  filled button is the opposite case and is fine: ink on --action measures
+  8.51 in light and 9.10 in dark.
+
+  Sidebar markup contract — plain links, no JavaScript:
+
+    <div class="shell">
+      <nav class="sidebar" aria-label="Site">
+        <a class="sidebar-mark" href="index.html">coffee-bar</a>
+        <ul>
+          <li><a href="index.html" aria-current="page">Home</a></li>
+          <li><a href="install.html">Install</a></li>
+          <li><a href="docs.html">Docs</a></li>
+          <li><a href="changelog.html">Changelog</a></li>
+        </ul>
+      </nav>
+      <div class="wrap"><!-- page content --></div>
+    </div>
+
+  .wrap still renders correctly on its own, so a page that carries no sidebar
+  is unaffected.
+*/
+
+:root {
+  color-scheme: light dark;
+  --state:  #A2571E;  /* the liquid; held awake */
+  --action: #FF9500;  /* Apple systemOrange; buttons, links, focus */
+  --rest:   #6B7683;  /* released; free to sleep */
+  --ink:    #121214;
+  --paper:  #F2F0EB;
+  --fg:     var(--ink);
+  --bg:     var(--paper);
+  --dim:    #55585F;
+  --line:   #E0DDD5;
+  --panel:  #E9E6DE;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --state:  #B8682A;
+    --action: #FF9F0A;
+    --fg:     #F2F1EE;
+    --bg:     #101013;
+    --dim:    #9AA0A8;
+    --line:   #24242A;
+    --panel:  #191920;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 16.5px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 46rem; margin: 0 auto; padding: 4rem 1.5rem 6rem; }
+
+.mono, h1, .eyebrow, code, pre, .track-label, .phase, .state-name {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+
+/* ── Focus: visible on every interactive element ───────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--action); outline-offset: 3px; border-radius: 2px;
+}
+
+/* ── Shell: sidebar plus content ───────────────────────────────────────── */
+/* Below 48rem the sidebar is a horizontal row above the content. This is the
+   default, so a narrow viewport needs no query. */
+.shell { max-width: 64rem; margin: 0 auto; }
+.shell > .wrap { margin: 0; max-width: 46rem; }
+
+.sidebar { padding: 2rem 1.5rem 0; }
+.sidebar-mark {
+  display: inline-flex; align-items: center; min-height: 44px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-weight: 700; letter-spacing: -.03em; text-decoration: none;
+  color: var(--fg);
+}
+.sidebar ul {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-wrap: wrap; gap: .15rem .35rem;
+}
+.sidebar a:not(.sidebar-mark) {
+  display: flex; align-items: center; min-height: 44px; padding: 0 .75rem;
+  border-radius: 6px; text-decoration: none; color: var(--dim);
+  font-size: .9rem;
+}
+.sidebar a:not(.sidebar-mark):hover { color: var(--fg); background: var(--panel); }
+.sidebar a[aria-current="page"] {
+  color: var(--fg); font-weight: 650;
+  box-shadow: inset 0 -2px 0 var(--action);
+}
+
+@media (min-width: 48rem) {
+  .shell {
+    display: grid; grid-template-columns: 13rem minmax(0, 1fr);
+    gap: 3rem; align-items: start; padding: 0 1.5rem;
+  }
+  .shell > .wrap { padding-left: 0; padding-right: 0; }
+  .sidebar { padding: 4rem 0 0; position: sticky; top: 2rem; }
+  .sidebar ul { display: block; margin-top: 1.5rem; }
+  .sidebar li + li { margin-top: .1rem; }
+  .sidebar a[aria-current="page"] {
+    background: var(--panel);
+    box-shadow: inset 2px 0 0 var(--action);
+  }
+}
+
+/* ── Hero ──────────────────────────────────────────────────────────────── */
+.hero { display: flex; align-items: center; gap: 1.25rem; margin-bottom: 1.1rem; }
+.appicon {
+  width: 84px; height: 84px; flex: none; border-radius: 19%;
+  display: block; box-shadow: 0 1px 3px rgba(0,0,0,.18);
+}
+h1 {
+  font-size: clamp(2rem, 7vw, 3rem); font-weight: 700;
+  letter-spacing: -0.045em; line-height: 1; margin: 0;
+}
+.tag {
+  font-size: clamp(1.05rem, 2.6vw, 1.28rem); line-height: 1.45;
+  margin: 0 0 3rem; max-width: 34ch; text-wrap: balance;
+}
+.tag em { font-style: normal; border-bottom: 2px solid var(--fg); }
+
+.eyebrow {
+  display: flex; align-items: center; gap: .6rem;
+  font-size: .72rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .16em; color: var(--dim); margin: 3.5rem 0 1rem;
+}
+.eyebrow::before {
+  content: ""; width: .5rem; height: .5rem; flex: none; background: var(--state);
+}
+h2 { margin: 0; font-size: 1rem; }
+p { margin: 0 0 1.1rem; }
+/* Links carry body-text colour. The action colour rides the underline only,
+   because it does not reach 4.5:1 as a foreground. */
+a {
+  color: inherit; text-underline-offset: 3px;
+  text-decoration-color: var(--action); text-decoration-thickness: 1.5px;
+}
+a:hover { text-decoration-thickness: 2.5px; }
+a:focus-visible { outline: 2px solid var(--action); outline-offset: 3px; border-radius: 2px; }
+strong { font-weight: 650; }
+
+/* ── The download button ───────────────────────────────────────────────── */
+/* 44px is Apple's minimum hit target and is required. */
+.btn-download {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 44px; padding: 0 1.15rem;
+  background: var(--action); color: var(--ink);
+  border-radius: 8px; font-weight: 650; text-decoration: none;
+}
+.btn-download:hover { filter: brightness(1.06); }
+
+/* ── Signature: the assertion timeline ─────────────────────────────────── */
+.figure {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; padding: 1.4rem 1.35rem 1.15rem; margin: 0 0 1.25rem;
+}
+.row { display: grid; grid-template-columns: 6.5rem 1fr; align-items: center; gap: .9rem; }
+.row + .row { margin-top: .55rem; }
+.track-label { font-size: .74rem; color: var(--dim); text-align: right; white-space: nowrap; }
+.track { display: flex; gap: 3px; height: 1.05rem; }
+.seg { border-radius: 2px; }
+.seg.work { background: var(--state); }
+.seg.wait { background: var(--rest); opacity: .38; }
+/* caffeinate holds CONTINUOUSLY. One unbroken bar, because segmenting it
+   would imply it ever lets go. */
+.track.caffeinate .seg { background: var(--state); opacity: .45; }
+
+.axis { display: grid; grid-template-columns: 6.5rem 1fr; gap: .9rem; margin-top: .45rem; }
+.phases { display: flex; gap: 3px; }
+.phase {
+  font-size: .62rem; letter-spacing: .02em; color: var(--dim);
+  padding: .3rem 0 0 .4rem; border-left: 1px solid var(--line);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.caption { font-size: .82rem; color: var(--dim); margin: 0 0 2rem; }
+.caption b { color: var(--fg); font-weight: 600; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .track.coffeebar .seg.wait {
+    background: var(--state); opacity: .45;
+    animation: release .5s ease-out forwards;
+  }
+  .track.coffeebar .seg.wait.w1 { animation-delay: .75s; }
+  .track.coffeebar .seg.wait.w2 { animation-delay: 1.15s; }
+}
+@keyframes release { to { background: var(--rest); opacity: .38; } }
+
+/* ── The menu-bar states, in the real artwork ──────────────────────────── */
+.states { display: flex; flex-wrap: wrap; gap: 1.6rem; margin: 0 0 1rem; }
+.state { display: flex; align-items: flex-start; gap: .7rem; min-width: 13rem; flex: 1; }
+.state svg { width: 26px; height: 26px; flex: none; color: var(--fg); margin-top: .1rem; }
+.state-name { display: block; font-size: .78rem; font-weight: 600; letter-spacing: -.01em; }
+.state-what { display: block; font-size: .84rem; color: var(--dim); line-height: 1.5; }
+
+/* ── Lists ─────────────────────────────────────────────────────────────── */
+ul.does { list-style: none; padding: 0; margin: 0; }
+ul.does li { position: relative; padding-left: 1.5rem; margin: 0 0 .8rem; }
+ul.does li::before {
+  content: ""; position: absolute; left: 0; top: .62em;
+  width: .45rem; height: .45rem; background: var(--state); border-radius: 1px;
+}
+.note {
+  border-left: 2px solid var(--state); padding: .15rem 0 .15rem 1.1rem;
+  color: var(--dim); margin: 1.75rem 0 0;
+}
+
+/* ── Install: a real sequence, so the numbering carries meaning ────────── */
+ol.steps { list-style: none; counter-reset: s; padding: 0; margin: 0; }
+ol.steps > li { counter-increment: s; position: relative; padding-left: 2.4rem; margin-bottom: 1.8rem; }
+ol.steps > li::before {
+  content: counter(s, decimal-leading-zero);
+  position: absolute; left: 0; top: .15em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .78rem; color: var(--dim); font-weight: 600;
+}
+ol.steps p { margin: .35rem 0 .6rem; }
+pre {
+  background: var(--panel); border: 1px solid var(--line);
+  padding: .8rem .95rem; border-radius: 6px; overflow-x: auto;
+  font-size: .82rem; margin: 0; line-height: 1.5;
+}
+pre.hooks { max-height: 22rem; overflow-y: auto; }
+code { font-size: .875em; }
+p code, li code { background: var(--panel); padding: .1em .35em; border-radius: 3px; }
+
+footer {
+  margin-top: 4.5rem; padding-top: 1.5rem; border-top: 1px solid var(--line);
+  color: var(--dim); font-size: .85rem;
+}
+
+@media (max-width: 34rem) {
+  .row, .axis { grid-template-columns: 1fr; gap: .35rem; }
+  .track-label { text-align: left; }
+  .axis { display: none; }
+  .hero { gap: 1rem; }
+  .appicon { width: 64px; height: 64px; }
+}
