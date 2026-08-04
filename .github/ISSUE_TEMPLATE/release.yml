@@ -233,9 +233,16 @@ body:
         - [ ] After the deploy, check the LIVE page, not the local file:
               ```
               curl -sS https://arangogutierrez.github.io/coffee-bar/ > /tmp/cb-live-X.Y.Z.html
-              grep -c 'X\.Y\.Z'   /tmp/cb-live-X.Y.Z.html    # expect: nonzero
-              grep -c 'eduardoa'  /tmp/cb-live-X.Y.Z.html    # expect: 0
+              grep -c 'X\.Y\.Z' /tmp/cb-live-X.Y.Z.html            # expect: nonzero
+              grep -ci "$(id -un)" /tmp/cb-live-X.Y.Z.html         # expect: 0
               ```
+              The second grep re-checks the DEPLOYED bytes for the maintainer's
+              work username, which the landing page once published inside an HTML
+              comment. It reads the name from `id -un` rather than spelling it
+              out: `noTrackedFileCarriesLiveSessionProse` scans every tracked file
+              for that literal and fails the suite, so writing it here would break
+              the build. That guard covers the repository; this line covers what
+              is actually served.
 
   - type: textarea
     id: phase6
