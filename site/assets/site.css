@@ -17,9 +17,17 @@
   The old --liquid token is now --state. The name changed because the colour
   now means "held", and a second colour now means "interactive".
 
-  NEITHER COLOUR MAY CARRY TEXT. Both fail 4.5:1 as a foreground on --bg. A
-  filled button is the opposite case and is fine: ink on --action measures
-  8.51 in light and 9.10 in dark.
+  NEITHER COLOUR CARRIES BODY TEXT. That is a DESIGN RULE, not a measurement.
+  Only one of the four combinations actually fails 4.5:1:
+
+      --action #FF9500 on light #F2F0EB   1.93   fails
+      --action #FF9F0A on dark  #101013   9.24   passes
+      --state  #A2571E on light #F2F0EB   4.71   passes
+      --state  #B8682A on dark  #101013   4.57   passes
+
+  Holding both out of body text in both appearances keeps this one rule
+  instead of four exceptions. A filled button is the safe inverse: ink on
+  --action measures 8.51 in light and 9.10 in dark.
 
   Sidebar markup contract — plain links, no JavaScript:
 

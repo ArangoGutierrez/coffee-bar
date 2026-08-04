@@ -14,9 +14,21 @@ icon (Apple grid), and a web/GitHub set cut from the same geometry.
 
 **Never mix the two.** `state` colours the liquid and the held segments — in the
 icon system it is used **only** for the liquid. `action` colours buttons, links
-and focus rings, and appears on the web only. Neither carries text: both fail
-4.5:1 on either background. Ink on `action` reaches 8.51 (light) and 9.10
-(dark), so a filled button carries body text.
+and focus rings, and appears on the web only.
+
+**Neither accent carries body text.** That is a design rule, not a measurement.
+Only one of the four combinations actually fails 4.5:1:
+
+| combination | ratio | verdict |
+|---|---|---|
+| `action` `#FF9500` on light `#F2F0EB` | 1.93 | fails |
+| `action` `#FF9F0A` on dark `#101013` | 9.24 | passes |
+| `state` `#A2571E` on light `#F2F0EB` | 4.71 | passes |
+| `state` `#B8682A` on dark `#101013` | 4.57 | passes |
+
+Holding both accents out of body text in both appearances keeps this one rule
+instead of four exceptions. Ink **on** `action` is the safe inverse — 8.51
+(light) and 9.10 (dark) — so a filled button carries body text.
 
 The accent moved off `#76B900` on 2026-08-04. That green is NVIDIA's brand
 colour and this is a personal Apache-2.0 product, so it can read as corporate
