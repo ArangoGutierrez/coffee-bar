@@ -336,7 +336,7 @@ nothing anywhere.
        `spec: stable`; and
     2. v0.1.0 is tagged, and the formula's url and sha256 both resolve — tap
        commit 6770211. Proved from a CLEAN-ROOM clone of the published tap:
-         brew fetch eduardoa/cbverify/coffee-bar -> EXIT=0, Formula coffee-bar (0.1.0)
+         brew fetch <scratch-tap>/coffee-bar -> EXIT=0, Formula coffee-bar (0.1.0)
        The same fetch against the previous placeholder digest failed with
        "Formula reports different checksum", which is why this gate existed.
   If the commands below ever stop working, they are the thing to fix. An
