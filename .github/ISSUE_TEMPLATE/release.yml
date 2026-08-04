@@ -238,12 +238,26 @@ body:
         Repo: `ArangoGutierrez/homebrew-coffee-bar`. The digest cannot exist
         before the tag, because GitHub generates the tarball from the tag.
 
-        - [ ] Compute the digest from the release tarball:
+        - [ ] Compute the digest from the release tarball. **Download to a FILE
+              and check the exit code. Never pipe curl into shasum:**
               ```
-              curl -fsSL https://github.com/ArangoGutierrez/coffee-bar/archive/refs/tags/vX.Y.Z.tar.gz | shasum -a 256
+              curl -fsSL -o /tmp/cb-X.Y.Z.tar.gz \
+                https://github.com/ArangoGutierrez/coffee-bar/archive/refs/tags/vX.Y.Z.tar.gz
+              rc=$?; [ $rc -eq 0 ] || { echo "curl failed rc=$rc"; exit 1; }
+              file /tmp/cb-X.Y.Z.tar.gz     # must report: gzip compressed data
+              shasum -a 256 /tmp/cb-X.Y.Z.tar.gz
               ```
-              **Keep `-f`.** Without it a 404 error page hashes cleanly, and you
-              pin the digest of an error page. Never hand-type a digest.
+              Two distinct traps, and `-f` only closes the first:
+              1. **Without `-f`**, curl writes the 404 HTML page to stdout and you
+                 hash an error page.
+              2. **With `-f` but piped**, the pipe discards curl's exit code, so
+                 `shasum` hashes empty input and prints
+                 `e3b0c442...7852b855` — the SHA-256 of the empty string, a
+                 well-formed 64-hex value that looks completely legitimate.
+                 Measured against a deliberately bad tag URL on 2026-08-04.
+
+              Never hand-type a digest. Never accept one whose source command you
+              did not see succeed.
         - [ ] Update `url` and `sha256` in `Formula/coffee-bar.rb`.
         - [ ] The tap's own checks pass:
               ```
