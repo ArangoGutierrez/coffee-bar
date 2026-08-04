@@ -1556,3 +1556,188 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     #expect(ServingModel.displayLabel(for: false).isEmpty == false)
     #expect(ServingModel.displayLabel(for: true).isEmpty == false)
 }
+
+// MARK: - The battery floor is a setting (issue #11)
+
+@MainActor
+@Test func aStoredBatteryFloorReachesTheDecision() {
+    // Named bug this catches: a model that reads the store and then never hands
+    // the value to `HoldController.evaluate`, which takes its own default of
+    // `BatteryFloor.default`. The setting would round-trip through the
+    // preferences perfectly and change nothing about when the Mac sleeps.
+    //
+    // 35% is ABOVE the 20 default and BELOW the stored 40, so the two floors
+    // give opposite answers here. A model still on the default holds.
+    let reader = FakeReader(source: .battery, percent: 35)
+    let model = ServingModel(
+        holder: SpyHolder(), reader: reader, health: fixtureHealth(),
+        settings: FakeSettings([SettingsKey.batteryFloorPercent: 40]))
+
+    model.intent = .serve
+
+    #expect(model.isServing == false,
+            "35% cleared a stored 40% floor; the setting never reached the decision")
+    // The floor the DECISION used, not the one the model remembers. A model
+    // that passed its default while storing 40 would satisfy the line above
+    // only by accident and would print the wrong number to the user.
+    #expect(model.desired?.suppression == .batteryFloor(percent: 35, floor: 40))
+    #expect(model.suppressionAdvisory?.contains("at or below 40%") == true,
+            "the panel line quoted the wrong floor: \(model.suppressionAdvisory ?? "nil")")
+}
+
+@MainActor
+@Test func anUnsetBatteryFloorUsesTheDocumentedDefault() {
+    // A fresh install has written nothing. The floor must be the number the
+    // README states, and `theBatteryFloorStatedIsTheRealDefault` reads that
+    // document against `PowerInputs`'s own default — so these two have to be
+    // the same number or the docs describe a floor the app does not enforce.
+    let atFloor = ServingModel(holder: SpyHolder(),
+                               reader: FakeReader(source: .battery, percent: 20),
+                               health: fixtureHealth(), settings: FakeSettings())
+    atFloor.intent = .serve
+    #expect(atFloor.isServing == false, "an unset floor did not refuse at 20%")
+
+    // The control. Without it a model whose unset floor read as 100 would pass
+    // the line above and never hold on battery again.
+    let above = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .battery, percent: 21),
+                             health: fixtureHealth(), settings: FakeSettings())
+    above.intent = .serve
+    #expect(above.isServing == true, "an unset floor refused at 21%")
+
+    #expect(above.batteryFloorPercent == BatteryFloor.default)
+}
+
+@MainActor
+@Test func aStoredZeroIsNotTheSameAsAnUnsetKey() {
+    // THE reason `SettingsStoring.integer(forKey:)` answers `Int?`. A model
+    // reading `UserDefaults.integer(forKey:)` directly gets 0 for a key nobody
+    // ever wrote, and 0 is a legitimate percentage — so a fresh install would
+    // silently run with no floor at all.
+    //
+    // The DISCRIMINATING pair, both read at 10% on battery:
+    //   unset  -> 20, so 10% is at or below the floor and the hold is refused;
+    //   stored 0 -> bounded to 5, so 10% clears it and the hold stands.
+    // A model that folded the two together cannot satisfy both lines.
+    let unset = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .battery, percent: 10),
+                             health: fixtureHealth(), settings: FakeSettings())
+    unset.intent = .serve
+    #expect(unset.isServing == false, "an unset floor behaved like a stored 0")
+
+    let storedZero = ServingModel(
+        holder: SpyHolder(), reader: FakeReader(source: .battery, percent: 10),
+        health: fixtureHealth(),
+        settings: FakeSettings([SettingsKey.batteryFloorPercent: 0]))
+    storedZero.intent = .serve
+    #expect(storedZero.isServing == true, "a deliberately stored 0 behaved like an unset key")
+
+    // And the stored 0 is still BOUNDED on the way to the decision, so the
+    // lowest floor a user can reach is 5 rather than a floor that never fires.
+    // Stated as the positive. `desired?.suppression == nil` is also satisfied by
+    // a `desired` that is itself nil, so it would pass for a model that never
+    // decided anything.
+    #expect(storedZero.desired?.idleSleepAssertion == true)
+    let dead = ServingModel(
+        holder: SpyHolder(), reader: FakeReader(source: .battery, percent: 5),
+        health: fixtureHealth(),
+        settings: FakeSettings([SettingsKey.batteryFloorPercent: 0]))
+    dead.intent = .serve
+    #expect(dead.desired?.suppression == .batteryFloor(percent: 5, floor: 5))
+}
+
+@MainActor
+@Test func theBatteryFloorIsWrittenToTheStoreWhenTheUserChangesIt() {
+    // The write half of persistence. Without it the panel remembers the choice
+    // for exactly as long as the app runs.
+    let store = FakeSettings()
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .battery, percent: 80),
+                             health: fixtureHealth(), settings: store)
+
+    #expect(store.integer(forKey: SettingsKey.batteryFloorPercent) == nil,
+            "precondition: nothing was stored before the user touched anything")
+
+    model.batteryFloorPercent = 40
+    #expect(store.integer(forKey: SettingsKey.batteryFloorPercent) == 40)
+    #expect(model.batteryFloorPercent == 40)
+}
+
+@MainActor
+@Test func aStoredBatteryFloorIsReadBackAtTheNextLaunch() {
+    // The read half, and what "survives a relaunch" means at this layer: a
+    // SECOND model over the store the first one wrote starts where the user
+    // left it. `SettingsStore_test.swift` proves the value reaches the disk;
+    // this proves the model writes it and asks for it again.
+    //
+    // Named bug this catches: a floor held in a property of the instance that
+    // set it. Every check above passes for such a model, because each one sets
+    // the value itself before reading it.
+    let store = FakeSettings()
+    let first = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .battery, percent: 80),
+                             health: fixtureHealth(), settings: store)
+    first.batteryFloorPercent = 40
+
+    let relaunched = ServingModel(holder: SpyHolder(),
+                                  reader: FakeReader(source: .battery, percent: 35),
+                                  health: fixtureHealth(), settings: store)
+    #expect(relaunched.batteryFloorPercent == 40)
+
+    // Asserted through the DECISION too, not on the property alone. A model
+    // that read the store into a field it never passed on would satisfy the
+    // line above while the machine kept holding at 35%.
+    relaunched.intent = .serve
+    #expect(relaunched.isServing == false,
+            "the reloaded floor never reached the decision")
+}
+
+@MainActor
+@Test func changingTheFloorReconcilesImmediatelyRatherThanAtTheNextTick() {
+    // A user who raises the floor because the battery is low is asking for the
+    // hold to STOP, now. Named bug this catches: a setter that stores the value
+    // and waits for the 30-second ticker, which leaves the machine held for up
+    // to half a minute after the user asked it not to be.
+    let spy = SpyHolder()
+    let model = ServingModel(holder: spy,
+                             reader: FakeReader(source: .battery, percent: 35),
+                             health: fixtureHealth(), settings: FakeSettings())
+    model.intent = .serve
+    #expect(model.isServing == true, "precondition: 35% cleared the default floor")
+
+    model.batteryFloorPercent = 40
+
+    #expect(model.isServing == false)
+    #expect(spy.releaseCount >= 1, "raising the floor released nothing")
+}
+
+@MainActor
+@Test func everyOfferedFloorSitsInsideThePermittedRange() {
+    // The picker's segments come from `BatteryFloor.choices`, and a choice
+    // outside `BatteryFloor.permitted` is a control position the decision would
+    // silently change under the user: they pick 120, the floor becomes 100, and
+    // the picker then matches no value at all.
+    #expect(BatteryFloor.choices.isEmpty == false, "the picker would render no segments")
+    for choice in BatteryFloor.choices {
+        #expect(BatteryFloor.permitted.contains(choice),
+                "\(choice) is offered but not permitted")
+        #expect(BatteryFloor.bounded(choice) == choice,
+                "\(choice) is offered but the decision would change it")
+    }
+
+    // The shipped default has to be reachable from the control, or a user who
+    // moves off it can never get back.
+    #expect(BatteryFloor.choices.contains(BatteryFloor.default))
+}
+
+@MainActor
+@Test func theFloorLabelsAreDistinctAndNameTheirPercentage() {
+    // The picker's segments read from here, so a check can see what the control
+    // says — design §5.4 rules out asserting on the rendered view. Named bug
+    // this catches: one label for every segment, which makes the control
+    // unusable and which nothing else in this package could see.
+    let labels = BatteryFloor.choices.map { ServingModel.floorLabel(for: $0) }
+    #expect(Set(labels).count == BatteryFloor.choices.count,
+            "two floors share a label: \(labels)")
+    #expect(ServingModel.floorLabel(for: 20) == "20%")
+}
