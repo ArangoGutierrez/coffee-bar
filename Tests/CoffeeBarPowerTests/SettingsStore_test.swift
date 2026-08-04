@@ -149,4 +149,23 @@ struct SettingsStoreTests {
         // literal can hold this line.
         #expect(SettingsKey.holdDisplayAwake == "holdDisplayAwake")
     }
+
+    @Test func theBatteryFloorKeyStringNeverChanges() {
+        // Issue #11's key, held for the reason above: renaming the constant
+        // discards the floor of every user who already chose one, and the next
+        // launch falls back to the default with nothing to report.
+        //
+        // The round-trip checks in this file write the literal directly, so a
+        // rename leaves every one of them green. Only this line holds the name.
+        #expect(SettingsKey.batteryFloorPercent == "batteryFloorPercent")
+    }
+
+    @Test func theTwoKeysAreDifferentStrings() {
+        // One key for two settings is the failure the `SettingsKey` doc comment
+        // describes: the display opt-in and the battery floor would overwrite
+        // each other, and the type mismatch on the read would then answer `nil`
+        // for both. `twoKeysDoNotOverwriteEachOther` above proves the STORE
+        // keeps two keys apart; this proves the app asks it for two.
+        #expect(SettingsKey.holdDisplayAwake != SettingsKey.batteryFloorPercent)
+    }
 }

@@ -99,6 +99,17 @@ prevents a caller passing a legal-but-wrong policy. Clamping rather than
 helper, where a trap would leave `SleepDisabled` set — strictly worse than a clamped
 value.
 
+**The battery floor is bounded in one place, and issue #11 is why.** The floor is now
+a user setting, so its value arrives from outside the program. `PowerInputs.init` is
+the site: `PowerBroker.decide` takes a `PowerInputs` and nothing else, and that struct
+declares an explicit `init`, which suppresses the memberwise one — so no caller reaches
+the comparison with a floor the rule never saw. The rule itself lives on `BatteryFloor`
+and `WatchdogPolicy.init` calls the same function rather than keeping its own copy. Two
+clamps with their own literals drift the moment one is edited, and the product would
+then refuse a hold at a charge the watchdog is content to keep. Do not add a second
+bounding site — bounding at the UI or at the settings read was weighed and rejected,
+and `bothFloorPathsBoundTheSameValueTheSameWay` goes red on a split.
+
 **Durability is carried by review, not tests.** `F_FULLFSYNC` vs `fsync`, and the
 existence of the parent-directory barrier, are both unverifiable from a unit test:
 each call returns 0 and no user-space API reports whether a barrier reached media.
