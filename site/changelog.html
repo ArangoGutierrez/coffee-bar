@@ -23,8 +23,11 @@
   - TWO colours, two jobs. --state (#A2571E / #B8682A dark) is the liquid and
     means "held awake". --action (#FF9500 / #FF9F0A dark) is Apple systemOrange
     and means "interactive". Never swap their jobs. Never add a third.
-  - Neither colour carries body text; both fail 4.5:1 on the page background.
-    Ink ON --action is the opposite case and is fine.
+  - Neither colour carries body text. Measured: --action on the light page
+    background is 1.93:1 and genuinely fails; --state is 4.71 light and 4.57
+    dark and would pass. Both stay out of body text anyway, so the rule is one
+    line and not four exceptions. Ink ON --action is the safe inverse: 8.51
+    light, 9.10 dark.
   - Menu-bar glyphs stay monochrome. Never ship a coloured variant.
   - The wordmark is always lowercase and always hyphenated. It is a command name.
   - No external requests: no web fonts, no analytics, no CDN.
