@@ -84,6 +84,19 @@ jobs:
       - if: steps.gate.outputs.publish == 'true'
         uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
 
+      # `upload-pages-artifact` publishes the whole `site/` directory, so the
+      # bench's unit test would be served to the public site alongside the page
+      # it tests. It carries no secret — it asserts against a decision table that
+      # is already embedded in index.html — but a test file is not a web surface,
+      # and the same reasoning that keeps `docs/` unpublished applies here.
+      #
+      # Safe by construction: `checkout` gives this job a fresh tree every run,
+      # so this deletes nothing a maintainer owns. `-f` keeps the step green if
+      # the file is ever renamed; the CI job in ci.yml is what fails in that case.
+      - if: steps.gate.outputs.publish == 'true'
+        name: Keep test files out of the published artifact
+        run: rm -f site/assets/bench.test.js
+
       - if: steps.gate.outputs.publish == 'true'
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:

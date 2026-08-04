@@ -40,3 +40,40 @@ jobs:
 
       - name: Test
         run: swift test
+
+  # A SEPARATE job, on ubuntu, deliberately. The policy bench is pure logic with
+  # no macOS dependency, and the comment above records that macOS runners bill at
+  # 10x. This runs at 1x and in parallel with the Swift build.
+  bench-test:
+    name: Policy bench unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The runner's preinstalled Node is deliberate. `node:test` is built in, so
+      # this needs no package.json, no dependency and no third-party setup action
+      # — one fewer pinned supply-chain surface in a repository that pins every
+      # `uses:` by SHA for exactly that reason.
+      #
+      # The version is ASSERTED rather than assumed: site/assets/bench.test.js
+      # uses `import.meta.dirname`, which lands in Node 20.11. A runner downgrade
+      # must fail loudly here instead of skipping the suite silently.
+      - name: Require Node 20.11 or later
+        run: |
+          node --version
+          node -e 'const [a,b] = process.versions.node.split(".").map(Number); if (a < 20 || (a === 20 && b < 11)) { console.error("import.meta.dirname needs Node >= 20.11"); process.exit(1); }'
+
+      # NAMED EXPLICITLY. Never a directory, never a glob. Measured 2026-08-04 on
+      # Node 26, and the same three lines sit in the test file's own header:
+      #   node --test site/assets/              -> rc=1, "Cannot find module". Broken.
+      #   node --test 'site/assets/*.test.js'   -> rc=0 when NOTHING matches. Vacuous.
+      #   node --test site/assets/bench.test.js -> rc=1 when the file is absent.
+      # Only the explicit path fails closed, so a rename cannot silently disable
+      # this check while the job stays green.
+      - name: Bench module tests
+        run: node --test site/assets/bench.test.js
