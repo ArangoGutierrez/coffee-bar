@@ -29,12 +29,16 @@ import Testing
 
 // MARK: - Reading the README
 
-private struct ReadmeUnreadable: Error, CustomStringConvertible {
+struct ReadmeUnreadable: Error, CustomStringConvertible {
     let path: String
     var description: String { "cannot read the README at \(path); this guard cannot run" }
 }
 
-private func repoRoot() -> URL {
+/// Internal rather than private, so `SiteClaims_test.swift` shares this one
+/// definition. A second copy of a path resolver is a second thing to get wrong,
+/// and the two copies would not have to drift far to disagree about which
+/// repository they are reading.
+func repoRoot() -> URL {
     URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()    // …/Tests/CoffeeBarCoreTests
         .deletingLastPathComponent()    // …/Tests
@@ -68,8 +72,55 @@ private func readmeProse(_ text: String) -> String {
 /// quietly, so keep both in step.
 private let hookBlockSurface = "docs/QUICKSTART.md"
 
-private let documentedSurfaces = ["README.md", "docs/QUICKSTART.md",
-                                  "docs/BUILDING.md", "site/index.html"]
+/// The four Markdown documents, named by hand.
+///
+/// These stay a literal while the site half is discovered, because a glob over
+/// the repository's Markdown would sweep in specs, plans and task briefs. Those
+/// are working notes between maintainers, not claims to a reader, and holding
+/// them to a reader's standard would produce noise that trains people to ignore
+/// this file.
+///
+/// `CHANGELOG.md` joined them on 2026-08-04. Nothing read it before that, so a
+/// future entry could have claimed token accounting and stayed green.
+private let markdownSurfaces = ["CHANGELOG.md", "README.md",
+                                "docs/BUILDING.md", "docs/QUICKSTART.md"]
+
+/// Every `.html` file under `site/`, found on disk.
+///
+/// Sorted because `FileManager` does not specify its enumeration order. An
+/// unsorted list reorders swift-testing's per-argument test IDs and the failure
+/// output between runs, which makes a real, repeatable failure look flaky.
+///
+/// Recursive, so a page filed in a subdirectory cannot escape either.
+func discoveredSitePages() -> [String] {
+    let site = repoRoot().appending(path: "site")
+    guard let walker = FileManager.default.enumerator(atPath: site.path) else { return [] }
+    var found: [String] = []
+    for case let rel as String in walker where rel.hasSuffix(".html") {
+        found.append("site/\(rel)")
+    }
+    return found.sorted()
+}
+
+/// The user-facing documents these checks police.
+///
+/// **Why this is discovered and not a list.** Until 2026-08-04 this was a
+/// four-element literal naming `site/index.html` alone, while the site had grown
+/// to four pages. That was measured, not suspected: `below 20%` and `42 minutes`
+/// were planted in the prose of `site/docs.html` — the exact two defects
+/// `aBoundaryPhraseMatchesTheRealBoundary` and
+/// `everyDurationStatedIsARealProductConstant` exist to catch — and the suite
+/// stayed green at 486 tests. Nothing was broken. Nothing was looking.
+///
+/// A hardcoded list is a coverage hole with a friendly face: it looks like
+/// thorough work and it fails open, silently, the moment somebody adds a page
+/// and forgets a line here. Discovery removes the remembering.
+///
+/// **What this still cannot do.** It guards pages that EXIST. A claim moved off
+/// the site and into a blog post, a release note or an App Store description is
+/// as invisible as `docs.html` was. Discovery widens the net; it does not make
+/// the net universal.
+private let documentedSurfaces = (markdownSurfaces + discoveredSitePages()).sorted()
 
 /// An HTML page reduced to prose.
 ///
@@ -89,8 +140,9 @@ private func htmlProse(_ text: String) -> String {
     return s
 }
 
-/// The prose of one documented surface, with code and markup removed.
-private func surfaceText(_ name: String) throws -> String {
+/// The raw bytes of one documented surface. Internal, so the site guards read
+/// pages through the same failure-closed accessor these checks use.
+func surfaceText(_ name: String) throws -> String {
     let url = repoRoot().appending(path: name)
     guard let text = try? String(contentsOf: url, encoding: .utf8) else {
         throw ReadmeUnreadable(path: url.path)
@@ -106,7 +158,7 @@ private func surfaceProse(_ name: String) throws -> String {
     return name.hasSuffix(".html") ? htmlProse(text) : readmeProse(text)
 }
 
-private struct BadPattern: Error, CustomStringConvertible {
+struct BadPattern: Error, CustomStringConvertible {
     let pattern: String
     var description: String {
         "the regex \(pattern) does not compile, so this guard scanned nothing"
@@ -120,7 +172,7 @@ private struct BadPattern: Error, CustomStringConvertible {
 /// `\u{2014}`, which is Swift escape syntax and not ICU regex syntax, so the
 /// duration pattern silently matched nothing and the check passed over a README
 /// full of durations.
-private func matches(_ pattern: String, in text: String) throws -> [[String]] {
+func matches(_ pattern: String, in text: String) throws -> [[String]] {
     guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
     else { throw BadPattern(pattern: pattern) }
     let ns = text as NSString
@@ -132,6 +184,40 @@ private func matches(_ pattern: String, in text: String) throws -> [[String]] {
 }
 
 // MARK: - The guard cannot pass vacuously
+
+/// Discovery found the real documents, so the sweeps below are not sweeping air.
+///
+/// Every `@Test(arguments: documentedSurfaces)` in this file passes trivially
+/// when that array is empty: zero arguments means zero test cases, and
+/// swift-testing counts zero failures as success. One mis-resolved repository
+/// root would therefore switch seven guards off and report nothing at all —
+/// the same false-absence trap `matches` throws to avoid.
+///
+/// The names below are literals deliberately. Comparing the discovered list
+/// against the discovery function would restate the glob rather than check it,
+/// and would hold whether the glob worked or not.
+@Test func surfaceDiscoveryFindsTheDocumentsAndCannotSweepAnEmptyList() {
+    let found = Set(documentedSurfaces)
+
+    // The four this file was born checking, plus the changelog that nothing read.
+    for named in ["README.md", "docs/QUICKSTART.md", "docs/BUILDING.md",
+                  "CHANGELOG.md", "site/index.html"] {
+        #expect(found.contains(named),
+                "\(named) is missing from the discovered surfaces \(documentedSurfaces)")
+    }
+
+    // The three pages the redesign added, and the three that were unguarded
+    // when this check was written. Named one by one, so losing a page fails
+    // HERE, loudly, instead of quietly reducing coverage everywhere else.
+    for page in ["site/install.html", "site/docs.html", "site/changelog.html"] {
+        #expect(found.contains(page),
+                "\(page) is missing from the discovered surfaces \(documentedSurfaces)")
+    }
+
+    let pages = discoveredSitePages()
+    #expect(pages.count >= 4,
+            "discovery found \(pages.count) page(s) under site/: \(pages). The glob is not reaching the directory")
+}
 
 @Test(arguments: documentedSurfaces)
 func everyDocumentedSurfaceIsReadableAndSubstantial(_ name: String) throws {
