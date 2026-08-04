@@ -164,8 +164,12 @@ The button points at the versioned asset:
 `https://github.com/ArangoGutierrez/coffee-bar/releases/download/v0.1.1/coffee-bar-0.1.1.dmg`
 
 The asset filename carries the version, so `releases/latest/download/<name>`
-offers no advantage. Beside the button: **v0.1.1 · Apple silicon · 292 KB**, and
+offers no advantage. Beside the button: **v0.1.1 · Apple silicon · 299 KB**, and
 "macOS 14 or later".
+
+**Corrected 2026-08-04.** This said "292 KB". 299302 bytes is 292.3 KiB but
+299.3 kB, and macOS Finder displays **299 KB**. The page must match the number
+the user sees in Finder, not the binary-prefix value.
 
 ## 4. Guards
 
