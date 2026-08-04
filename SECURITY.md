@@ -39,14 +39,17 @@ If the flaw is already exploited in the wild, say so — that shortens the clock
 | Version | Supported |
 |---|---|
 | `main` | Yes |
-| v0.1.x | Not released yet |
+| v0.1.x | Yes |
 
-No release is tagged. `main` is the only thing that exists, so it is the only
-thing that gets a fix. This table changes when v0.1 ships.
+v0.1.0 is tagged, and the Homebrew tap installs from that tag. `main` and the
+v0.1.x line both get fixes.
 
-A build from source reports `0.0.0-dev` as its version, because
-`scripts/build-app.sh` derives the version from `git describe --tags` and no tag
-exists. Report the commit as well as the version.
+`scripts/build-app.sh` derives the version from `git describe --tags`. A build
+from a tagged tree reports the tag plus the commits since it, such as
+`0.1.0-3-g1258578`. A release tarball carries no `.git`, so the Homebrew formula
+passes the version in through `COFFEE_BAR_VERSION` instead. The `0.0.0-dev`
+fallback now appears only when neither source is available. Report the commit as
+well as the version.
 
 ## What coffee-bar does, and what it deliberately does not
 
@@ -179,11 +182,21 @@ of the code, that is a vulnerability. Report it.
 
 ## Things that are not vulnerabilities
 
-- **The app bundle is unsigned.** `scripts/build-app.sh` says so, and Gatekeeper
-  quarantines a copy handed to another Mac. Signing and notarisation are planned
-  release work, not a defect in the current build.
-- **The version reads `0.0.0-dev`.** No tag exists yet. See above.
+- **A Homebrew-installed bundle is ad-hoc signed, not Developer ID signed.** The
+  formula builds from source on your own machine, so the result carries no team
+  identifier:
+
+  ```
+  codesign -dv /opt/homebrew/opt/coffee-bar/CoffeeBar.app
+  Signature=adhoc
+  TeamIdentifier=not set
+  ```
+
+  That is the tap's design, not a defect. Homebrew compiled the code locally, so
+  the bundle never crossed a trust boundary and carries no quarantine flag.
+- **A bundle built by `scripts/build-app.sh` is unsigned.** Same reason.
+  Gatekeeper quarantines such a copy handed to another Mac.
+- **The version carries a commit suffix, such as `0.1.0-3-g1258578`.** That is
+  `git describe` output for a tree ahead of the last tag. See above.
 - **coffee-bar keeps the Mac awake.** That is the product.
-- **`Formula/coffee-bar.rb` carries a placeholder SHA-256.** No release tarball
-  exists for it to hash.
 - **A finding produced only by a scanner, with no reproduction.** Send the steps.
