@@ -4,17 +4,20 @@ One object at three scales: a 16×16 template glyph (menu bar), a 1024 layered a
 icon (Apple grid), and a web/GitHub set cut from the same geometry.
 
 **Colours** — ink `#121214` (light appearance) / `#F2F1EE` (dark), warm neutral base
-`#EFEDE7`, web tile `#F2F0EB`. Two accents, with two jobs:
+`#EFEDE7`, web tile `#F2F0EB`.
 
-| Role | Light | Dark | Job |
-|---|---|---|---|
-| state | `#A2571E` | `#B8682A` | the liquid; held awake |
-| action | `#FF9500` | `#FF9F0A` | Apple `systemOrange`; buttons, links, focus |
-| rest | `#6B7683` | `#6B7683` | released; free to sleep |
+Three roles. **`state` and `action` are the two accents.** `rest` is a neutral
+grey, not an accent — it is what the palette uses to say "nothing is held".
 
-**Never mix the two.** `state` colours the liquid and the held segments — in the
-icon system it is used **only** for the liquid. `action` colours buttons, links
-and focus rings, and appears on the web only.
+| Role | Light | Dark | Job | Accent? |
+|---|---|---|---|---|
+| state | `#A2571E` | `#B8682A` | the liquid; held awake | yes |
+| action | `#FF9500` | `#FF9F0A` | Apple `systemOrange`; buttons, links, focus | yes |
+| rest | `#6B7683` | `#6B7683` | released; free to sleep | no |
+
+**Never mix `state` and `action`.** `state` colours the liquid and the held
+segments — in the icon system it is used **only** for the liquid. `action`
+colours buttons, links and focus rings, and appears on the web only.
 
 **Neither accent carries body text.** That is a design rule, not a measurement.
 Only one of the four combinations actually fails 4.5:1:
