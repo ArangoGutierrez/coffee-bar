@@ -1,0 +1,290 @@
+# Copyright 2026 Carlos Eduardo Arango Gutierrez
+# SPDX-License-Identifier: Apache-2.0
+#
+# WHY THIS IS AN ISSUE FORM AND NOT A PLAIN MARKDOWN FILE.
+# GitHub surfaces `.github/pull_request_template.md` and `.github/ISSUE_TEMPLATE/`.
+# It surfaces nothing else. A checklist at `.github/release_template.md` gets
+# opened only by someone who already remembered to open it, and remembering is
+# the step that failed. An issue stays in the issue list until its boxes are
+# ticked.
+#
+# WHY THE STEPS LIVE IN `textarea` DEFAULTS AND NOT IN `markdown` BLOCKS.
+# A `markdown` element is display-only: it renders while the form is filled and
+# does NOT appear in the created issue. A `textarea` `value:` default DOES, and
+# GitHub renders a `- [ ]` list in an issue body as tickable checkboxes. Every
+# step that must survive submission is therefore a textarea default.
+#
+# WHAT THIS FILE IS FOR. v0.1.1 pushed a tag, then stopped: no release object,
+# the tap left on v0.1.0, and the site still advertising the older version. Each
+# phase below ends with the check that would have caught that.
+#
+# ONE-TIME SETUP STILL NEEDED: the `release` label below does not exist in this
+# repository yet. GitHub applies only labels that already exist, so create it
+# once or the issues open unlabelled:
+#     gh label create release --description "Cutting a release" --color 0E8A16
+
+name: Release checklist
+description: Cut a release without forgetting the release object, the tap, or the site.
+title: "Release v"
+labels: ["release"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One issue per release. Open it BEFORE the tag exists, and tick as you go.
+
+        **Every outward step needs explicit approval for that specific action.**
+        Approval for one step never carries to the next, and approving a step
+        NUMBER is not approving the action.
+
+        Replace `X.Y.Z` with the version and `PREV` with the previous one
+        throughout. The steps are prefilled — edit them only when this release
+        genuinely differs.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The version being cut, without the leading v.
+      placeholder: 0.1.2
+    validations:
+      required: true
+
+  - type: input
+    id: previous
+    attributes:
+      label: Previous version
+      description: The version this one follows. Used for the code-delta check.
+      placeholder: 0.1.1
+    validations:
+      required: true
+
+  - type: dropdown
+    id: code_delta
+    attributes:
+      label: Does this release change code?
+      description: >-
+        Answer from the delta command in phase 1, not from memory. When it is
+        "no", the release notes must say so plainly, so nobody reads the version
+        bump as a bugfix.
+      options:
+        - "Yes — Sources/, Package.swift or Tests/ changed"
+        - "No — the code is identical to the previous tag"
+        - "Not checked yet"
+    validations:
+      required: true
+
+  - type: textarea
+    id: phase1
+    attributes:
+      label: Phase 1 — preconditions
+      value: |
+        - [ ] `main` is clean and pushed — `git status -sb` shows no divergence.
+        - [ ] The suite is green against the FINAL commit, not an earlier one:
+              ```
+              swift test
+              # expect: Test run with N tests in 4 suites passed
+              ```
+        - [ ] Record the code delta against the previous tag:
+              ```
+              git diff --name-status vPREV..HEAD -- Sources Package.swift Package.resolved Tests
+              ```
+              Empty output means this release ships no code change. Say so in the
+              notes and set the dropdown above accordingly.
+        - [ ] The version is unused. Both must come back empty:
+              ```
+              git tag -l vX.Y.Z
+              git ls-remote --tags origin | grep vX.Y.Z
+              ```
+
+  - type: textarea
+    id: phase2
+    attributes:
+      label: Phase 2 — build, sign, notarise
+      value: |
+        - [ ] Build the app. Before the tag exists, `git describe` cannot supply
+              the version, so pass it explicitly:
+              ```
+              COFFEE_BAR_VERSION=X.Y.Z scripts/build-app.sh
+              ```
+        - [ ] Record the architectures. **Do not assume universal** — v0.1.1
+              shipped `arm64` only, and the notes had to say so:
+              ```
+              lipo -archs build/CoffeeBar.app/Contents/MacOS/coffee-bar
+              ```
+        - [ ] Sign the app, notarise it, and staple it.
+        - [ ] **WARNING: staple the APP before the DMG is rebuilt around it.** A
+              DMG notarised on its own leaves the dragged-out app dependent on an
+              online check.
+        - [ ] Rebuild the DMG around the stapled app, then notarise and staple
+              the DMG.
+        - [ ] `notarytool submit --wait` outlives the 10-minute command cap. Run
+              it in the background; history is authoritative:
+              ```
+              xcrun notarytool history --keychain-profile coffee-bar
+              ```
+        - [ ] Verify the app INSIDE the mounted DMG. `build/CoffeeBar.app` is not
+              the artifact that ships. The mountpoint carries the version so a
+              stale mount from an earlier run cannot be read by mistake:
+              ```
+              hdiutil attach build/dist/coffee-bar-X.Y.Z.dmg -readonly -nobrowse -mountpoint /tmp/cbverify-X.Y.Z
+              /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" /tmp/cbverify-X.Y.Z/CoffeeBar.app/Contents/Info.plist
+              codesign -dvv /tmp/cbverify-X.Y.Z/CoffeeBar.app
+              spctl --assess --type execute -vv /tmp/cbverify-X.Y.Z/CoffeeBar.app
+              xcrun stapler validate /tmp/cbverify-X.Y.Z/CoffeeBar.app
+              hdiutil detach /tmp/cbverify-X.Y.Z
+              ```
+              Expect the stamp `X.Y.Z`, `Developer ID Application`, `accepted`
+              and `source=Notarized Developer ID`.
+        - [ ] Record the digest for the notes:
+              ```
+              shasum -a 256 build/dist/coffee-bar-X.Y.Z.dmg
+              ```
+
+  - type: textarea
+    id: phase3
+    attributes:
+      label: Phase 3 — tag and release object
+      value: |
+        The tap's `livecheck` uses `strategy :github_latest`, which needs a
+        Release object. A pushed tag with no release is the worst resting state:
+        it is public, and nothing downstream can use it.
+
+        - [ ] Create the signed, annotated tag:
+              ```
+              git tag -s vX.Y.Z -m "vX.Y.Z — <summary>"
+              git tag -v vX.Y.Z          # expect: Good "git" signature
+              ```
+        - [ ] **APPROVAL NEEDED** — push the tag:
+              ```
+              git push origin vX.Y.Z
+              ```
+        - [ ] The `Release` workflow passed on the tagged commit. It only
+              verifies; it creates no release:
+              ```
+              gh run list --repo ArangoGutierrez/coffee-bar --workflow release.yml --limit 1
+              ```
+        - [ ] **APPROVAL NEEDED** — create the release as a draft and attach the
+              DMG:
+              ```
+              gh release create vX.Y.Z --repo ArangoGutierrez/coffee-bar --draft --verify-tag \
+                --title "vX.Y.Z — <title>" --notes-file <notes> \
+                build/dist/coffee-bar-X.Y.Z.dmg
+              ```
+        - [ ] The notes state the architectures, the digest, and — when the code
+              did not change — that the code did not change.
+        - [ ] **APPROVAL NEEDED** — publish it:
+              ```
+              gh release edit vX.Y.Z --repo ArangoGutierrez/coffee-bar --draft=false
+              gh api repos/ArangoGutierrez/coffee-bar/releases --jq 'length'   # expect: 1 more than before
+              ```
+
+  - type: textarea
+    id: phase4
+    attributes:
+      label: Phase 4 — the Homebrew tap
+      value: |
+        Repo: `ArangoGutierrez/homebrew-coffee-bar`. The digest cannot exist
+        before the tag, because GitHub generates the tarball from the tag.
+
+        - [ ] Compute the digest from the release tarball:
+              ```
+              curl -fsSL https://github.com/ArangoGutierrez/coffee-bar/archive/refs/tags/vX.Y.Z.tar.gz | shasum -a 256
+              ```
+              **Keep `-f`.** Without it a 404 error page hashes cleanly, and you
+              pin the digest of an error page. Never hand-type a digest.
+        - [ ] Update `url` and `sha256` in `Formula/coffee-bar.rb`.
+        - [ ] The tap's own checks pass:
+              ```
+              bash tests/verify/t3-head-block.sh Formula/coffee-bar.rb   # expect EXIT=0
+              bash tests/verify/t4-app-install.sh Formula/coffee-bar.rb  # expect EXIT=0
+              ```
+        - [ ] **APPROVAL NEEDED** — commit and push the tap.
+        - [ ] A real install works from a clean state:
+              ```
+              brew update && brew upgrade coffee-bar
+              brew list --versions coffee-bar     # expect X.Y.Z
+              ```
+        - [ ] Note for the notes: a source build is ad-hoc signed
+              (`Signature=adhoc`, `TeamIdentifier=not set`) and Gatekeeper does
+              not accept it. Only the DMG is the signed path. Do not claim
+              otherwise.
+
+  - type: textarea
+    id: phase5
+    attributes:
+      label: Phase 5 — the site
+      value: |
+        The release must exist BEFORE the page advertises it. A download button
+        pointing at a release that is not published is a broken promise.
+
+        - [ ] Update the displayed version to `X.Y.Z`.
+        - [ ] Update or add the DMG download link.
+        - [ ] **Run the suite by hand before merging the site change.**
+              `.github/workflows/pages.yml` checks only that `site/index.html` is
+              non-empty and that the `DO NOT PUBLISH THIS SECTION` marker is
+              absent. It never runs `swift test`, so `DocsClaims_test.swift` —
+              the guard that reads the page — does not gate the publish. That is
+              how a leaked username reached the live site.
+              ```
+              swift test
+              ```
+        - [ ] After the deploy, check the LIVE page, not the local file:
+              ```
+              curl -sS https://arangogutierrez.github.io/coffee-bar/ > /tmp/cb-live-X.Y.Z.html
+              grep -c 'X\.Y\.Z' /tmp/cb-live-X.Y.Z.html            # expect: nonzero
+              grep -ci "$(id -un)" /tmp/cb-live-X.Y.Z.html         # expect: 0
+              ```
+              The second grep re-checks the DEPLOYED bytes for the maintainer's
+              work username, which the landing page once published inside an HTML
+              comment. It reads the name from `id -un` rather than spelling it
+              out: `noTrackedFileCarriesLiveSessionProse` scans every tracked file
+              for that literal and fails the suite, so writing it here would break
+              the build. That guard covers the repository; this line covers what
+              is actually served.
+
+  - type: textarea
+    id: phase6
+    attributes:
+      label: Phase 6 — close out and final coherence check
+      value: |
+        - [ ] Close any issue this release resolves, and any issue it made stale.
+        - [ ] Update `docs/ROADMAP.md` if the release changed a decision.
+        - [ ] **Version coherence — all four must agree.** This is the check that
+              v0.1.1 failed: the tag said one thing, the tap and the site said
+              another.
+              ```
+              git describe --tags --abbrev=0                                  # vX.Y.Z
+              # DMG stamp, from the mounted image in phase 2                   # X.Y.Z
+              grep 'tags/v' <tap>/Formula/coffee-bar.rb                        # tags/vX.Y.Z.tar.gz
+              curl -sS https://arangogutierrez.github.io/coffee-bar/ | grep -o 'X\.Y\.Z'
+              ```
+        - [ ] The release object exists and carries the DMG:
+              ```
+              gh release view vX.Y.Z --repo ArangoGutierrez/coffee-bar --json assets,isDraft \
+                --jq '{draft: .isDraft, assets: [.assets[].name]}'
+              ```
+              Expect `draft: false` and the DMG in the asset list.
+
+  - type: checkboxes
+    id: invariants
+    attributes:
+      label: Before you close this issue
+      options:
+        - label: >-
+            Every outward action above got its own explicit approval. Approving a
+            step number is not approving the action.
+          required: true
+        - label: >-
+            No signing key, keychain password, API key or private path appears in
+            this issue.
+          required: true
+        - label: >-
+            The release notes state the architectures the binary actually
+            carries, taken from `lipo -archs` and not assumed.
+          required: true
+        - label: >-
+            Every claim above was pasted from a command run against the final
+            state. A remembered number is not evidence.
+          required: true
