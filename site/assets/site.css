@@ -346,6 +346,77 @@ footer {
   max-width: 62ch;
 }
 
+/* ── The policy bench, on Home ─────────────────────────────────────────── */
+/* The controls carry `hidden` in the markup and assets/bench.js removes it,
+   only after a full render has succeeded. The two [hidden] rules below are
+   load-bearing: the `display` declarations override the attribute's UA rule,
+   so without them a visitor with JavaScript off sees dead controls. */
+.bench-controls {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: .9rem 1.5rem; margin: 0 0 1.25rem;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; padding: 1.1rem 1.25rem 1.25rem;
+}
+.bench-controls[hidden] { display: none; }
+.bench-controls fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.bench-controls legend {
+  padding: 0 0 .25rem; font-size: .7rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .14em; color: var(--dim);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+/* 44px is Apple's minimum hit target and is required. */
+.bench-opt {
+  display: flex; align-items: center; gap: .6rem;
+  min-height: 44px; cursor: pointer; font-size: .92rem;
+}
+.bench-opt input { flex: none; width: 1.05rem; height: 1.05rem; accent-color: var(--action); }
+.bench-range { display: flex; align-items: center; gap: .7rem; min-height: 44px; }
+.bench-range[hidden] { display: none; }
+.bench-range input[type="range"] { flex: 1 1 6rem; min-width: 5rem; accent-color: var(--action); }
+.bench-range output {
+  flex: none; min-width: 3.4rem; text-align: right; font-size: .82rem;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+
+/* The segment the Sessions control points at. An outline, not a hue, so it
+   does not compete with the two brand colours. */
+.seg.now { outline: 2px solid var(--fg); outline-offset: 2px; }
+
+/* NOTE: the decision table itself needs NOTHING here. It uses the shared
+   `.table-wrap`, `table`, `caption`, `thead th` and banding rules that
+   site.css already ships — including the comment about telling a header row
+   apart from 24 body rows, which was written for exactly this table. */
+
+/* The second lock on reduced motion. bench.js sets this attribute from
+   matchMedia, so a segment cannot animate even if the media query above the
+   `release` keyframes is ever edited away.
+   The selector carries .coffeebar and .wait so it outranks
+   `.track.coffeebar .seg.wait`, which is the only rule that sets an
+   animation. Without them this lock is inert — measured, see the task-1
+   report. */
+.track[data-motion="reduce"] .seg,
+.track.coffeebar[data-motion="reduce"] .seg.wait { animation: none; }
+
+.bench-readout {
+  border: 1px solid var(--line); border-radius: 10px;
+  padding: 1rem 1.15rem; margin: 0 0 1.1rem;
+}
+.bench-readout p { margin: 0; font-size: .92rem; }
+.bench-readout p + p { margin-top: .5rem; }
+.bench-holds { list-style: none; margin: .6rem 0 0; padding: 0; font-size: .92rem; }
+.bench-holds li { position: relative; padding-left: 1.5rem; margin: 0 0 .35rem; }
+.bench-holds li::before {
+  content: ""; position: absolute; left: 0; top: .62em;
+  width: .45rem; height: .45rem; background: var(--state); border-radius: 1px;
+}
+.bench-floor { font-size: .84rem; color: var(--dim); margin: 0 0 1.5rem; }
+
+details.bench-table { margin: 0 0 1rem; }
+details.bench-table summary {
+  display: flex; align-items: center; min-height: 44px;
+  cursor: pointer; font-weight: 650; font-size: .92rem;
+}
+
 @media (max-width: 34rem) {
   .row, .axis { grid-template-columns: 1fr; gap: .35rem; }
   .track-label { text-align: left; }
