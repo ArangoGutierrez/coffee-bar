@@ -100,7 +100,7 @@
   </div>
   <p class="tag">Your Mac stays awake while a coding agent is working, and sleeps the moment the agent is waiting on <em>you</em>.</p>
 <a class="btn-download" href="https://github.com/ArangoGutierrez/coffee-bar/releases/download/v0.1.1/coffee-bar-0.1.1.dmg">Download for macOS</a>
-<p class="dl-meta">v0.1.1 · Apple silicon · 292&nbsp;KB · macOS 14 or later</p>
+<p class="dl-meta">v0.1.1 · Apple silicon · 299&nbsp;KB · macOS 14 or later</p>
 </header>
 
 <section class="bench" id="bench" aria-labelledby="bench-heading">
@@ -266,9 +266,11 @@ On. Off is absolute in the other direction and outranks every session.
 
 <h2 class="eyebrow">What you see in the menu bar</h2>
 <p>
-The cup tells you the state at a glance. These are the real glyphs, and they are
-monochrome on purpose: macOS tints template images to match your menu bar, so
-they stay legible on any wallpaper and in either appearance.
+Two glyphs, and the cup tells you which one at a glance. It reports whether an
+assertion is held right now — not what your agents are doing, which is what the
+panel is for. These are the real glyphs, and they are monochrome on purpose:
+macOS tints template images to match your menu bar, so they stay legible on any
+wallpaper and in either appearance.
 </p>
 <div class="states">
   <div class="state">
@@ -278,7 +280,7 @@ they stay legible on any wallpaper and in either appearance.
       <rect x="3.5" y="9.06" width="6" height="3.64" rx="0.5"></rect>
     </svg>
     <span><span class="state-name">idle</span>
-    <span class="state-what">No agent is working. Nothing is holding your Mac awake.</span></span>
+    <span class="state-what">Nothing is holding your Mac awake. It is free to sleep.</span></span>
   </div>
   <div class="state">
     <svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
@@ -291,25 +293,15 @@ they stay legible on any wallpaper and in either appearance.
       </g>
     </svg>
     <span><span class="state-name">serving</span>
-    <span class="state-what">An agent is working. The wake assertion is held.</span></span>
-  </div>
-  <div class="state">
-    <svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
-      <path fill-rule="evenodd" d="M2 6 H11 V11.9 Q11 14.2 8.7 14.2 H4.3 Q2 14.2 2 11.9 Z M3.5 7.5 H9.5 V12.7 H3.5 Z"></path>
-      <path fill="none" stroke="currentColor" stroke-width="1.6" d="M11 8.1 a2.6 2.6 0 0 1 0 4.2"></path>
-      <rect x="3.5" y="9.06" width="6" height="3.64" rx="0.5"></rect>
-      <circle cx="12.7" cy="3.1" r="2.3"></circle>
-    </svg>
-    <span><span class="state-name">attention</span>
-    <span class="state-what">An agent is blocked on you. Answer it and the work resumes.</span></span>
+    <span class="state-what">The wake assertion is held. Your Mac stays awake.</span></span>
   </div>
 </div>
 
 <h2 class="eyebrow">What it actually does</h2>
 <ul class="does">
-  <li>Holds <code>PreventUserIdleSystemSleep</code>, bound to live agent session state.</li>
+  <li>Under <code>Auto</code>, holds <code>PreventUserIdleSystemSleep</code>, bound to live agent session state.</li>
   <li><strong>Holds no display assertion by default.</strong> The screen still sleeps while the work continues. A Display control in the panel opts in when you do want the screen kept on.</li>
-  <li>Releases when every agent is blocked on input, not when a timer expires.</li>
+  <li>Under <code>Auto</code>, releases when every agent is blocked on input, not when a timer expires.</li>
   <li>Shows how many sessions are working, and which ones are waiting on you.</li>
   <li>Retires a session whose agent crashed, so a dead process cannot pin the machine awake for ever.</li>
   <li>Three positions — Off, Auto, On. <strong>Off is an absolute veto</strong> and outranks everything.</li>
