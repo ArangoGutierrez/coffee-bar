@@ -281,12 +281,18 @@ nothing anywhere.
 
 <h2 class="eyebrow">Install</h2>
 <!--
-  DO NOT PUBLISH THIS SECTION UNTIL BOTH ARE TRUE, verified by running them:
-    1. the tap ArangoGutierrez/homebrew-coffee-bar carries the formula that
-       installs CoffeeBar.app, not only coffee-bar-probe; and
-    2. a release is tagged, so the formula's url and sha256 resolve.
-  On 2026-07-30 NEITHER held. The formula shipped the probe alone, and no tag
-  existed. An install command that does not work is worse than none.
+  CLEARED TO PUBLISH 2026-08-04. Both preconditions were verified by running
+  them, not by reading them:
+    1. the tap carries the formula that installs CoffeeBar.app — tap commit
+       ec577c6, confirmed by an installed keg whose receipt reads
+       `spec: stable`; and
+    2. v0.1.0 is tagged, and the formula's url and sha256 both resolve — tap
+       commit 6770211. Proved from a CLEAN-ROOM clone of the published tap:
+         brew fetch eduardoa/cbverify/coffee-bar -> EXIT=0, Formula coffee-bar (0.1.0)
+       The same fetch against the previous placeholder digest failed with
+       "Formula reports different checksum", which is why this gate existed.
+  If the commands below ever stop working, they are the thing to fix. An
+  install command that does not work is worse than none.
 -->
 <ol class="steps">
   <li>
