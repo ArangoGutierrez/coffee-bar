@@ -1,7 +1,17 @@
 // Copyright 2026 Carlos Eduardo Arango Gutierrez
 // SPDX-License-Identifier: Apache-2.0
 //
-// Run with:  node --test 'site/assets/*.test.js'
+// Run with:  node --test site/assets/bench.test.js
+//
+// That exact form, and never a glob or a directory. Measured on Node 26:
+//
+//   node --test site/assets/           -> rc=1, "Cannot find module". Broken.
+//   node --test 'site/assets/*.test.js' -> rc=0 when NOTHING matches. Vacuous:
+//                                          a rename silently disables the suite
+//                                          and CI stays green.
+//   node --test site/assets/bench.test.js -> rc=1 when the file is missing.
+//
+// Only the explicit path fails closed, so only the explicit path belongs in CI.
 //
 // WHAT THIS FILE GUARDS, AND WHAT IT CANNOT.
 //
