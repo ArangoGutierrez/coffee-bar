@@ -1826,3 +1826,63 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     #expect(model.suppressionAdvisory?.contains("at or below 30%") == true,
             "the leftover line quotes a floor nobody is enforcing: \(model.suppressionAdvisory ?? "nil")")
 }
+
+@MainActor
+@Test func aFloorHandWrittenAboveTheMaximumIsQuotedAsTheOneEnforced() {
+    // A regression the issue #11 fix introduced. The DECISION bounds the floor
+    // and the SENTENCE did not, so the panel printed the raw setting.
+    //
+    // Named bug this catches: "coffee-bar does not hold at or below 1000%" — a
+    // percentage that cannot exist, which is the exact defect
+    // `aFloorAboveOneHundredIsCappedBeforeTheDecisionUsesIt` names in Core. The
+    // UI must not put back what the decision took out.
+    //
+    // 1000 reaches the store only by hand, through `defaults write`. That is
+    // still a real user, and the panel is the product's claim about itself.
+    let model = ServingModel(
+        holder: SpyHolder(), reader: FakeReader(source: .battery, percent: 50),
+        health: fixtureHealth(),
+        settings: FakeSettings([SettingsKey.batteryFloorPercent: 1000]))
+
+    model.intent = .serve
+
+    #expect(model.isServing == false, "precondition: the bounded floor refused at 50%")
+    #expect(model.desired?.suppression == .batteryFloor(percent: 50, floor: 100),
+            "precondition: the decision bounded the floor")
+
+    // The panel must agree with the decision it is reporting.
+    #expect(model.suppression == .batteryFloor(percent: 50, floor: 100))
+    let line = model.suppressionAdvisory ?? ""
+    #expect(line.contains("at or below 100%"), "the panel quoted a floor nobody enforced: \(line)")
+    #expect(!line.contains("1000%"), "the panel printed a percentage that cannot exist: \(line)")
+}
+
+@MainActor
+@Test func aFloorHandWrittenBelowTheMinimumStillExplainsTheRefusal() {
+    // The other half of the same regression, and the worse half. With the raw
+    // setting used as the filter, `3 <= 0` is false, so the whole reason is
+    // dropped — while the DECISION refuses on the bounded floor of 5.
+    //
+    // Named bug this catches: coffee-bar refuses the click, moves the user's
+    // control back to Auto on its own, and says NOTHING. `cancelledServe` is
+    // gated on the filtered suppression, so the explanation dies with it. That
+    // is the silent-snap-back failure `suppressionAdvisory` exists to prevent.
+    let model = ServingModel(
+        holder: SpyHolder(), reader: FakeReader(source: .battery, percent: 3),
+        health: fixtureHealth(),
+        settings: FakeSettings([SettingsKey.batteryFloorPercent: 0]))
+
+    model.intent = .serve
+
+    #expect(model.isServing == false, "precondition: the bounded floor refused at 3%")
+    #expect(model.desired?.suppression == .batteryFloor(percent: 3, floor: 5),
+            "precondition: the decision refused on the bounded floor")
+    #expect(model.intent == .auto, "precondition: the refused click snapped back")
+
+    // A control the product moved on the user's behalf, with a reason.
+    #expect(model.suppression == .batteryFloor(percent: 3, floor: 5))
+    let line = model.suppressionAdvisory ?? ""
+    #expect(line.contains("at or below 5%"), "no reason for the refusal: \(line)")
+    #expect(line.contains("was refused"),
+            "the control snapped back to Auto with no explanation: \(line)")
+}

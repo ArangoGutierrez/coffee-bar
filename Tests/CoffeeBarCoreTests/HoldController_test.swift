@@ -643,3 +643,39 @@ private func session(_ state: SessionState) -> AgentSession {
     #expect(c.lastSuppression == .batteryFloor(percent: 12, floor: 20),
             "the reason the user has not read yet must still survive an Off click")
 }
+
+// MARK: - The floor actually used is reported, not re-derived (issue #11)
+
+@Test func evaluateRecordsTheBoundedFloorItActuallyUsed() {
+    // The panel has to name the floor in force, and issue #11 made that number
+    // differ from the setting: `PowerInputs.init` bounds, the stored value does
+    // not. A caller that re-derived it with a second `BatteryFloor.bounded`
+    // call would agree today and could drift tomorrow, so the controller
+    // reports the value the DECISION was actually given.
+    //
+    // Named bug this catches: a panel quoting "at or below 1000%", a percentage
+    // that cannot exist, while the decision refuses on 100.
+    var above = HoldController()
+    _ = above.evaluate(powerSource: .battery, batteryPercent: 50,
+                       batteryFloorPercent: 1000)
+    #expect(above.floorInForce == 100)
+
+    var below = HoldController()
+    _ = below.evaluate(powerSource: .battery, batteryPercent: 50,
+                       batteryFloorPercent: 0)
+    #expect(below.floorInForce == 5)
+
+    // The control. Without an in-range case a property hard-coded to a bound
+    // would satisfy both lines above.
+    var inRange = HoldController()
+    _ = inRange.evaluate(powerSource: .battery, batteryPercent: 50,
+                         batteryFloorPercent: 30)
+    #expect(inRange.floorInForce == 30)
+}
+
+@Test func aFreshControllerReportsTheDefaultFloor() {
+    // Read before the first `evaluate`, the honest answer is the floor a
+    // decision would use if one were asked right now. Anything else would make
+    // the panel's first frame quote a number no decision has ever used.
+    #expect(HoldController().floorInForce == BatteryFloor.default)
+}
