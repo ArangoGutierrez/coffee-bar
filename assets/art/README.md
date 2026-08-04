@@ -67,6 +67,11 @@ Never tint these yourself, never ship a coloured menu-bar variant.
 `apple-touch-icon-180.png`, `icon-192/512.png`, `icon-512-maskable.png`,
 `site.webmanifest`, `head-snippet.html` (paste into `<head>`).
 
+The web rasters shipped in `site/` are cut from `site/appicon-web.svg`, which is
+the same geometry as the app icon on the **web tile** `#F2F0EB` rather than the
+appicon base `#EFEDE7`. `icon-512-maskable.png` insets that art by 0.72 about
+the canvas centre for the platform safe zone.
+
 ## wordmark/
 `coffee-bar-wordmark-{light,dark}.png` (+`-2x`). Always lowercase, always
 hyphenated — it is a command name. Clear space either side = one glyph width.

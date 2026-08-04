@@ -32,6 +32,7 @@
           <li><a href="docs.html">Docs</a></li>
           <li><a href="changelog.html">Changelog</a></li>
         </ul>
+        <p class="sidebar-version"><a href="changelog.html">v0.1.1</a></p>
       </nav>
       <div class="wrap"><!-- page content --></div>
     </div>
@@ -100,15 +101,33 @@ body {
   list-style: none; margin: 0; padding: 0;
   display: flex; flex-wrap: wrap; gap: .15rem .35rem;
 }
-.sidebar a:not(.sidebar-mark) {
+/* Scoped to the nav list, so neither .sidebar-mark nor .sidebar-version picks
+   up the 44px page-link treatment. */
+.sidebar ul a {
   display: flex; align-items: center; min-height: 44px; padding: 0 .75rem;
   border-radius: 6px; text-decoration: none; color: var(--dim);
   font-size: .9rem;
 }
-.sidebar a:not(.sidebar-mark):hover { color: var(--fg); background: var(--panel); }
+.sidebar ul a:hover { color: var(--fg); background: var(--panel); }
 .sidebar a[aria-current="page"] {
   color: var(--fg); font-weight: 650;
   box-shadow: inset 0 -2px 0 var(--action);
+}
+
+/* The version badge, last child of nav.sidebar. The version string lives in
+   the HTML and never here. It stays in normal flow, so it rides the sticky
+   sidebar at >=48rem instead of fighting it. */
+.sidebar-version {
+  margin: .9rem 0 0; padding: 0 .75rem;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: .78rem; line-height: 1.5;
+}
+.sidebar-version a { color: var(--dim); text-decoration: none; }
+.sidebar-version a:hover,
+.sidebar-version a:focus-visible {
+  color: var(--fg);
+  text-decoration: underline; text-decoration-color: var(--action);
+  text-decoration-thickness: 2px; text-underline-offset: 3px;
 }
 
 @media (min-width: 48rem) {
