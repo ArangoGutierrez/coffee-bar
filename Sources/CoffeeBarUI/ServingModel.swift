@@ -332,6 +332,19 @@ public final class ServingModel {
         holdsDisplay ? "Stays on" : "Sleeps"
     }
 
+    /// What one segment of the floor control is CALLED.
+    ///
+    /// Here rather than in `PanelView`, for the reason `displayLabel(for:)` is:
+    /// design §5.4 rules out asserting on the rendered control, so a label
+    /// built in the view is a label no check reads.
+    ///
+    /// It carries the `%`, because the segments sit under a heading and a bare
+    /// "20" beside "30" reads as a count of something rather than as a charge.
+    /// `suppressionAdvisory` above quotes the same number the same way.
+    static func floorLabel(for percent: Int) -> String {
+        "\(percent)%"
+    }
+
     /// The one line the panel shows about what is held right now.
     ///
     /// Built HERE and not in `PanelView`, and issue #12 is why. The view
@@ -449,6 +462,20 @@ public final class ServingModel {
         // as `false` — see `SettingsStoring`.
         self.holdDisplayAwakeStorage =
             settings.bool(forKey: SettingsKey.holdDisplayAwake) ?? false
+        // Read once, here, for the reason above. `?? BatteryFloor.default` is
+        // the product's documented floor, and the `??` is load bearing: a key
+        // nobody wrote reads as `nil` here rather than as 0, and a 0 floor
+        // fires only once the machine is already dead.
+        //
+        // NOT bounded here, deliberately. `PowerInputs.init` is the one place a
+        // floor is bounded — see `BatteryFloor` — and a second application of
+        // that rule on this line is the drift the invariant forbids. What this
+        // costs is a display-only oddity: a floor hand-written outside the
+        // permitted range with `defaults write` shows as no selection on the
+        // panel's control, while the DECISION still bounds it correctly. The
+        // first touch of the control heals it.
+        self.batteryFloorPercentStorage =
+            settings.integer(forKey: SettingsKey.batteryFloorPercent) ?? BatteryFloor.default
     }
 
     // There is deliberately NO `deinit` here, and none may be added.
@@ -561,6 +588,38 @@ public final class ServingModel {
     /// `init`. Private: `holdDisplayAwake` is the property with the behaviour.
     private var holdDisplayAwakeStorage: Bool
 
+    /// Bound to the panel's floor control. The charge at or below which
+    /// coffee-bar stops holding the machine awake (issue #11).
+    ///
+    /// A SETTING, like `holdDisplayAwake` above and for the same reason: it
+    /// answers a different question from `intent`. That one says whether to
+    /// hold at all, this one says how much battery a hold may spend. The floor
+    /// governs every position — `theBatteryFloorGovernsAutoAsWellAsServe` — so
+    /// it cannot be a fourth segment on the Serving control.
+    ///
+    /// The value is NOT bounded here. `PowerInputs.init` bounds it, once, and
+    /// `BatteryFloor` states why that is the only site. So this reports what
+    /// the user chose and `desired.suppression` reports what the decision used;
+    /// they differ only for a floor hand-written outside the permitted range.
+    ///
+    /// The setter WRITES BEFORE it reconciles, like `holdDisplayAwake`: a crash
+    /// between the two would lose a choice the user has already seen take
+    /// effect. It reconciles at all because a user raising the floor on a low
+    /// battery is asking for the hold to stop NOW, not at the next 30-second
+    /// tick — `changingTheFloorReconcilesImmediatelyRatherThanAtTheNextTick`.
+    public var batteryFloorPercent: Int {
+        get { batteryFloorPercentStorage }
+        set {
+            batteryFloorPercentStorage = newValue
+            settings.setInteger(newValue, forKey: SettingsKey.batteryFloorPercent)
+            refresh()
+        }
+    }
+
+    /// The backing store for `batteryFloorPercent`, seeded from the settings in
+    /// `init`. Private, for the reason `holdDisplayAwakeStorage` is.
+    private var batteryFloorPercentStorage: Int
+
     /// Re-samples power, retires silent sessions, and reconciles the assertion.
     /// Safe to call on a timer.
     ///
@@ -588,6 +647,7 @@ public final class ServingModel {
         let state = controller.evaluate(powerSource: reading.source,
                                         batteryPercent: reading.percent,
                                         sessions: sessions,
+                                        batteryFloorPercent: batteryFloorPercentStorage,
                                         holdDisplayAwake: holdDisplayAwakeStorage,
                                         assertionIsHeld: isServing)
         // Derived from the SAME array handed to `evaluate` above, on purpose.

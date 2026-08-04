@@ -64,6 +64,22 @@ public enum BatteryFloor {
     /// charge — the product silently stops working.
     public static let permitted = 5...100
 
+    /// What the panel's control offers, coarsest question first.
+    ///
+    /// A fixed list rather than a free number, and a short one. This is a
+    /// safety limit somebody sets once and forgets, so the difference between
+    /// 32 and 33 is not a choice worth a stepper — while a control with eleven
+    /// segments is one nobody reads.
+    ///
+    /// Here beside `permitted` rather than in the view, so the two cannot
+    /// drift. A choice outside the permitted range is a control position the
+    /// decision would silently change under the user: they pick it, the floor
+    /// becomes something else, and the control then matches no value at all.
+    /// `everyOfferedFloorSitsInsideThePermittedRange` goes red on that, and it
+    /// also holds `default` inside the list — a default a user cannot get back
+    /// to is a setting with no undo.
+    public static let choices = [10, 20, 30, 40, 50]
+
     /// `percent` brought inside `permitted`.
     ///
     /// Idempotent, so a value that has already been through it is unchanged.
