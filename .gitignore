@@ -7,6 +7,8 @@ DerivedData/
 .DS_Store
 docs/probe-results.local.md
 .worktrees/
+# Agent working artefacts: brainstorm mockups, task briefs, progress ledger.
+.superpowers/
 
 # Signing and notarisation secrets. Never commit these; keep API keys under
 # ~/.appstoreconnect/private_keys/ instead of the working tree.
