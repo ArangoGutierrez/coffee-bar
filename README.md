@@ -1,7 +1,7 @@
 <p align="center">
   <img src="assets/art/github/readme-header-1600x400.png"
        width="800"
-       alt="coffee-bar — a cup glyph with a green fill, beside the coffee-bar wordmark">
+       alt="coffee-bar — a cup glyph beside the coffee-bar wordmark">
 </p>
 
 # coffee-bar
