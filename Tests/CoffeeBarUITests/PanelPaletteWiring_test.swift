@@ -17,17 +17,52 @@ private func panelSource() throws -> String {
         encoding: .utf8)
 }
 
-@Test("the panel tints from the model, never from a literal")
-func panelTintsFromTheModel() throws {
+@Test("the tint is applied per-picker, so state never paints a non-segment control")
+func tintIsConfinedToTheHeldSegments() throws {
     let source = try panelSource()
-    #expect(source.contains(".tint(brand(.state))"),
-            "the panel must take its tint from BrandPalette via brand(.state)")
+
+    let tints = source.components(separatedBy: ".tint(brand(.state))").count - 1
+    let pickers = source.components(separatedBy: ".pickerStyle(.segmented)").count - 1
+
+    // A COUNT, not a presence check. One `.tint` on the enclosing VStack would
+    // satisfy a `contains` assertion while painting the Quit button and every
+    // focus ring roast — the exact regression this replaces.
+    #expect(pickers == 3, "expected 3 segmented pickers, found \(pickers)")
+    #expect(tints == pickers,
+            "expected one .tint per segmented picker: \(pickers) pickers, \(tints) tints")
+
+    // The count ALONE is still theater, and this was measured, not reasoned:
+    // moving one picker's `.tint` up to the enclosing VStack leaves the
+    // file-wide total at 3, so the two assertions above stayed green on the
+    // exact regression they name. Placement needs its own two checks.
+
+    // 1. ADJACENCY. The first modifier after each `.labelsHidden()`, comments
+    //    skipped, must be the tint. That is what "on the picker" means.
+    let attached = source
+        .components(separatedBy: ".labelsHidden()\n")
+        .dropFirst()
+        .filter { tail in
+            tail.split(separator: "\n", omittingEmptySubsequences: false)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .first { !$0.isEmpty && !$0.hasPrefix("//") } == ".tint(brand(.state))"
+        }
+        .count
+    #expect(attached == pickers,
+            "expected a .tint directly on each picker: \(pickers) pickers, \(attached) attached")
+
+    // 2. THE CONTAINER STAYS CLEAN. `.tint` is an Environment value, so one on
+    //    the VStack descends to the Quit button and every focus ring. Anything
+    //    after the container's own `.padding(14)` is a modifier ON the
+    //    container, not on a control inside it.
+    let containerModifiers = source.components(separatedBy: "\n        .padding(14)").last ?? ""
+    #expect(!containerModifiers.contains(".tint("),
+            "the enclosing VStack must carry no .tint: it descends to every control below it")
 
     // The bug this catches: someone hardcodes a hex in the view, where no test
     // can read it. That is the exact failure BrandPalette exists to prevent.
     let hexLiteral = try Regex("#[0-9A-Fa-f]{6}")
     #expect(source.firstMatch(of: hexLiteral) == nil,
-            "PanelView must contain no colour literal; values live in BrandPalette")
+            "PanelView must contain no #RRGGBB literal; values live in BrandPalette")
 }
 
 @Test("the indicator comes from the model, not from a symbol name typed here")

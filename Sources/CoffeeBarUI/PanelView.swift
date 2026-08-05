@@ -123,6 +123,12 @@ public struct PanelView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            // `state` colours the held segments and nothing else
+            // (assets/art/README.md lines 18-20). Placed per-picker rather than
+            // on the enclosing VStack: `.tint` is an Environment value, so one
+            // call up there also painted the Quit button and every focus ring —
+            // controls the brand doc assigns to `action`, which is web-only.
+            .tint(brand(.state))
 
             // The second control, and a SEPARATE question from the one above.
             // That one says whether to hold at all; this says whether a hold
@@ -149,6 +155,7 @@ public struct PanelView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            .tint(brand(.state))
 
             // The third control, and a third separate question: how much
             // battery a hold may spend. Issue #11 made the floor a setting
@@ -172,6 +179,7 @@ public struct PanelView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            .tint(brand(.state))
 
             // What is ACTUALLY held, beside the two controls that asked for it.
             // The user has to be able to see that Auto is holding right now, or
@@ -298,10 +306,6 @@ public struct PanelView: View {
         }
         .padding(14)
         .frame(width: 260)
-        // `state` colours the held segments, which is exactly what a selected
-        // segment is (assets/art/README.md lines 18-20). `action` is the web's
-        // colour and never appears in the app.
-        .tint(brand(.state))
         // The panel refreshes on open so what the user sees is current. The
         // 30-second ticker is not here: `MenuBarExtra(.window)` builds this
         // view only while the panel is open, so a ticker owned by the view
