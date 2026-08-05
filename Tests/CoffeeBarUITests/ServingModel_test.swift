@@ -841,9 +841,16 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // this app could not parse. Telling that user to add entries that may
     // already be there is how a shared settings file gets clobbered, which is
     // the exact six-occurrence pattern design §6 exists to avoid.
+    //
+    // The fixture is `malformed.json` and NOT an absent path, and the change is
+    // deliberate. Issue #10c made an absent hook file mean "the user does not
+    // run this tool", so an absent file now produces NO line at all — see
+    // `aToolWithNoConfigurationFileGetsNoAdvisoryAboutIt`. A file that EXISTS
+    // and will not parse is what `.unreadable` is for, and it still drives this
+    // wording, so the named bug above stays guarded.
     let model = ServingModel(holder: SpyHolder(),
                              reader: FakeReader(source: .ac, percent: 80),
-                             health: fixtureHealth("definitely-not-here.json"),
+                             health: fixtureHealth("malformed.json"),
                              settings: FakeSettings())
 
     model.refresh()
@@ -887,6 +894,204 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
             "the advisory must name the file it actually inspected")
     #expect(advisory.lowercased().contains("not receiving") == false,
             "claims events are not arriving, which a file read cannot establish: \(advisory)")
+}
+
+// MARK: - The advisory is correct PER AGENT
+//
+// Issue #10c. `HookHealth.requiredEvents(for:)` existed as data and nothing
+// called it: `status(ofSettings:)` filtered the Claude Code CONSTANT and read
+// `~/.claude/settings.json` whatever tool the user runs. So a Codex user and a
+// Cursor user were both handed a Claude Code advisory naming a file their tool
+// never reads.
+
+/// A reader pointed at the committed fixture for each named tool.
+///
+/// Every model below is handed one, for the reason `fixtureHealth` exists: the
+/// shipping default reads the machine's own `~/.codex/hooks.json` and
+/// `~/.cursor/hooks.json`, so a check that took the default would report a
+/// different advisory on every developer's laptop.
+private func fixtureHealth(_ files: [AgentTool: String]) -> HookHealthReader {
+    let root = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()    // …/Tests/CoffeeBarUITests
+        .deletingLastPathComponent()    // …/Tests
+        .appending(path: "Fixtures")
+    let directories: [AgentTool: String] = [.claudeCode: "claude-settings",
+                                            .codex: "codex-settings",
+                                            .cursor: "cursor-settings"]
+    return HookHealthReader(hookFiles: files.reduce(into: [:]) { found, entry in
+        found[entry.key] = root.appending(path: "\(directories[entry.key]!)/\(entry.value)")
+    })
+}
+
+@MainActor
+@Test func aCursorUserIsSentToTheCursorFileAndNeverToTheClaudeCodeOne() {
+    // **The defect this task exists to fix**, stated as the panel line a Cursor
+    // user reads. Before #10c this user was told to paste five PascalCase Claude
+    // Code entries into `~/.claude/settings.json` — a file Cursor never reads,
+    // naming events Cursor never sends.
+    //
+    // The captured fixture is the real `~/.cursor/hooks.json`. Three of the five
+    // required event KEYS are in it and none of the commands is coffee-bar's, so
+    // all five are missing.
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth([.cursor: "captured.json"]),
+                             settings: FakeSettings())
+    model.refresh()
+
+    // A literal. Building it from `hookHealths` would let both sides agree on a
+    // line that names the wrong file and tells the user nothing.
+    #expect(model.hookAdvisory == """
+        No coffee-bar hooks for afterFileEdit, afterShellExecution, \
+        beforeReadFile, beforeShellExecution, sessionStart in ~/.cursor/hooks.json.
+        """)
+}
+
+@MainActor
+@Test func aCodexUserIsSentToTheCodexFileWithCodexEventNames() {
+    // The same defect through the other tool, and the sharper half of it: Codex
+    // shares Claude Code's event VOCABULARY, so a wrong advisory here reads as
+    // plausible. `PermissionDenied` is the tell — it is required for Claude Code
+    // and has never appeared in a captured Codex payload.
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth([.codex: "missing-two.json"]),
+                             settings: FakeSettings())
+    model.refresh()
+
+    #expect(model.hookAdvisory == """
+        No coffee-bar hooks for Stop, UserPromptSubmit in ~/.codex/hooks.json.
+        """)
+}
+
+@MainActor
+@Test func onlyTheClaudeCodeLineMentionsAProjectSettingsFile() {
+    // Named bug this catches: copying Claude Code's closing sentence onto the
+    // other two tools. Claude Code merges hooks from the user file, a project's
+    // `.claude/settings.json` and `settings.local.json`, and that measurement is
+    // why the sentence exists. NOTHING equivalent was measured for Codex or for
+    // Cursor, so stating it for them would be an invented claim in the one place
+    // this product promises to tell the truth.
+    let claudeCode = ServingModel(holder: SpyHolder(),
+                                  reader: FakeReader(source: .ac, percent: 80),
+                                  health: fixtureHealth([.claudeCode: "missing-two.json"]),
+                                  settings: FakeSettings())
+    claudeCode.refresh()
+    let claudeLine = claudeCode.hookAdvisory ?? ""
+    #expect(claudeLine.contains("If yours are in a project's"),
+            "the Claude Code line lost the merge sentence its own measurement earned")
+
+    for (tool, fixture) in [(AgentTool.codex, "missing-two.json"),
+                            (AgentTool.cursor, "missing-two.json")] {
+        let model = ServingModel(holder: SpyHolder(),
+                                 reader: FakeReader(source: .ac, percent: 80),
+                                 health: fixtureHealth([tool: fixture]),
+                                 settings: FakeSettings())
+        model.refresh()
+        let line = model.hookAdvisory ?? ""
+        #expect(!line.isEmpty, "\(tool.rawValue) produced no advisory to check")
+        #expect(!line.contains("If yours are in a project's"),
+                "the \(tool.rawValue) line claims a project-file merge nobody measured: \(line)")
+        #expect(!line.contains(".claude/"),
+                "the \(tool.rawValue) line sends the user to a Claude Code file: \(line)")
+    }
+}
+
+@MainActor
+@Test func aToolWithNoConfigurationFileGetsNoAdvisoryAboutIt() {
+    // Design decision this pins, and the reason the check above can exist: an
+    // ABSENT hook file means the user does not run that tool.
+    //
+    // Named bug this catches: a Claude-Code-only user reading two extra lines
+    // telling them to wire Codex and Cursor. The panel would then be noise, and
+    // a user who learns to skip it skips the line that mattered.
+    //
+    // The gate is FILE EXISTENCE, never "has this tool ever posted an event".
+    // That rule is circular: a tool with no hooks wired never posts, so it would
+    // never be advised, and the advisory exists for exactly that user.
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth([.claudeCode: "wired.json",
+                                                    .codex: "definitely-not-here.json"]),
+                             settings: FakeSettings())
+    model.refresh()
+
+    #expect(model.hookHealths[.codex] == nil, "an absent Codex file reached a verdict")
+    #expect(model.hookHealths[.claudeCode] == .wired,
+            "the file that IS on disk was not read; this check would pass on nothing")
+    #expect(model.hookAdvisory == nil)
+}
+
+@MainActor
+@Test func everyToolWithSomethingToSayGetsItsOwnLineInAFixedOrder() {
+    // Named bug this catches: one tool's advisory silently replacing another's.
+    // A user who runs all three has to be told about all three, and the panel
+    // renders `hookAdvisory` verbatim — so a property returning only the first
+    // finding would drop two-thirds of the advice with no check able to see it.
+    //
+    // The ORDER is pinned because a dictionary has none. An order that reshuffled
+    // between refreshes would rewrite the panel every 30 seconds under a user
+    // trying to read it.
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth([.claudeCode: "missing-stop.json",
+                                                    .codex: "missing-stop.json",
+                                                    .cursor: "missing-session-start.json"]),
+                             settings: FakeSettings())
+    model.refresh()
+
+    #expect(model.hookAdvisory == """
+        No coffee-bar hooks for Stop in ~/.claude/settings.json. If yours are in \
+        a project's .claude/settings.json, ingest may still be working.
+
+        No coffee-bar hooks for Stop in ~/.codex/hooks.json.
+
+        No coffee-bar hooks for sessionStart in ~/.cursor/hooks.json.
+        """)
+}
+
+@MainActor
+@Test func aWiredToolAddsNoLineWhileABrokenOneStillReportsIt() {
+    // The discriminating half of the check above. `.wired` says NOTHING, for the
+    // reason `theAdvisorySaysNothingAtAllWhenTheHooksAreWired` gives — this
+    // check reads a FILE and can never prove an event arrived.
+    //
+    // Named bug this catches: a joiner that emits a blank line, a stray
+    // separator, or the word "wired" for the healthy tool. The Codex line must
+    // stand alone and read exactly as it does when it is the only tool present.
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth([.claudeCode: "wired.json",
+                                                    .codex: "missing-stop.json",
+                                                    .cursor: "wired.json"]),
+                             settings: FakeSettings())
+    model.refresh()
+
+    #expect(model.hookHealths[.claudeCode] == .wired)
+    #expect(model.hookHealths[.cursor] == .wired,
+            "the Cursor fixture is fully wired; a nested parse would report it broken")
+    #expect(model.hookAdvisory == """
+        No coffee-bar hooks for Stop in ~/.codex/hooks.json.
+        """)
+}
+
+@MainActor
+@Test func theClaudeCodeHealthTheModelPublishesIsTheOneInTheCollection() {
+    // `hookHealth` and `hookHealths[.claudeCode]` are ONE value, not two.
+    //
+    // Named bug this catches: `hookHealth` kept as a second stored property fed
+    // by a second read. The two would agree until they did not, the panel would
+    // render one while every existing check drove the other, and nothing could
+    // see the disagreement.
+    for fixture in ["wired.json", "missing-stop.json", "malformed.json"] {
+        let model = ServingModel(holder: SpyHolder(),
+                                 reader: FakeReader(source: .ac, percent: 80),
+                                 health: fixtureHealth(fixture),
+                                 settings: FakeSettings())
+        model.refresh()
+        #expect(model.hookHealth == model.hookHealths[.claudeCode],
+                "\(fixture) reaches two different Claude Code verdicts")
+    }
 }
 
 // MARK: - A refused On click says so, and says where the control landed

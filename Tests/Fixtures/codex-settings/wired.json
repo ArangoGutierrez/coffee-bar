@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {"hooks": [{"type": "command", "command": "python3 ~/.codex/hooks/pre_tool_use.py"}]},
+      {"hooks": [{"type": "command", "command": "/usr/local/bin/coffeebar-hook --tool=codex"}]}
+    ],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "/usr/local/bin/coffeebar-hook --tool=codex"}]}],
+    "PreToolUse": [{"matcher": "Bash|apply_patch|Edit|Write", "hooks": [{"type": "command", "command": "/usr/local/bin/coffeebar-hook --tool=codex", "timeout": 10}]}],
+    "PostToolUse": [{"matcher": "Bash|apply_patch|Edit|Write", "hooks": [{"type": "command", "command": "/usr/local/bin/coffeebar-hook --tool=codex", "timeout": 10}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "/usr/local/bin/coffeebar-hook --tool=codex"}]}]
+  }
+}

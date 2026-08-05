@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [{"command": "/usr/local/bin/coffeebar-hook --tool=cursor", "timeout": 10}],
+    "beforeShellExecution": [
+      {"command": "~/.cursor/hooks/sign-commits.sh"},
+      {"command": "/usr/local/bin/coffeebar-hook --tool=cursor", "timeout": 10}
+    ],
+    "afterShellExecution": [{"command": "/usr/local/bin/coffeebar-hook --tool=cursor"}],
+    "beforeReadFile": [{"command": "/usr/local/bin/coffeebar-hook --tool=cursor"}],
+    "afterFileEdit": [{"command": "/usr/local/bin/coffeebar-hook --tool=cursor", "timeout": 5}],
+    "sessionEnd": [{"command": "~/.cursor/hooks/extract-learnings.sh", "timeout": 10}]
+  }
+}
