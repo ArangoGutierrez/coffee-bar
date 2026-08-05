@@ -128,9 +128,17 @@ measurement harness has produced them.
 
 ## M6 — the demotion journal must stay out of the root helper's reach
 
-Issue #14 added a SECOND journal, for `ProcGovernor`:
-`~/Library/Application Support/coffee-bar/state/demotion-journal.json`, directory
-0700 and file 0600.
+Issue #14 added a SECOND journal type, for `ProcGovernor`:
+`FileDemotionJournalStore`, which writes
+`~/Library/Application Support/coffee-bar/state/demotion-journal.json` with
+directory 0700 and file 0600.
+
+**The app does not create that file today.** `ProcGovernor` ships as a tested
+library and **no production code path calls it**, so nothing demotes a process
+and nothing writes the journal. Wiring the governor needs a trigger policy that
+issue #14 never specified, and it is a separate piece of work. The requirement
+below binds from the moment either journal is written by a shipped build, and it
+is recorded now because M5 must inherit it whichever lands first.
 
 It is a separate file for a security reason, not a tidiness one. Process demotion
 is unprivileged and same-uid, so its journal is written by the user's own app and

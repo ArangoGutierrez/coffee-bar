@@ -491,9 +491,24 @@ decision), never exit non-zero. A hook that hangs holds up the agent.
 
 ### 5.6 ProcGovernor
 
-**Built in issue #14.** `Sources/CoffeeBarPower/ProcGovernor.swift` and the three types
-around it. This section describes what exists; the sketch it replaces got the
+**Built in issue #14, and NOT WIRED.** `Sources/CoffeeBarPower/ProcGovernor.swift` and the
+three types around it. This section describes what exists; the sketch it replaces got the
 `setpriority` argument order wrong in three places.
+
+`ProcGovernor` ships as a tested library and **no production code path calls it**.
+`recover()` has no call site anywhere under `Sources/`, `demote(_:)` has one — in
+`CoffeeBarGovernorHarness`, a target with no `Package.swift` product entry that only this
+suite builds — and nothing reads `SettingsKey.demotableProcessNames`. So the app demotes no
+process and writes no demotion journal.
+
+**What is missing is not plumbing.** Issue #14 never specified the part that decides WHEN
+coffee-bar demotes anything. No source of the frontmost application exists anywhere in
+`Sources/`, and the tracked agent pids are on `AgentSession` but are not plumbed to a
+policy. Wiring is therefore a design task and is tracked as separate work; the trigger
+policy is the open question. Read every present-tense sentence below as a description of
+the library, not of the shipped app.
+`everyDocumentAboutTheGovernorSaysNothingCallsItYet` holds this paragraph against the
+source, and stops asking for it as soon as a production caller exists.
 
 `ProcGovernor` is the first thing in this repository that touches a pid it does not own.
 `DemotionProbe` moves `getpid()` and nothing else, which is what makes it safe under a
@@ -585,10 +600,11 @@ different names, because precondition 1 checks every component of the path.
 
 #### The exposure this leaves
 
-A crash leaves every demoted process demoted **until coffee-bar next starts**. Nothing
-undoes it in between, and for a long-lived process such as a browser that can mean days.
-It is bounded by construction, because darwin background state is a process attribute: it
-dies with the process and never survives a reboot. It is **not solved**. See
+Once the governor is wired, a crash will leave every demoted process demoted **until
+coffee-bar next starts**. Nothing would undo it in between, and for a long-lived process
+such as a browser that can mean days. It is bounded by construction, because darwin
+background state is a process attribute: it dies with the process and never survives a
+reboot. It is **not solved**. Today nothing demotes anything, so nothing is exposed. See
 `docs/ACCEPTED-RISKS.md`.
 
 #### Two independent channels

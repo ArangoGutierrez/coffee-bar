@@ -156,6 +156,29 @@ private func codeWithoutComments(_ text: String) -> String {
     return out
 }
 
+private func packageRoot() -> URL {
+    URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()      // …/Tests/CoffeeBarPowerTests
+        .deletingLastPathComponent()      // …/Tests
+        .deletingLastPathComponent()      // package root
+}
+
+/// The sentence every document describing the governor must carry while nothing
+/// calls it.
+///
+/// A literal, because the guard below has to look for something. It is the
+/// shortest phrase that cannot be written by accident and cannot be true of a
+/// wired feature.
+private let unwiredMarker = "no production code path calls it"
+
+/// The two targets a call site does not make the feature live.
+///
+/// `CoffeeBarPower` is the library itself. `CoffeeBarGovernorHarness` is a
+/// `Package.swift` TARGET with no product entry, built only by this suite —
+/// `scripts/build-app.sh` builds `--product coffee-bar` — so a user cannot run
+/// it and a release does not contain it.
+private let targetsThatDoNotShipTheFeature = ["/CoffeeBarPower/", "/CoffeeBarGovernorHarness/"]
+
 @Suite struct ProcGovernorTests {
 
     // MARK: - Journal first
@@ -619,5 +642,65 @@ private func codeWithoutComments(_ text: String) -> String {
                 "the scan found no call in the governor itself; it is looking in the wrong place")
         #expect(callers == allowed,
                 "setpriority is called outside the governor: \(callers.subtracting(allowed))")
+    }
+
+    // MARK: - The documents must match what the product does
+
+    @Test func everyDocumentAboutTheGovernorSaysNothingCallsItYet() throws {
+        // The `LaunchDaemonInstaller` shape that issue #13 complains about,
+        // repeating one milestone later: prose in the PRESENT TENSE about a
+        // feature no code path reaches. `docs/ACCEPTED-RISKS.md` said "every
+        // process it had demoted stays demoted until coffee-bar next starts and
+        // reads its journal back", and `docs/ROADMAP.md` said issue #14 "added a
+        // SECOND journal" at a path the app never creates. coffee-bar demotes
+        // nothing and creates no such file. The code is honest about itself and
+        // that does not help, because the documents are what a person reads.
+        //
+        // **This guard lifts itself.** The moment anything outside the library
+        // and the harness calls the governor, the feature IS live, the sentence
+        // is no longer required and this check stops asking for it. So it cannot
+        // block the follow-up that wires it, and it cannot become the reason
+        // somebody deletes it.
+        let root = packageRoot()
+
+        var productionCallers: Set<String> = []
+        var anyCaller: Set<String> = []
+        let walker = try #require(FileManager.default.enumerator(
+            at: root.appendingPathComponent("Sources"), includingPropertiesForKeys: nil))
+        for case let file as URL in walker where file.pathExtension == "swift" {
+            let code = codeWithoutComments(try String(contentsOf: file, encoding: .utf8))
+            guard code.contains("ProcGovernor(") || code.contains(".recover()") else { continue }
+            anyCaller.insert(file.lastPathComponent)
+            if !targetsThatDoNotShipTheFeature.contains(where: { file.path.contains($0) }) {
+                productionCallers.insert(file.lastPathComponent)
+            }
+        }
+
+        // Pins the premise. An empty scan — a moved directory, a renamed type —
+        // would satisfy "no production caller" for the wrong reason and turn the
+        // branch below into a guard that can never fire. The harness builds a
+        // governor and demotes with it, so the scan must see that one.
+        #expect(anyCaller.contains("main.swift"),
+                "the scan found no ProcGovernor construction anywhere under Sources; it is looking in the wrong place")
+
+        // Wired: the documents may speak in the present tense, because it is
+        // then true.
+        guard productionCallers.isEmpty else { return }
+
+        for name in ["docs/ACCEPTED-RISKS.md", "docs/ROADMAP.md",
+                     "docs/coffee-bar-HANDOFF.md"] {
+            let text = try String(contentsOf: root.appendingPathComponent(name), encoding: .utf8)
+            // Failure-closed. A mis-resolved path would otherwise report a clean
+            // document, which is the false-absence trap `DocsClaims_test.swift`
+            // records.
+            #expect(text.count > 1000,
+                    "\(name) read back as \(text.count) bytes; this guard is scanning the wrong file")
+            #expect(text.contains(unwiredMarker),
+                    """
+                    \(name) describes ProcGovernor but never says "\(unwiredMarker)", \
+                    and no file outside \(targetsThatDoNotShipTheFeature) calls it. \
+                    A reader concludes the feature is live. It is not.
+                    """)
+        }
     }
 }

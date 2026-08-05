@@ -21,13 +21,27 @@ rationale. `Tests/CoffeeBarUITests/ServingModelIngest_test.swift:395`,
 **Reopen when.** The panel gains room to separate "why your click did nothing"
 from "why the machine is not held right now".
 
-## A crash leaves demoted processes demoted until the next start (issue #14)
+## A crash would leave demoted processes demoted until the next start (issue #14)
 
-**Behaviour.** `ProcGovernor` demotes processes coffee-bar does not own. A demotion applied
-to a foreign process is state on THAT process, so it outlives whatever applied it. If
-coffee-bar is `SIGKILL`ed, no cleanup of any kind runs, and every process it had demoted
-stays demoted until coffee-bar next starts and reads its journal back. For a long-lived
-process such as a browser that can mean days.
+**Not live. Read this first.** `ProcGovernor` ships as a tested library and
+**no production code path calls it**. `recover()` has no call site anywhere under
+`Sources/`, and nothing reads the demotable set the user configures. The app demotes no
+process, writes no demotion journal and reads none back, so the exposure below is **not**
+something a user of this build is carrying today.
+
+Wiring it is a separate piece of work and is not scheduled here. Issue #14 never specified
+the part that decides WHEN coffee-bar demotes anything, and no source of the frontmost
+application exists in this package yet. That trigger policy is a design question, not
+plumbing.
+
+This entry is recorded now because the design decision that creates the exposure — a
+journal rather than a supervisor — is already made and already built.
+
+**Behaviour once it is wired.** `ProcGovernor` demotes processes coffee-bar does not own. A
+demotion applied to a foreign process is state on THAT process, so it outlives whatever
+applied it. If coffee-bar were `SIGKILL`ed, no cleanup of any kind would run, and every
+process it had demoted would stay demoted until coffee-bar next started and read its
+journal back. For a long-lived process such as a browser that can mean days.
 
 **Why accepted.** Recovery is a journal a later run reads back, decided on 2026-08-05 over
 a recommendation panel HARD-DISSENT. The alternative was a supervising process that
@@ -46,8 +60,10 @@ victim, a real second process running the real governor, a real `SIGKILL`, `proc
 proving the victim is still demoted, then a later run clearing the bit.
 `Tests/CoffeeBarPowerTests/DemotionCrashPath_test.swift` records the underlying hazard.
 
-**Reopen when.** coffee-bar demotes processes by default rather than by opt-in, or a user
-reports a process that stayed slow after a crash.
+**Reopen when.** Anything in the shipped app calls `ProcGovernor` — at which point this
+stops being a recorded design consequence and becomes a live exposure — or coffee-bar
+demotes processes by default rather than by opt-in, or a user reports a process that stayed
+slow after a crash.
 
 ## Staleness is measured on a wall clock (audit id20)
 
