@@ -16,6 +16,7 @@ WCAG contrast formula implemented here rather than from remap.py's own table.
 
 Run: python3 assets/art/remap_test.py
 """
+import colorsys
 import importlib.util
 import pathlib
 import subprocess
@@ -35,6 +36,15 @@ _spec.loader.exec_module(remap_mod)
 RETIRED = (0x76, 0xB9, 0x00)  # the accent being removed
 ROAST_LIGHT = (0xA2, 0x57, 0x1E)  # state, light appearance
 ROAST_DARK = (0xB8, 0x68, 0x2A)  # state, dark appearance
+
+# Colours whose HUE is inside the green band and that only the saturation or
+# value floor keeps out of the recolour. These are what pin the two floors: a
+# colour that fails the hue test cannot tell a widened floor from a correct one.
+FLOOR_HELD = [
+    (0x6B, 0x6C, 0x69),  # hue 80.0, s 0.028 — a near-neutral grey, real art
+    (0x89, 0x99, 0x73),  # hue 85.3, s 0.248 — saturation just under the floor
+    (0x1F, 0x32, 0x05),  # hue 85.3, v 0.196 — value just under the floor
+]
 
 ART = pathlib.Path(__file__).parent
 THE_SIX = [
@@ -199,10 +209,28 @@ def test_colours_that_were_never_green_are_left_alone() -> None:
     Bug this catches: a band widened until it reaches the ink, the warm
     neutral base or the roast token itself, shifting colours the recolour
     was never meant to touch.
+
+    That claim used to cover the HUE only. Every colour in the keep list
+    failed the hue test first, so `s > 0.25` could be widened to `s > 0.0`
+    and `v > 0.20` to `v > 0.0` with this test still green — and either
+    widening drags near-neutral greys and dark greens into the roast hue.
+    FLOOR_HELD closes that: each of those three has a hue inside the band
+    and is kept out by a floor alone.
     """
     keep = [(0xFF, 0xFF, 0xFF), (0x00, 0x00, 0x00), (0x12, 0x12, 0x14),
             (0xF2, 0xF1, 0xEE), (0xEF, 0xED, 0xE7), ROAST_LIGHT, ROAST_DARK,
-            (0xFF, 0x95, 0x00), (0x6B, 0x76, 0x83)]
+            (0xFF, 0x95, 0x00), (0x6B, 0x76, 0x83)] + FLOOR_HELD
+
+    # Guard the FIXTURE as well as the subject. A floor colour whose hue drifts
+    # outside the band pins nothing, and this test goes quietly useless without
+    # a single assertion changing. (120, 124, 118) is the trap: it reads as hue
+    # exactly 100.0 deg but lands one float step ABOVE 100/360.
+    for rgb in FLOOR_HELD:
+        h, _, _ = colorsys.rgb_to_hsv(*(c / 255 for c in rgb))
+        assert 70 / 360 <= h <= 100 / 360, (
+            f"{rgb} has hue {h * 360:.2f} deg, outside the band; it cannot pin "
+            "either floor")
+
     with tempfile.TemporaryDirectory() as tmp:
         path = make_png(pathlib.Path(tmp) / "palette.png", keep + [RETIRED])
         remap_mod.remap(str(path), "#A2571E")

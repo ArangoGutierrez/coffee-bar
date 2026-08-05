@@ -21,6 +21,7 @@ roast accents sit near hue 26 deg.
 
 Run: python3 assets/art/census_test.py
 """
+import colorsys
 import importlib.util
 import pathlib
 import subprocess
@@ -69,7 +70,7 @@ def test_the_retired_accent_is_inside_the_band() -> None:
 
 
 def test_an_anti_aliased_edge_pixel_is_still_caught() -> None:
-    """Blended green must be caught, not just the exact token.
+    """Blended green must be caught by the CENSUS, not just by the band.
 
     Bug this catches: an exact-match-only census. rsvg anti-aliases the
     liquid edge, so after a bad re-cut the surviving green is blended with
@@ -78,6 +79,13 @@ def test_an_anti_aliased_edge_pixel_is_still_caught() -> None:
 
     Each literal below is #76B900 mixed with a real neighbouring colour:
     25% and 50% toward the web tile #F2F0EB, and 50% toward the ink.
+
+    Calling green_band() alone did NOT catch that bug. Narrowing
+    `if exact or banded:` to `if exact:` throws away every blended hit the
+    band just found, and this test stayed green through it, because it
+    never drove a blended pixel through main(). The end-to-end run below
+    is what closes it: the fixture is painted #95C73B, so `exact` is 0 and
+    the banded count is the only thing that can name the file.
     """
     for rgb, why in [((0x95, 0xC7, 0x3B), "25% toward the web tile"),
                      ((0xB4, 0xD4, 0x76), "50% toward the web tile"),
@@ -85,6 +93,18 @@ def test_an_anti_aliased_edge_pixel_is_still_caught() -> None:
         assert census.green_band(rgb) is True, (
             f"#{rgb[0]:02X}{rgb[1]:02X}{rgb[2]:02X} ({why}) escaped the band; "
             "an anti-aliased green edge would survive the census")
+
+    proc = run_census({"blended-edge.png": (0x95, 0xC7, 0x3B)})
+
+    assert proc.returncode == 1, (
+        f"census exited {proc.returncode} over a raster of blended green")
+    assert "blended-edge.png" in proc.stderr, (
+        f"a raster of anti-aliased green was not named. stderr: {proc.stderr!r}")
+    # The fixture is 8x8 and every pixel is #95C73B, so 0 can match the exact
+    # token and all 64 must land in the band. Both numbers are counted here,
+    # not read back from the census.
+    assert "0 exact #76B900, 64 in the green band" in proc.stderr, (
+        f"the blended pixels were not counted as banded. stderr: {proc.stderr!r}")
 
 
 def test_the_roast_accents_are_outside_the_band() -> None:
@@ -103,10 +123,40 @@ def test_the_roast_accents_are_outside_the_band() -> None:
 def test_near_neutral_colours_are_outside_the_band() -> None:
     """The saturation and value floors must survive.
 
-    Bug this catches: dropping `s > 0.25` or `v > 0.20`. The near-white tile
-    sits at hue 42.9 deg and the near-black ink at hue 240 deg, but both are
-    one careless edit away from being read as coloured pixels.
+    Bug this catches: dropping `s > 0.25` or `v > 0.20`.
+
+    Every fixture in the first group has a hue INSIDE the band, so the floor
+    named beside it is the ONLY thing keeping it out. That is the whole
+    point. The colours this test used to carry — the #F2F0EB tile at hue
+    42.9 deg, the #121214 ink at hue 240 deg, white with no hue at all —
+    all fail the hue test first, so either floor could be deleted with this
+    test still green.
+
+    #FEFFFD and #6B6C69 are real pixels out of web/icon-512-maskable.png.
+    Removing the `s` floor makes the census fail on shipped art, so that
+    floor is load-bearing in production, not only here.
     """
+    floor_held = [((0xFE, 0xFF, 0xFD), "s", "#FEFFFD, from web/icon-512-maskable.png"),
+                  ((0x6B, 0x6C, 0x69), "s", "#6B6C69, from web/icon-512-maskable.png"),
+                  ((0x89, 0x99, 0x73), "s", "#899973, saturation just under the floor"),
+                  ((0x0A, 0x15, 0x00), "v", "#0A1500, a dark saturated green"),
+                  ((0x1F, 0x32, 0x05), "v", "#1F3205, value just under the floor")]
+
+    for rgb, floor, what in floor_held:
+        h, s, v = colorsys.rgb_to_hsv(*(c / 255 for c in rgb))
+        # Guard the FIXTURE as well as the subject. A colour whose hue drifts
+        # outside the band stops exercising the floor, and this test goes
+        # quietly useless without a single assertion changing. (120, 124, 118)
+        # is the trap: it reads as hue exactly 100.0 deg but lands one float
+        # step ABOVE 100/360, so it is outside the band and pins nothing.
+        assert 70 / 360 <= h <= 100 / 360, (
+            f"{what} has hue {h * 360:.2f} deg, outside the band; it cannot "
+            f"exercise the '{floor}' floor")
+        assert census.green_band(rgb) is False, (
+            f"{what} (s {s:.3f}, v {v:.3f}) was flagged as green; "
+            f"the '{floor}' floor is gone")
+
+    # The hue test has to keep holding on its own.
     for rgb, what in [((0xF2, 0xF0, 0xEB), "the web tile"),
                       ((0x12, 0x12, 0x14), "the vector ink"),
                       ((0x10, 0x10, 0x13), "the shipped raster ink"),
