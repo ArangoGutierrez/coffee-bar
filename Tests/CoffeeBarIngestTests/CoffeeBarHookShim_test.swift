@@ -235,15 +235,29 @@ private func expectHookModeContract(_ run: ShimRun,
 
 // MARK: - Fixtures
 
-private var fixtureDirectory: URL {
+private var fixtureRoot: URL {
     URL(fileURLWithPath: #filePath)     // …/Tests/CoffeeBarIngestTests/…_test.swift
         .deletingLastPathComponent()    // …/Tests/CoffeeBarIngestTests
         .deletingLastPathComponent()    // …/Tests
-        .appending(path: "Fixtures/claude-hooks")
+        .appending(path: "Fixtures")
 }
+
+private var fixtureDirectory: URL { fixtureRoot.appending(path: "claude-hooks") }
 
 private func fixture(_ name: String) throws -> Data {
     try Data(contentsOf: fixtureDirectory.appending(path: name))
+}
+
+/// Which recorded corpus belongs to which tool.
+///
+/// A literal per tool, because the directory names are not derivable from the
+/// enum and a wrong pairing is exactly the defect the round-trip test looks for.
+private func fixtureDirectoryName(for tool: AgentTool) -> String {
+    switch tool {
+    case .claudeCode: return "claude-hooks"
+    case .codex: return "codex-hooks"
+    case .cursor: return "cursor-hooks"
+    }
 }
 
 /// A value out of the recorded payload, read from the file rather than written
@@ -335,6 +349,47 @@ private func fixtureString(_ key: String, in name: String) throws -> String {
     shimPump(until: { collected.all.count == 2 })
     #expect(collected.all.map(\.tool) == [.claudeCode, .codex])
     #expect(collected.all.allSatisfy { $0.event.hookEventName == "Stop" })
+}
+
+@Test(arguments: AgentTool.allCases)
+func eachToolsOwnRecordedPayloadArrivesUnderItsOwnOrigin(_ tool: AgentTool) throws {
+    // The claim the documentation makes: ONE binary serves all three adapters.
+    //
+    // The other delivery tests send Claude-shaped bytes, which only prove the
+    // two tools that share a vocabulary. Cursor does not share it — its events
+    // are camelCase and it keys the session as `conversation_id` — so only its
+    // OWN recorded payload can show that `--tool=cursor` reaches a decoder that
+    // understands it. Without this, the shim could post Cursor's payload to
+    // Cursor's endpoint and have it refused 400 for ever, and every other test
+    // here would stay green.
+    let sandbox = ShimSocketSandbox()
+    defer { sandbox.remove() }
+    let (listener, collected) = try startCollectingListener(at: sandbox)
+    defer { listener.stop() }
+
+    let directory = fixtureRoot.appending(path: fixtureDirectoryName(for: tool))
+    let payload = try Data(contentsOf: directory.appending(path: "session-start.json"))
+    #expect(!payload.isEmpty, "the recorded payload is empty; the run below would be vacuous")
+
+    let run = try runShim(["--tool=\(tool.shimName)", "--socket=\(sandbox.path)"], stdin: payload)
+    expectHookModeContract(run)
+    #expect(run.standardError.isEmpty,
+            Comment(rawValue: "\(tool.shimName) was refused: \(run.errorText)"))
+
+    shimPump(until: { !collected.all.isEmpty })
+    let delivered = try #require(collected.all.first,
+                                 "nothing reached the listener for \(tool.shimName): \(run.errorText)")
+    #expect(delivered.tool == tool)
+
+    // Read out of the recorded file, never written here. Cursor keeps its OWN
+    // vocabulary through the adapter — `sessionStart`, where Claude Code and
+    // Codex both send `SessionStart` — so a literal would be wrong for one of
+    // the three and a shared enum case cannot express all three either.
+    let recorded = try #require(
+        (try JSONSerialization.jsonObject(with: payload) as? [String: Any])?["hook_event_name"]
+            as? String,
+        "the \(tool.shimName) fixture carries no hook_event_name")
+    #expect(delivered.event.hookEventName == recorded)
 }
 
 @Test func aCursorFlagPostsToTheCursorEndpointAndTheShimSurvivesTheRefusal() throws {
