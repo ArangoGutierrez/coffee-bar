@@ -40,17 +40,24 @@ active and `rest` when it is released; its symbol also changes shape, filled to
 outline, so the state survives Differentiate Without Color. Those four controls
 are the only places the app asks this palette for a colour.
 
+Warnings are the **one declared exception** to "Never mix `state` and `action`"
+above, and the app's panel is where it shows: the advisory lines sit beside the
+`state`-tinted pickers.
+
 Warnings pin no hex. They take SwiftUI's semantic `.orange`, so the system keeps
 control of how that colour adapts to the appearance and to Increase Contrast.
-That is the same pigment as `action`, but the app's `ColorRole` has no `action`
-case, so no caller can name the role. As caption text on a light backdrop
+That is the same pigment as `action`. The exception is narrow and deliberate:
+`warning` means attention, and `.orange` is the colour macOS users already read
+that way. The rule still holds where it can be enforced — the app's `ColorRole`
+has no `action` case, so no caller can name the role. The web-only clause covers
+the role, not this one system pigment. As caption text on a light backdrop
 `.orange` falls below 4.5:1; that gap is open as issue #30.
 
-The accent moved off `#76B900` on 2026-08-04. That green is NVIDIA's brand
-colour and this is a personal Apache-2.0 product, so it can read as corporate
-endorsement — and coffee is not green.
+**The decision, 2026-08-04.** The accent moved off `#76B900`. That green is
+NVIDIA's brand colour and this is a personal Apache-2.0 product, so it can read
+as corporate endorsement — and coffee is not green.
 
-> **The recolour landed on 2026-08-05.** Of the 62 rasters under
+> **The art landed, 2026-08-05.** Of the 62 rasters under
 > `assets/art/**`, `recut.sh` re-cuts 34 from the vector sources: the `default`
 > and `dark` appicon renders, the iconset, all of `web/` and both repo avatars.
 > `remap.py` recolours the 6 that have no vector source — the four wordmarks
@@ -58,13 +65,51 @@ endorsement — and coffee is not green.
 > keeping each pixel's saturation, value and alpha. Authoring real vector
 > sources for those six is still open. The other 22 rasters carry no accent at
 > all — the 15 menu-bar templates and the 7 greyscale `mono` appicon renders.
-> `census.py` opens every raster and fails if the retired accent returns.
+> `census.py` opens every raster. It fails on any pixel that is exactly
+> `#76B900`, and on any pixel in the green hue band 70–100° **above** the
+> floors `s > 0.25` and `v > 0.20`. Below those floors it does not look.
+
+**What the guard cannot see.** The two floors exist so that near-neutral pixels
+— dark ink, pale paper — are not read as green. `remap.py` tests the same
+predicate, so it recoloured exactly what `census.py` can report and skipped
+exactly what `census.py` cannot. Zero exact `#76B900` pixels remain anywhere. A
+wider sweep — hue 55–145°, `s > 0.10`, `v > 0.10` — finds 708 pixels of
+anti-aliasing residue in four files, measured 2026-08-05:
+
+| file | residual px | canvas px |
+|---|---|---|
+| `wordmark/coffee-bar-wordmark-dark-2x.png` | 341 | 864,000 |
+| `github/readme-header-1600x400.png` | 187 | 640,000 |
+| `wordmark/coffee-bar-wordmark-light-2x.png` | 131 | 864,000 |
+| `github/social-preview-1280x640.png` | 49 | 819,200 |
+
+These are edge blends of the retired accent, not the accent. For example
+`#1E2E00` is `#76B900` at a quarter of its brightness, so `v` = 0.180 and the
+`v` floor excludes it; `#D3E3B3` is `#76B900` blended 75 % toward the
+dark-appearance ink `#F2F1EE`, so `s` = 0.211 and the `s` floor excludes it.
+Both 1x wordmarks are clean, so the residue in the two `-2x` wordmarks is a
+sub-pixel hairline at 1x. Real vector sources for these six files remove it.
+That work is still open, as above.
 
 The menu-bar glyph has no colour at all — it is alpha only.
 
-> **Filenames:** the export pipeline strips `@` from filenames, so `@2x`/`@3x` assets
-> arrive as `-2x`/`-3x`. Run `menubar/fix-names.sh` and `appicon/make-icns.sh` once
-> after unzipping to restore them.
+> **Filenames:** the export pipeline strips `@` from filenames, so `@2x`/`@3x`
+> assets arrive as `-2x`/`-3x`.
+>
+> **Only for a fresh art delivery unzipped over the tree:** run
+> `menubar/fix-names.sh` and `appicon/make-icns.sh` once to restore the names.
+>
+> Do **not** run them on a normal checkout. `make-icns.sh` renames the five
+> `-2x` files to `@2x` inside the tracked `AppIcon.iconset` and writes an
+> untracked `AppIcon.icns` beside it, so it dirties tracked art. A later
+> `recut.sh` writes the five `-2x` names back beside the five stale `@2x`
+> names, which leaves 67 PNGs under `assets/art/**` against the
+> `EXPECTED_TOTAL = 62` that `census.py` asserts — the guard then fails.
+>
+> A normal build needs neither script. Since the app-icon commit,
+> `scripts/build-app.sh` builds the bundle's `.icns` itself: it copies the
+> iconset to a temporary directory and renames the copy, so the tracked files
+> stay clean.
 
 ## menubar/  — NSImage template images
 `svg/`, `pdf/` (vector, 16pt — the format AppKit prefers), `png/` (16/32/48).
@@ -91,7 +136,11 @@ Never tint these yourself, never ship a coloured menu-bar variant.
   Icon Composer to confirm layer order and re-save before shipping.
 - `svg/`, `pdf/` — flattened 1024 vector, one per appearance.
 - `png/{default,dark,mono}/` — 16…1024 rasters.
-- `AppIcon.iconset/` + `make-icns.sh` → `AppIcon.icns` via `iconutil`.
+- `AppIcon.iconset/` + `make-icns.sh` → `AppIcon.icns` via `iconutil`. Run
+  `make-icns.sh` only on a fresh delivery: it renames the tracked `-2x` files in
+  place, and the census then fails after the next `recut.sh` — see **Filenames**
+  above. `scripts/build-app.sh` builds the app's `.icns` from a copy of this
+  iconset, so a normal build runs nothing here.
 
 ## web/
 `favicon.svg` (monochrome, `prefers-color-scheme` aware), `favicon-16/32/48.png`,
