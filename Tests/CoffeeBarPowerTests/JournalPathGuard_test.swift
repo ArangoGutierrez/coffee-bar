@@ -10,7 +10,7 @@ import Darwin
 // SECURITY.md items 1 and 2, on the READER.
 //
 // The journal is an instruction to a root process. `FileJournalStore` pins
-// 0700/0600 on the paths it CREATES, and SECURITY.md:184-190 records the gap
+// 0700/0600 on the paths it CREATES, and SECURITY.md "One gap stays open on purpose" records the gap
 // that leaves open: a directory that already exists keeps whatever mode it had,
 // because an unprivileged writer that repairs a path another user may control
 // is not a fix. Item 1 therefore puts the check on the reader, which is the
@@ -110,7 +110,7 @@ private func mode(of url: URL) throws -> mode_t {
 // MARK: - Item 1: every component, before it reads anything
 
 @Test func aGroupWritableJournalDirectoryIsRefusedAndQuarantined() throws {
-    // SECURITY.md items 1 and 2 together, and the exact gap SECURITY.md:184-190
+    // SECURITY.md items 1 and 2 together, and the exact gap SECURITY.md "One gap stays open on purpose"
     // names: `FileJournalStore` cannot repair a directory it did not create, so
     // a journal sitting in a 0770 directory is one any member of that group can
     // rewrite. A root process that obeyed it would restore an attacker's
@@ -346,14 +346,14 @@ private func mode(of url: URL) throws -> mode_t {
             "the shared rule found nothing wrong with a 0777 directory")
 }
 
-// MARK: - The gap SECURITY.md:184-190 names, closed
+// MARK: - The gap SECURITY.md "One gap stays open on purpose" names, closed
 
 @Test func aJournalDirectoryLeftAt0755IsRefused() throws {
     // The document contradicted itself and the code followed the weaker half.
     //
-    //   SECURITY.md:165-167  "owned by root and is not group-writable or
+    //   SECURITY.md "Every ancestor is owned by root"  "owned by root and is not group-writable or
     //                         other-writable"        -> 0755 SATISFIES this
-    //   SECURITY.md:187-190  "a journal directory an earlier build left 0755
+    //   SECURITY.md "an earlier build left 0755"  "a journal directory an earlier build left 0755
     //                         keeps that mode, and the M5 helper must REFUSE
     //                         it rather than assume the writer corrected it"
     //

@@ -689,3 +689,159 @@ private func durationsStated(in text: String) throws -> [(digits: String, unit: 
         document, so the TTL cap is described nowhere a reader can find it
         """)
 }
+
+// MARK: - Guard: a citation points at text, and text does not renumber
+
+/// Every `.swift` file under `Sources/` and `Tests/`.
+private func allSwiftFiles() -> [URL] {
+    var found: [URL] = []
+    for base in ["Sources", "Tests"] {
+        let dir = policyRoot().appending(path: base)
+        guard let walker = FileManager.default.enumerator(atPath: dir.path) else { continue }
+        for case let rel as String in walker where rel.hasSuffix(".swift") {
+            found.append(dir.appending(path: rel))
+        }
+    }
+    return found.sorted { $0.path < $1.path }
+}
+
+/// Text reduced so a citation can be compared against a document that wraps.
+///
+/// Three things go, and each one is a real failure this had to survive. Comment
+/// markers go, because the cited rationale in a `.swift` file is itself a doc
+/// comment. Backticks and `**` go, because `SECURITY.md` writes
+/// **Every ancestor** in bold and a citation should quote the sentence, not the
+/// Markdown. Whitespace collapses LAST and across newlines, because the anchor
+/// this guard exists to protect — "Every ancestor is owned by root" — is split
+/// over two lines in the document it cites.
+private func citationNormalised(_ text: String) -> String {
+    var s = text.replacingOccurrences(of: "^\\s*///?\\s?", with: "",
+                                      options: [.regularExpression])
+    s = s.replacingOccurrences(of: "(?m)^\\s*///?\\s?", with: "",
+                               options: [.regularExpression])
+    s = s.replacingOccurrences(of: "`", with: "").replacingOccurrences(of: "**", with: "")
+    return s.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+}
+
+/// Every capture group of every match, local because `DocsClaims_test.swift`'s
+/// `matches` is internal to `CoffeeBarCoreTests` and this is a different target.
+///
+/// Throws on a bad pattern rather than returning `[]`. An empty result from a
+/// pattern that never compiled looks exactly like a clean tree.
+private func citationMatches(_ pattern: String, in text: String) throws -> [[String]] {
+    guard let expression = try? NSRegularExpression(pattern: pattern) else {
+        throw BadMechanismPattern(pattern: pattern)
+    }
+    let ns = text as NSString
+    return expression.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        .map { match in
+            (0..<match.numberOfRanges).map { i in
+                match.range(at: i).location == NSNotFound
+                    ? "" : ns.substring(with: match.range(at: i))
+            }
+        }
+}
+
+/// A file named in a citation, resolved to one path or to nothing.
+///
+/// Exactly one match is required. A basename that resolves to two files would
+/// let this guard check the wrong one and report success.
+private func citedFile(named name: String) -> URL? {
+    if name.contains("/") {
+        let direct = policyRoot().appending(path: name)
+        return FileManager.default.fileExists(atPath: direct.path) ? direct : nil
+    }
+    let atRoot = policyRoot().appending(path: name)
+    if FileManager.default.fileExists(atPath: atRoot.path) { return atRoot }
+    let matches = allSwiftFiles().filter { $0.lastPathComponent == name }
+    return matches.count == 1 ? matches[0] : nil
+}
+
+/// No source or test cites a document by LINE NUMBER, and every anchor a
+/// citation quotes still exists in the file it names.
+///
+/// **Named bug this catches.** Commit `46404fb` rewrote `SECURITY.md` and moved
+/// every heading in it. Fifteen citations across `Sources/` and `Tests/` named
+/// that document by line range, and every one kept pointing at its old numbers,
+/// which by then held unrelated prose — one cited range had become hook-snippet
+/// text and another had become "M5 adds a root path". Shipped security code
+/// pointed readers at the wrong paragraphs, and the branch's own review brief
+/// then inherited a stale pointer and repeated it. A line number is a reference
+/// that rots silently on every edit above it.
+///
+/// **Scope, stated rather than hidden.** The line-number half refuses `.md`
+/// citations only. A first run of this guard found ELEVEN more citations of
+/// `.swift` files by line — `IngestListener.swift:41`, `ServingModel.swift:91`
+/// and nine others — which rot the same way and are a real finding, but fixing
+/// them is a wider edit than the round that added this guard. They are recorded
+/// as follow-up rather than quietly excluded. The ANCHOR half below already
+/// covers every cited file, `.md` and `.swift` alike.
+///
+/// The line-number pattern is deliberately not written out in this comment. An
+/// earlier draft spelled one as an example, and this guard read its own
+/// explanation and reported the file that defines it — the same false positive
+/// `refusedMechanisms` records above, where corrective prose citing a mechanism
+/// by name turned the check red on the very sentence that fixed it.
+///
+/// **This guard reads the RAW file on purpose, and must.** A citation lives in a
+/// comment, so the comments ARE its subject — `swiftCodeWithoutComments` would
+/// blind it to every single thing it checks. That is the opposite of the panel
+/// tripwires, which must strip comments to avoid matching their own prose. The
+/// rule decides the reading: this one is "must not NAME a line citation".
+///
+/// **What this CANNOT do.** It proves the quoted words still appear in the cited
+/// file. It cannot prove they still mean what the citing comment claims, and it
+/// cannot see a citation written without quotes.
+@Test func noSourceCitesADocumentByLineNumberAndEveryAnchorResolves() throws {
+    var lineCitations: [String] = []
+    var anchorsChecked = 0
+
+    for file in allSwiftFiles() {
+        guard let body = try? String(contentsOf: file, encoding: .utf8) else { continue }
+        let short = file.lastPathComponent
+
+        for (index, raw) in body.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+            let line = String(raw)
+            // Citations live in comments. Anything outside one is code, where a
+            // quoted string after a filename is a literal and not a reference.
+            guard let commentStart = line.range(of: "//") else { continue }
+            let comment = String(line[commentStart.upperBound...])
+
+            for m in try citationMatches("[A-Za-z0-9_/.]+\\.md:[0-9]+", in: comment) {
+                lineCitations.append("\(short):\(index + 1) cites \(m[0])")
+            }
+
+            for m in try citationMatches("`?([A-Za-z0-9_/.]+\\.(?:md|swift))`?\\s+\"([^\"]{8,90})\"",
+                                 in: comment) {
+                let name = m[1], anchor = citationNormalised(m[2])
+                guard let target = citedFile(named: name) else {
+                    Issue.record("\(short):\(index + 1) cites \(name), which resolves to no single file")
+                    continue
+                }
+                guard let text = try? String(contentsOf: target, encoding: .utf8) else {
+                    Issue.record("\(short):\(index + 1) cites \(name), which cannot be read")
+                    continue
+                }
+                anchorsChecked += 1
+                #expect(citationNormalised(text).contains(anchor), """
+                    \(short):\(index + 1) cites \(name) "\(anchor)", and that text \
+                    is no longer in \(name). Quote text that exists, or update the \
+                    citation — a reference nobody can follow is worse than none.
+                    """)
+            }
+        }
+    }
+
+    #expect(lineCitations.isEmpty, """
+        \(lineCitations.count) citation(s) name a file by LINE NUMBER, which \
+        rots on the next edit above it. Quote anchor TEXT instead. \
+        \(lineCitations.sorted())
+        """)
+
+    // ANTI-VACUITY. A pattern that matches nothing passes silently, which is the
+    // defect `everyControlNamedExistsInTheProduct` ships with today.
+    #expect(anchorsChecked >= 15, """
+        resolved \(anchorsChecked) anchor citation(s); this branch converted 15, \
+        so the citation pattern has rotted and this guard is reading nothing
+        """)
+}

@@ -675,7 +675,7 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
     // The regression the 0700 tightening introduced, and the reason a "refuse
     // safely" rule needs a partner on the WRITE side.
     //
-    // A pre-existing 0755 state directory is exactly what SECURITY.md:187-190
+    // A pre-existing 0755 state directory is exactly what SECURITY.md "an earlier build left 0755"
     // describes. The reader refuses it — correctly — and the watchdog's
     // fail-safe then restores sleep, clears and uninstalls. But `arm` went on
     // to set the flag anyway, so "refuse safely" became "hold forever": the
@@ -977,7 +977,7 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
     let store = FileJournalStore(url: url)
     try store.write(armedRecord(priorValue: true, ttlSeconds: 3600))
 
-    // The gap SECURITY.md:184-190 names: a directory the store did not create.
+    // The gap SECURITY.md "One gap stays open on purpose" names: a directory the store did not create.
     let stateDir = url.deletingLastPathComponent()
     try FileManager.default.setAttributes([.posixPermissions: 0o777],
                                           ofItemAtPath: stateDir.path)

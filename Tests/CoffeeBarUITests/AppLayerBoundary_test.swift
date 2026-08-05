@@ -977,7 +977,7 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     //     Signature=adhoc          TeamIdentifier=not set
     //   codesign -v -R='anchor apple generic' <same>   -> rc=1
     //
-    // SECURITY.md:149-151 requires an XPC helper to pin its peer with
+    // SECURITY.md "It cannot pin a peer" requires an XPC helper to pin its peer with
     // `setCodeSigningRequirement` and to reject any peer that does not match
     // the app's Team ID and bundle ID. The only bundle that ships today is
     // built from source by the Homebrew formula and carries no Team ID and no

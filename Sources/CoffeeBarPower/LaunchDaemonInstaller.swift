@@ -13,7 +13,7 @@ import Foundation
 /// code-signed app bundle, and the only bundle that ships is built from source
 /// by the Homebrew formula and is ad-hoc signed — `Signature=adhoc`,
 /// `TeamIdentifier=not set`, and `codesign -R='anchor apple generic'` exits 1.
-/// The same absence rules out the XPC peer pinning SECURITY.md:149-151
+/// The same absence rules out the XPC peer pinning SECURITY.md "It cannot pin a peer"
 /// requires. M5 therefore ships as a root CLI plus this launchd daemon.
 ///
 /// The interface keeps no `install(binaryPath:)` requirement all the same.

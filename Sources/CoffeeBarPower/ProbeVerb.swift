@@ -15,7 +15,7 @@ import Foundation
 /// makes an unhandled verb a compile error rather than a silent omission.
 ///
 /// The verb list is FIXED and none of these takes a path to execute, per
-/// SECURITY.md. `LaunchDaemonInstaller.swift:63-67` records what the
+/// SECURITY.md. `LaunchDaemonInstaller.swift` "taking the program path from an argument" records what the
 /// alternative bought: taking a program path from an argument made
 /// `sudo .build/debug/coffee-bar-probe arm` a one-line root persistence
 /// primitive.

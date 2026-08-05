@@ -26,7 +26,7 @@ public enum JournalRefusal: Error, Equatable {
 /// must carry exactly the mode the privileged writer gives it.
 ///
 /// Item 1 lives HERE, on the reader, rather than on the writer, and
-/// SECURITY.md:184-190 records why: `FileJournalStore` pins 0700/0600 on the
+/// SECURITY.md "One gap stays open on purpose" records why: `FileJournalStore` pins 0700/0600 on the
 /// paths it CREATES but cannot repair a directory that already exists, because
 /// an unprivileged process that chmods a path another user may control is not a
 /// fix. The privileged reader is the only party that can refuse.
@@ -43,12 +43,12 @@ public struct GuardedJournalReader: Sendable {
 
     /// The mode the privileged writer gives the journal's own directory.
     ///
-    /// Exactly 0700, which closes the gap SECURITY.md:184-190 names: the store
+    /// Exactly 0700, which closes the gap SECURITY.md "One gap stays open on purpose" names: the store
     /// pins the mode of a directory it CREATES and cannot repair one that
     /// already exists, so a directory an earlier build left 0755 keeps that
     /// mode and the reader must refuse it.
     ///
-    /// The document contradicted itself here. Item 1 (SECURITY.md:165-167) asks
+    /// The document contradicted itself here. Item 1 (SECURITY.md "Every ancestor is owned by root") asks
     /// only that a component be root-owned and not group- or other-writable,
     /// which 0755 satisfies; :187-190 says the helper must refuse exactly that.
     /// Carlos settled it toward safety. Nothing `FileJournalStore` creates can
@@ -101,7 +101,7 @@ public struct GuardedJournalReader: Sendable {
     /// That partner check is not belt-and-braces. Refusing safely on the READ
     /// side restores the setting, clears and uninstalls — and an `arm` that
     /// then carried on setting the flag turned "refuse safely" into "hold
-    /// forever", which is the opposite of what SECURITY.md:187-190 asks for.
+    /// forever", which is the opposite of what SECURITY.md "an earlier build left 0755" asks for.
     /// The measured end state was `sleepDisabled=true journalLoads=false
     /// daemonLoaded=false`, from a successful `arm`.
     public func validatePath() throws {

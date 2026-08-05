@@ -99,7 +99,7 @@ requireRoot(invocation.verb)
 
 // One runner for every subprocess. Each executable it is handed is a compiled
 // constant — `/usr/bin/pmset`, `/bin/launchctl`. No verb takes a path to run:
-// `LaunchDaemonInstaller.swift:63-67` records that taking one from an argument
+// `LaunchDaemonInstaller.swift` "taking the program path from an argument" records that taking one from an argument
 // made `sudo coffee-bar-probe arm` a one-line root persistence primitive.
 private let runner = SystemCommandRunner()
 private let notifier = StandardErrorNotifier()
