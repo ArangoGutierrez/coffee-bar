@@ -1412,7 +1412,15 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
 
     let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
                              "the app layer no longer compiles a PanelView.swift")
-    let source = try String(contentsOf: panel, encoding: .utf8)
+
+    // CODE, never the raw file. A mutation caught this: deleting the whole
+    // `Text(ServingModel.lidClosedAdvisory)` render and its modifier chain left
+    // this check GREEN, because the doc comment sitting above that render also
+    // names the property. The guard was reading its own explanation and
+    // reporting the feature present. Stripping comments first is what makes it
+    // discriminate; `swiftCodeWithoutComments` keeps string literals, and the
+    // render is code, so the correct tree stays green.
+    let code = swiftCodeWithoutComments(try String(contentsOf: panel, encoding: .utf8))
 
     // `ServingModel.lidClosedAdvisory` rather than `model.lidClosedAdvisory`:
     // the sentence depends on no instance state — only on `ProbeVerb` — so it
@@ -1420,10 +1428,11 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // instance spelling would have forced a property that ignores its own
     // instance, which reads as though the panel were reporting live state. It
     // is not, and that is the whole point of this surface.
-    #expect(source.contains("ServingModel.lidClosedAdvisory"), """
-        PanelView.swift never reads ServingModel.lidClosedAdvisory, so the only \
-        route a user has to lid-closed mode — the command to run — reaches them \
-        nowhere. Render it, or delete the property and the checks on its text.
+    #expect(code.contains("ServingModel.lidClosedAdvisory"), """
+        PanelView.swift never reads ServingModel.lidClosedAdvisory in code, so \
+        the only route a user has to lid-closed mode — the command to run — \
+        reaches them nowhere. Render it, or delete the property and the checks \
+        on its text. A comment naming the property does not satisfy this.
         """)
 }
 
