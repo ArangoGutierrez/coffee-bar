@@ -1336,27 +1336,38 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // which is exactly what commit 5116326 did to the hook advisory.
     //
     // Same LIMIT as above, stated rather than hidden: this proves the panel
-    // NAMES both members, not that it renders them, and not that a click opens
-    // anything. A mention inside a comment would satisfy it. M1 design §5.4
-    // forbids asserting on rendered AppKit text, so no check in this package
-    // can watch the panel draw. A human look is still the only proof of that.
+    // NAMES both members IN CODE, not that it renders them, and not that a
+    // click opens anything. M1 design §5.4 forbids asserting on rendered AppKit
+    // text, so no check in this package can watch the panel draw. A human look
+    // is still the only proof of that.
     let files = try appLayerSources()
     #expect(files.count == expectedSourceCount,
             "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
 
     let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
                              "the app layer no longer compiles a PanelView.swift")
-    let source = try String(contentsOf: panel, encoding: .utf8)
 
-    #expect(source.contains("PanelView.legalLine()"), """
-        PanelView.swift composes legalLine() but renders it nowhere, so the \
-        licence and the no-warranty statement reach the user nowhere. Render \
-        it, or delete the member and the checks that assert its text.
+    // CODE, never the raw file. The raw version of this check said of itself
+    // that "a mention inside a comment would satisfy it", and that was measured
+    // rather than feared: replacing the whole `Link(...)` render with a comment
+    // naming both members left this check GREEN with zero `Link(` in the file.
+    // The legal surface was off the product and the guard reported it present —
+    // the exact hole the three checks above carried, and the one `2247ae4`
+    // first fixed. It matters most here, because this line is the only route
+    // from a DMG install to the terms and the no-warranty statement.
+    let code = swiftCodeWithoutComments(try String(contentsOf: panel, encoding: .utf8))
+
+    #expect(code.contains("PanelView.legalLine()"), """
+        PanelView.swift composes legalLine() but renders it nowhere in code, so \
+        the licence and the no-warranty statement reach the user nowhere. \
+        Render it, or delete the member and the checks that assert its text. A \
+        comment naming the member does not satisfy this.
         """)
-    #expect(source.contains("PanelView.legalURL()"), """
-        PanelView.swift composes legalURL() but renders it nowhere, so the \
-        panel offers no route to the terms page. Render it, or delete the \
-        member and the checks that assert it.
+    #expect(code.contains("PanelView.legalURL()"), """
+        PanelView.swift composes legalURL() but renders it nowhere in code, so \
+        the panel offers no route to the terms page. Render it, or delete the \
+        member and the checks that assert it. A comment naming the member does \
+        not satisfy this.
         """)
 }
 
