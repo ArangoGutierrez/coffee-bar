@@ -52,6 +52,20 @@ public enum HookShim {
     /// ever and took the whole run with it.
     public static let totalTimeout: TimeInterval = 1.0
 
+    /// Where the ingest socket sits under `home`, per design §4.
+    ///
+    /// Takes the home directory rather than asking for it: `CoffeeBarCore` is
+    /// Foundation-only, with no syscalls and no I/O, and the shim supplies the
+    /// one value this needs.
+    ///
+    /// It is the SECOND copy of this tail — `UnixSocketIngestListener`
+    /// computes the first — because the shim depends on `CoffeeBarCore` alone
+    /// and cannot see the listener. `theShimAndTheListenerNameTheSameDefaultSocket`
+    /// in `CoffeeBarIngestTests` is what stops the two drifting apart.
+    public static func socketPath(inHome home: URL) -> String {
+        home.appending(path: "Library/Application Support/coffee-bar/ingest.sock").path
+    }
+
     /// The bytes of one POST, ready to write.
     ///
     /// `Connection: close` is what lets the caller read the answer to end of

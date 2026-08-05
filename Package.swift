@@ -9,6 +9,11 @@ let package = Package(
     products: [
         .executable(name: "coffee-bar-probe", targets: ["CoffeeBarProbe"]),
         .executable(name: "coffee-bar", targets: ["CoffeeBarApp"]),
+        // The name is part of the contract, not a detail: `HookHealth`
+        // recognises a wired hook by matching it in the user's settings file,
+        // and `docs/QUICKSTART.md` prints it. Renaming it stops every hook the
+        // user has already wired being recognised as coffee-bar's.
+        .executable(name: "coffeebar-hook", targets: ["CoffeeBarShim"]),
         .library(name: "CoffeeBarCore", targets: ["CoffeeBarCore"]),
     ],
     targets: [
@@ -27,6 +32,14 @@ let package = Package(
         .executableTarget(name: "CoffeeBarProbe", dependencies: ["CoffeeBarPower"],
                           swiftSettings: [.swiftLanguageMode(.v6)]),
         .executableTarget(name: "CoffeeBarApp", dependencies: ["CoffeeBarUI"],
+                          swiftSettings: [.swiftLanguageMode(.v6)]),
+        // The hook shim. Depends on CoffeeBarCore ONLY, and adds no third-party
+        // dependency: a hook runs on every tool call, so process start-up is
+        // the dominant cost against the handoff's 50 ms budget. It talks to the
+        // socket with raw POSIX calls rather than Network.framework for the
+        // same reason. Everything testable about it lives in `HookShim`,
+        // because SwiftPM treats this target's `main.swift` as top-level code.
+        .executableTarget(name: "CoffeeBarShim", dependencies: ["CoffeeBarCore"],
                           swiftSettings: [.swiftLanguageMode(.v6)]),
         .testTarget(name: "CoffeeBarCoreTests", dependencies: ["CoffeeBarCore"],
                     swiftSettings: [.swiftLanguageMode(.v6)]),
