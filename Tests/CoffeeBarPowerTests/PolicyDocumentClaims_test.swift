@@ -506,8 +506,20 @@ private let rootPromiseQualifiers = ["the app", "menu-bar app", "v0.1", "v0.2",
                                      "opt-in", "never elevates",
                                      "sudo coffee-bar-probe"]
 
-/// A sentence promising that root is not needed.
-private let rootPromisePattern = "\\b(?:no|without)\\s+root\\b"
+/// A sentence that makes a claim about needing privilege.
+///
+/// TWO shapes, because the first one alone missed a real defect. The original
+/// pattern looked for "no root" and nothing else, so it read straight past
+/// `site/terms.html` saying "That needs a privileged helper, and this release
+/// does not have one" — a privilege claim that named root nowhere, on the very
+/// page `PanelView.legalURL()` sends users to. The gap was the PATTERN, not the
+/// surface list: that page was already being swept.
+///
+/// "privileged helper" is matched WITHOUT a negator in front of it, unlike the
+/// root half. Any sentence that raises the subject at all must say who it is
+/// true of, because the failure here was a version-relative promise — true when
+/// written, false the moment v0.2.0 is tagged — rather than a negation.
+private let rootPromisePattern = "\\b(?:no|without)\\s+root\\b|\\bprivileged helper\\b"
 
 /// No published surface promises "no root" without saying who or what that is
 /// true of, while `coffee-bar-probe` ships a verb that needs uid 0.
@@ -557,9 +569,11 @@ private let rootPromisePattern = "\\b(?:no|without)\\s+root\\b"
                 sentence.range(of: $0, options: .caseInsensitive) != nil
             }
             #expect(qualified, """
-                \(name) promises "no root" without a qualifier, but \
+                \(name) makes a claim about privilege without a qualifier, but \
                 coffee-bar-probe ships \(rootVerbs.sorted()) behind uid 0. Say \
-                who the promise is true of — the app, or a version. Sentence: \
+                who the claim is true of — the app, or a version — and never a \
+                version-relative phrase like "this release", which stops being \
+                true at the next tag. Sentence: \
                 \(sentence.trimmingCharacters(in: .whitespaces))
                 """)
         }
