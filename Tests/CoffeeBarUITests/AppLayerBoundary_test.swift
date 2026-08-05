@@ -114,6 +114,18 @@ private let coreLayerTargets = [
     "CoffeeBarCore",
 ]
 
+/// The privileged CLI. Linked into `coffee-bar-probe`, never into `coffee-bar`.
+///
+/// It is deliberately NOT added to the three lists above. Those are unioned
+/// into the `linked == scanned` assertion in
+/// `everyTargetLinkedIntoTheBinaryIsContentScanned`, and this target is not in
+/// the app binary's closure — adding it there would turn a correct tree red.
+/// It is scanned by `noTargetOnThePrivilegedPathReachesForXPCOrSMAppService`,
+/// which is the one rule it has to answer for.
+private let probeLayerTargets = [
+    "CoffeeBarProbe",
+]
+
 /// The ONE file entitled to create a display assertion, and the ONE symbol it
 /// may name in code.
 ///
@@ -950,6 +962,78 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
                 is the decision layer and reads no files: the parse takes Data, \
                 and the read lives in the app layer behind HookHealthReader \
                 (design §8).
+                """)
+        }
+    }
+}
+
+// MARK: - The privileged path M5 chose, and the two it did not
+
+@Test func noTargetOnThePrivilegedPathReachesForXPCOrSMAppService() throws {
+    // Carlos's M5 decision, made structural. It is a SECURITY property, not a
+    // preference, and the measurement that forced it is this:
+    //
+    //   codesign -dvvv <the shipped CoffeeBar.app>
+    //     Signature=adhoc          TeamIdentifier=not set
+    //   codesign -v -R='anchor apple generic' <same>   -> rc=1
+    //
+    // SECURITY.md:149-151 requires an XPC helper to pin its peer with
+    // `setCodeSigningRequirement` and to reject any peer that does not match
+    // the app's Team ID and bundle ID. The only bundle that ships today is
+    // built from source by the Homebrew formula and carries no Team ID and no
+    // certificate chain, so that requirement cannot be met on the one channel
+    // that exists. An XPC listener whose peer check cannot be satisfied is not
+    // a weaker helper — it is an unauthenticated root service.
+    //
+    // So M5 ships as a root CLI plus a launchd watchdog, and this refuses the
+    // two constructs that would quietly reintroduce the problem. Named bug it
+    // catches: an `NSXPCListener(machServiceName:)` added to the probe or to
+    // the app, which would compile, run, and accept any local peer.
+    //
+    // `SMJobBless` is here too though nothing has ever used it: it is the
+    // deprecated path SECURITY.md already rules out, and a search for "how do I
+    // install a privileged helper" finds it first.
+    //
+    // Comments are stripped, deliberately. `LidClosedSession.swift`,
+    // `CoffeeBarProbe/main.swift` and `LaunchDaemonInstaller.swift` all NAME
+    // these APIs in prose to explain why they are not used, and that prose is
+    // the reasoning nobody should delete. Naming one in a comment is required;
+    // calling one is what this refuses.
+    let targets = try linkedClosure(fromTarget: "CoffeeBarApp").sorted()
+        + probeLayerTargets
+    let files = try sources(ofTargets: targets)
+
+    // Positive controls. A scan that missed either of these would pass
+    // vacuously — and the probe is the target this rule exists for, so its
+    // absence must fail rather than shrug.
+    #expect(files.contains { $0.path.hasSuffix("Sources/CoffeeBarProbe/main.swift") }, """
+        the scan never reached the privileged CLI's entry point; it read \
+        \(files.count) files across \(targets.count) targets
+        """)
+    #expect(files.contains { $0.lastPathComponent == "LidClosedSession.swift" }, """
+        the scan never reached LidClosedSession.swift, which owns the arm and \
+        watchdog paths
+        """)
+
+    let forbidden = [
+        "SMAppService",
+        "SMJobBless",
+        "NSXPCListener",
+        "NSXPCConnection",
+        "setCodeSigningRequirement",
+        "machServiceName",
+    ]
+
+    for file in files {
+        let code = swiftCodeWithoutComments(try String(contentsOf: file, encoding: .utf8))
+        for name in forbidden {
+            #expect(!code.contains(name), """
+                \(file.lastPathComponent) names \(name) in CODE. M5 ships as a \
+                root CLI plus a launchd watchdog: the shipped bundle is ad-hoc \
+                signed with no Team ID, so the peer pinning SECURITY.md \
+                requires cannot be satisfied and an XPC service would accept \
+                any local peer. A comment may explain the choice; making the \
+                call is what this refuses.
                 """)
         }
     }

@@ -71,3 +71,62 @@ private func probeBinaryPath() -> String {
     // one. A report carrying a placeholder stamp fails here.
     #expect(report.host == HostInfo.stamp())
 }
+
+@Test func theShippedBinaryAdvertisesEveryVerbItHandles() throws {
+    // The v0.1 defect, read out of the binary a user actually runs.
+    //
+    // `ProbeVerb_test` proves the generated usage text names every case, which
+    // is the in-process half. It cannot prove the BINARY prints that text: a
+    // `main.swift` carrying its own hand-written string would satisfy every
+    // check there while shipping the same three-of-four list as v0.1.
+    let path = probeBinaryPath()
+    try #require(FileManager.default.isExecutableFile(atPath: path),
+                 "no coffee-bar-probe at \(path); every assertion below would be vacuous")
+
+    let run = try SystemCommandRunner().run(path, ["definitely-not-a-verb"])
+
+    // EX_USAGE. The usage goes to stderr, so stdout stays clean for consumers.
+    #expect(run.exitCode == 64)
+    #expect(run.stdout == "")
+
+    for verb in ProbeVerb.allCases {
+        #expect(run.stderr.contains(verb.rawValue), """
+            the shipped binary's usage never names "\(verb.rawValue)".
+            stderr:
+            \(run.stderr)
+            """)
+    }
+    // Named explicitly because it is THE defect: handled at v0.1 and
+    // advertised nowhere.
+    #expect(run.stderr.contains("watchdog"))
+}
+
+@Test func theShippedBinaryRefusesAPrivilegedVerbInsteadOfElevating() throws {
+    // The design M5 chose, proven against the binary: asked to `arm` without
+    // root, it prints the command and stops. It does not re-exec under sudo, it
+    // does not call `AuthorizationExecuteWithPrivileges`, and it does not reach
+    // `pmset` at all.
+    //
+    // This test is also why it is SAFE to run: a refusal happens before any
+    // system call, so nothing on this machine is armed by running the suite.
+    try #require(getuid() != 0, """
+        this suite is running as root, so `arm` would touch this machine's real \
+        power settings. Refusing to run rather than doing that.
+        """)
+
+    let path = probeBinaryPath()
+    try #require(FileManager.default.isExecutableFile(atPath: path),
+                 "no coffee-bar-probe at \(path); every assertion below would be vacuous")
+
+    let run = try SystemCommandRunner().run(path, ["arm"])
+
+    // EX_NOPERM, which is distinguishable from EX_USAGE (64) — "you may not"
+    // is a different answer from "no such verb".
+    #expect(run.exitCode == 77)
+    #expect(run.stderr.contains("sudo"), """
+        the binary refused without telling the user what to run instead.
+        stderr: \(run.stderr)
+        """)
+    // The whole point: it said what to do rather than doing it.
+    #expect(run.stderr.contains("needs root"))
+}

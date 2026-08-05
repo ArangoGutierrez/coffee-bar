@@ -5,15 +5,21 @@ import Foundation
 
 /// Installs and removes whatever supervises the watchdog.
 ///
-/// The M0 conformer writes a plist and shells out to `launchctl`. M5's will
-/// call `SMAppService.daemon(plistName:).register()`, which registers a
-/// static, code-signed plist shipped inside the app bundle *by name*: there is
-/// no path argument, no generated XML and no subprocess on that side. An
-/// `install(binaryPath:)` requirement would therefore have to be dropped at
-/// M5, making the migration an API change at every call site rather than a
-/// swap of one implementation. Resolving and validating the program path
-/// *inside* the M0 conformer is what keeps M5 a second conformer with no
-/// caller churn.
+/// The conformer writes a plist and shells out to `launchctl`.
+///
+/// This comment used to say M5 would replace that with
+/// `SMAppService.daemon(plistName:).register()`. It will not, and the reason is
+/// measured rather than stylistic: that API registers a plist shipped inside a
+/// code-signed app bundle, and the only bundle that ships is built from source
+/// by the Homebrew formula and is ad-hoc signed — `Signature=adhoc`,
+/// `TeamIdentifier=not set`, and `codesign -R='anchor apple generic'` exits 1.
+/// The same absence rules out the XPC peer pinning SECURITY.md:149-151
+/// requires. M5 therefore ships as a root CLI plus this launchd daemon.
+///
+/// The interface keeps no `install(binaryPath:)` requirement all the same.
+/// Resolving and validating the program path *inside* the conformer is what
+/// keeps a caller-supplied path unrepresentable, which is the property
+/// `:63-67` below is about.
 public protocol WatchdogSupervising: Sendable {
     func install() throws
     func uninstall() throws
@@ -43,8 +49,10 @@ public enum WatchdogInstallError: Error, Equatable {
 
 /// Installs the watchdog as a launchd daemon.
 ///
-/// M0 deliberately uses a plain plist plus `launchctl bootstrap system` rather
+/// M0 deliberately used a plain plist plus `launchctl bootstrap system` rather
 /// than `SMAppService`: it needs no app bundle, no code signing and no Xcode.
+/// That property is exactly why M5 keeps it — see the note above on the ad-hoc
+/// signature — so this is the shipped mechanism, not an interim one.
 ///
 /// The daemon exists because the app cannot supervise its own death. Handoff
 /// §8.2(4): a boot with a dirty journal must revert unconditionally, which is
