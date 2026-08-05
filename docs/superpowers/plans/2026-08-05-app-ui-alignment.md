@@ -24,6 +24,9 @@
   |---|---|---|
   | state | `#A2571E` | `#B8682A` |
   | rest | `#6B7683` | `#6B7683` |
+- **Run every `swift` command with the agent sandbox DISABLED.** SwiftPM starts its own `sandbox-exec`, which cannot nest inside the agent's, and it reports the failure as `error: Invalid manifest` — sending you after a `Package.swift` that is perfectly fine. The real cause appears one line earlier as `sandbox-exec: sandbox_apply: Operation not permitted`. `scripts/build-app.sh` documents the same trap for Homebrew. This applies to `swift build`, `swift test` and `scripts/build-app.sh`.
+- **Baseline, measured on the rebased branch before any task: `swift test` → `Test run with 573 tests in 4 suites passed`, rc=0.** Any task that ends below 573 passing has broken something.
+- Temporary files go under `"${TMPDIR:-/tmp}"`. A bare `/tmp/...` write is denied in the sandbox.
 - `swift test` cannot see rendered AppKit text (M1 design §5.4). A green suite is never evidence that the panel looks right.
 
 ---
@@ -593,7 +596,7 @@ for p in sorted(glob.glob('assets/art/**/*.png', recursive=True)):
     print(f"{p}\t{im.size[0]}x{im.size[1]}\t{im.mode}\t{hashlib.sha256(im.tobytes()).hexdigest()[:12]}")
 PY
 ```
-Save the output to `/tmp/art-before-app-ui-alignment.txt`. Task 4 Step 8 compares against it.
+Save the output to `"${TMPDIR:-/tmp}/art-before-app-ui-alignment.txt"`. Task 4 Step 8 compares against it.
 
 - [ ] **Step 3: Write the census script**
 
@@ -784,11 +787,12 @@ Expected: the tile `#F2F0EB`, ink `#121214`, and the accent `#A2571E`. No green.
 - [ ] **Step 8: Verify sizes and modes did not drift**
 
 ```bash
-python3 - <<'PY'
+python3 - "${TMPDIR:-/tmp}/art-before-app-ui-alignment.txt" <<'PY'
+import sys
 from PIL import Image
 import glob
 before = {}
-for line in open('/tmp/art-before-app-ui-alignment.txt'):
+for line in open(sys.argv[1]):
     path, dims, mode, _ = line.rstrip('\n').split('\t')
     before[path] = (dims, mode)
 bad = 0
@@ -868,18 +872,24 @@ import colorsys
 import sys
 from PIL import Image
 
-RETIRED_HUE = colorsys.rgb_to_hsv(0x76 / 255, 0xB9 / 255, 0x00 / 255)[0]
+RETIRED = "#76B900"
 TARGETS = {"light": "#A2571E", "dark": "#B8682A"}
 
 
-def hue_of(hex_colour):
+def hsv_of(hex_colour):
     h = hex_colour.lstrip("#")
     rgb = tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
     return colorsys.rgb_to_hsv(*rgb)
 
 
 def remap(path, target_hex):
-    target_h, target_s, _ = hue_of(target_hex)
+    src_h, src_s, src_v = hsv_of(RETIRED)
+    target_h, target_s, target_v = hsv_of(target_hex)
+    # RATIOS, derived, not constants picked by eye. A pixel that is exactly the
+    # retired accent lands exactly on the target, and a half-blended edge pixel
+    # keeps its blend. Verified: #76B900 maps to #A2571E and to #B8682A exactly.
+    s_ratio = target_s / src_s
+    v_ratio = target_v / src_v
     image = Image.open(path).convert("RGBA")
     pixels = image.load()
     width, height = image.size
@@ -892,8 +902,10 @@ def remap(path, target_hex):
             h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
             if not (70 / 360 <= h <= 100 / 360 and s > 0.25 and v > 0.20):
                 continue
-            # Keep v so the edge ramp survives; scale s toward the target's.
-            nr, ng, nb = colorsys.hsv_to_rgb(target_h, s * (target_s / 0.87), v * 0.72)
+            # Scale s and v by the derived ratios so the edge ramp survives.
+            nr, ng, nb = colorsys.hsv_to_rgb(target_h,
+                                             min(1.0, s * s_ratio),
+                                             min(1.0, v * v_ratio))
             pixels[x, y] = (round(nr * 255), round(ng * 255), round(nb * 255), a)
             touched += 1
     if touched == 0:
@@ -910,9 +922,9 @@ if __name__ == "__main__":
 - [ ] **Step 2: Copy the originals so the change is reviewable**
 
 ```bash
-mkdir -p /tmp/art-b-before-app-ui-alignment
-command cp -f assets/art/github/readme-header-1600x400.png assets/art/github/social-preview-1280x640.png assets/art/wordmark/coffee-bar-wordmark-light.png assets/art/wordmark/coffee-bar-wordmark-light-2x.png assets/art/wordmark/coffee-bar-wordmark-dark.png assets/art/wordmark/coffee-bar-wordmark-dark-2x.png /tmp/art-b-before-app-ui-alignment/
-ls /tmp/art-b-before-app-ui-alignment/ | wc -l
+mkdir -p "${TMPDIR:-/tmp}/art-b-before-app-ui-alignment"
+command cp -f assets/art/github/readme-header-1600x400.png assets/art/github/social-preview-1280x640.png assets/art/wordmark/coffee-bar-wordmark-light.png assets/art/wordmark/coffee-bar-wordmark-light-2x.png assets/art/wordmark/coffee-bar-wordmark-dark.png assets/art/wordmark/coffee-bar-wordmark-dark-2x.png "${TMPDIR:-/tmp}/art-b-before-app-ui-alignment"/
+ls "${TMPDIR:-/tmp}/art-b-before-app-ui-alignment"/ | wc -l
 ```
 Expected: `6`.
 
@@ -932,11 +944,12 @@ Expected: six lines, each with a non-zero pixel count.
 - [ ] **Step 4: Verify sizes and modes held**
 
 ```bash
-python3 - <<'PY'
+python3 - "${TMPDIR:-/tmp}/art-b-before-app-ui-alignment" <<'PY'
+import sys
 from PIL import Image
 import glob, os
 bad = 0
-for after in sorted(glob.glob('/tmp/art-b-before-app-ui-alignment/*.png')):
+for after in sorted(glob.glob(os.path.join(sys.argv[1], '*.png'))):
     name = os.path.basename(after)
     live = ('assets/art/github/' if name.startswith(('readme', 'social')) else 'assets/art/wordmark/') + name
     a, b = Image.open(after).convert('RGBA'), Image.open(live).convert('RGBA')
@@ -950,7 +963,7 @@ Expected: `drift: 0`.
 - [ ] **Step 5: Look at all six**
 
 ```bash
-open /tmp/art-b-before-app-ui-alignment/ assets/art/wordmark/ assets/art/github/
+open "${TMPDIR:-/tmp}/art-b-before-app-ui-alignment"/ assets/art/wordmark/ assets/art/github/
 ```
 
 Compare each pair side by side. Reject and report if you see any of:
