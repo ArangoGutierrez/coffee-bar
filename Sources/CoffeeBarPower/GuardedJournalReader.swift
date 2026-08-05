@@ -93,6 +93,37 @@ public struct GuardedJournalReader: Sendable {
         try? store.quarantine()
     }
 
+    /// The path preconditions alone: nothing is read, nothing is moved.
+    ///
+    /// `ArmService` calls this BEFORE it writes, so a path this reader would
+    /// refuse never gets armed in the first place.
+    ///
+    /// That partner check is not belt-and-braces. Refusing safely on the READ
+    /// side restores the setting, clears and uninstalls — and an `arm` that
+    /// then carried on setting the flag turned "refuse safely" into "hold
+    /// forever", which is the opposite of what SECURITY.md:187-190 asks for.
+    /// The measured end state was `sleepDisabled=true journalLoads=false
+    /// daemonLoaded=false`, from a successful `arm`.
+    public func validatePath() throws {
+        let directory = url.deletingLastPathComponent()
+
+        if FileManager.default.fileExists(atPath: directory.path) {
+            if let refusal = pathRefusal(directory.path) { throw refusal }
+            if let refusal = directoryModeRefusal(directory) { throw refusal }
+            return
+        }
+
+        // Nothing has been armed on this machine yet. `FileJournalStore` will
+        // create the missing levels at 0700, so the only question left is
+        // whether the nearest EXISTING ancestor is sound.
+        var ancestor = directory.deletingLastPathComponent()
+        while ancestor.path != "/",
+              !FileManager.default.fileExists(atPath: ancestor.path) {
+            ancestor = ancestor.deletingLastPathComponent()
+        }
+        if let refusal = pathRefusal(ancestor.path) { throw refusal }
+    }
+
     /// The journal, or nil when nothing is armed.
     ///
     /// Throws `JournalRefusal` when the path or the file fails the bar, having
@@ -109,23 +140,16 @@ public struct GuardedJournalReader: Sendable {
         // Item 1: the whole ancestry, BEFORE anything reads the file. The
         // directory is judged even when the journal is absent, because a
         // group-writable state directory is where the next journal would land.
-        try refuseInsecurePath(directory.path)
+        if let refusal = pathRefusal(directory.path) {
+            quarantineIfPermitted()
+            throw refusal
+        }
 
         // And the journal's own directory to the exact mode, which the
         // ancestry rule alone does not reach. See `requiredDirectoryMode`.
-        var directoryInfo = stat()
-        guard lstat(directory.path, &directoryInfo) == 0 else {
-            let failure = JournalRefusal.unreadablePath(
-                path: directory.path, errno: errno)
+        if let refusal = directoryModeRefusal(directory) {
             quarantineIfPermitted()
-            throw failure
-        }
-        let directoryMode = directoryInfo.st_mode & 0o7777
-        guard directoryMode == Self.requiredDirectoryMode else {
-            quarantineIfPermitted()
-            throw JournalRefusal.wrongOwnerOrMode(
-                path: directory.path, uid: directoryInfo.st_uid,
-                mode: directoryMode)
+            throw refusal
         }
 
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
@@ -162,19 +186,37 @@ public struct GuardedJournalReader: Sendable {
         try store.clear()
     }
 
-    private func refuseInsecurePath(_ path: String) throws {
+    /// Item 1, as a value rather than a throw, so both `read()` and
+    /// `validatePath()` apply one rule and only `read()` quarantines.
+    private func pathRefusal(_ path: String) -> JournalRefusal? {
         do {
             _ = try PathSecurity.validate(path, requiredOwner: requiredOwner)
+            return nil
         } catch let error as PathSecurityError {
-            quarantineIfPermitted()
             switch error {
             case .notAbsolute(let path):
-                throw JournalRefusal.pathNotAbsolute(path)
+                return .pathNotAbsolute(path)
             case .unresolvable(let path, let code):
-                throw JournalRefusal.unreadablePath(path: path, errno: code)
+                return .unreadablePath(path: path, errno: code)
             case .insecure(let path, let components):
-                throw JournalRefusal.insecurePath(path: path, components: components)
+                return .insecurePath(path: path, components: components)
             }
+        } catch {
+            return .corrupt(String(describing: error))
         }
+    }
+
+    /// The exact-0700 rule on the journal's own directory.
+    private func directoryModeRefusal(_ directory: URL) -> JournalRefusal? {
+        var info = stat()
+        guard lstat(directory.path, &info) == 0 else {
+            return .unreadablePath(path: directory.path, errno: errno)
+        }
+        let mode = info.st_mode & 0o7777
+        guard mode == Self.requiredDirectoryMode else {
+            return .wrongOwnerOrMode(path: directory.path, uid: info.st_uid,
+                                     mode: mode)
+        }
+        return nil
     }
 }

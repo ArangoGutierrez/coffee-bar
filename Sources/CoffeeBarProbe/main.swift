@@ -145,11 +145,28 @@ case .run:
 case .arm:
     let service = ArmService(
         journal: FileJournalStore(),
+        // `quarantineOnRefusal: false`: arm REFUSES on a bad path rather than
+        // moving anything aside. Quarantine belongs to the party that also
+        // restores the setting, which is the daemon.
+        reader: GuardedJournalReader(quarantineOnRefusal: false),
         power: PmsetSleepDisabledController(runner: runner),
         supervisor: LaunchDaemonInstaller(runner: runner),
         display: PmsetDisplaySleeper(runner: runner))
     do {
         try service.arm(ttlSeconds: invocation.ttlSeconds)
+    } catch ArmError.journalPathRefused(let refusal) {
+        // Nothing is held: the refusal lands before the first side effect.
+        fail("""
+            refusing to arm: the journal path is not one a root process may \
+            trust: \(refusal)
+            Nothing was changed.
+            """, code: 78)   // EX_CONFIG
+    } catch ArmError.journalVanished {
+        // Already rolled back by `arm`.
+        fail("""
+            the journal disappeared while arming, so the arm was undone and \
+            sleep restored. Nothing is held.
+            """, code: 75)   // EX_TEMPFAIL
     } catch ArmError.displayStayedAwake {
         // §8.3. The mode is already rolled back by the time this is reached.
         fail("""

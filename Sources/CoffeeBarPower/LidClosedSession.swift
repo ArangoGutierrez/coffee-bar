@@ -63,6 +63,13 @@ public enum ArmError: Error, Equatable {
     /// §8.3's abort. The panel was still lit after it was told to sleep, so the
     /// mode is refused rather than left cooking the battery.
     case displayStayedAwake
+    /// The journal path fails the bar the reader applies, so arming would
+    /// produce a setting the daemon must refuse to explain. Nothing is held.
+    case journalPathRefused(JournalRefusal)
+    /// The journal was gone by the end of `arm`. Something reverted underneath
+    /// it, so the arm is failed and rolled back rather than reported as
+    /// success.
+    case journalVanished
 }
 
 /// Enters lid-closed mode: journal, watchdog, power setting, display.
@@ -84,6 +91,7 @@ public enum ArmError: Error, Equatable {
 /// the defect `LaunchDaemonInstaller.install` documents at its `bootout` call.
 public struct ArmService: Sendable {
     private let journal: any JournalStoring
+    private let reader: GuardedJournalReader
     private let power: any SleepDisabledControlling
     private let supervisor: any WatchdogSupervising
     private let display: any DisplaySleepForcing
@@ -93,13 +101,19 @@ public struct ArmService: Sendable {
     /// `clock` and `displayVerifyDelay` stay injectable so tests need no wall
     /// clock. No dependency here is reachable from argv: SECURITY.md forbids a
     /// verb that takes a path to execute, and `ProbeVerb` takes none.
+    ///
+    /// `reader` is the same guard the daemon uses. `arm` asks it two questions:
+    /// may this path be armed at all, and is the journal still there at the
+    /// end. Both exist to keep one invariant.
     public init(journal: any JournalStoring,
+                reader: GuardedJournalReader,
                 power: any SleepDisabledControlling,
                 supervisor: any WatchdogSupervising,
                 display: any DisplaySleepForcing,
                 clock: @escaping @Sendable () -> Date = HostInfo.now,
                 displayVerifyDelay: TimeInterval = 5) {
         self.journal = journal
+        self.reader = reader
         self.power = power
         self.supervisor = supervisor
         self.display = display
@@ -108,6 +122,22 @@ public struct ArmService: Sendable {
     }
 
     public func arm(ttlSeconds: Int) throws {
+        // THE INVARIANT this function answers for:
+        //
+        //   `arm` never returns success while the system holds a setting the
+        //   journal cannot explain.
+        //
+        // Two guards keep it. This is the first: refuse a path the READER would
+        // refuse, before anything at all is held. Without it, a directory an
+        // earlier build left 0755 is written, refused on the read side, and the
+        // daemon's fail-safe restores and uninstalls — after which `arm` sets
+        // the flag regardless, turning "refuse safely" into "hold forever".
+        do {
+            try reader.validatePath()
+        } catch let refusal as JournalRefusal {
+            throw ArmError.journalPathRefused(refusal)
+        }
+
         // Read the value to restore TO. Never assumed false (spec D6): a
         // machine that already had `disablesleep` set keeps it on revert.
         let priorValue = try power.isEnabled()
@@ -141,6 +171,28 @@ public struct ArmService: Sendable {
             // to; the trade is deliberate and recorded in the report.
             if display.isDisplayAwake() == true {
                 throw ArmError.displayStayedAwake
+            }
+
+            // The second guard, and the general one. Deriving the boot time
+            // removed the daemon's REASON to revert on its first tick; it did
+            // not remove its ABILITY, and nothing stops a future policy, an
+            // operator running `revert`, or a race nobody has thought of from
+            // clearing the journal in this window.
+            //
+            // So the invariant is enforced by OBSERVATION rather than by
+            // enumerating causes: read the journal back, and if it cannot be
+            // read, fail the arm and put the setting back. That converts every
+            // such race — present and future — from "held forever" into "failed
+            // arm", which the user can see and retry.
+            //
+            // Deliberately LAST, so it covers the widest window `arm` can see,
+            // including the display verification above. A launchd exec is
+            // asynchronous, so a revert landing after this point is still
+            // possible; that residue belongs to the daemon's own next tick and
+            // is recorded in the report rather than claimed as closed.
+            let confirmed = (try? reader.read()) ?? nil
+            guard confirmed != nil else {
+                throw ArmError.journalVanished
             }
         } catch {
             rollBack(to: record.priorValue)
