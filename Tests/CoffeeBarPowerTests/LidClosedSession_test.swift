@@ -219,6 +219,21 @@ private final class RecordingNotifier: Notifying, @unchecked Sendable {
     }
 }
 
+/// What the machine reports, under this test's control.
+///
+/// Required rather than defaulted on `WatchdogService`, deliberately. A default
+/// of `SystemWatchdogEnvironment()` would make every watchdog test read the
+/// REAL thermal state of whatever machine runs the suite — so a hot laptop or a
+/// loaded CI runner would revert an arm and fail tests that have nothing to do
+/// with heat. Machine state is not a fixture.
+private struct FakeEnvironment: WatchdogEnvironmentSensing {
+    var thermal: ThermalLevel = .nominal
+    var reading = PowerReading(source: .ac, percent: nil)
+
+    func thermalLevel() -> ThermalLevel { thermal }
+    func power() -> PowerReading { reading }
+}
+
 private func makeScratchRoot() throws -> URL {
     let root = URL(fileURLWithPath: NSTemporaryDirectory())
         .appending(path: "coffee-bar-lid-\(UUID().uuidString)")
@@ -569,6 +584,7 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
         power: power,
         supervisor: supervisor,
         notifier: RecordingNotifier(),
+        environment: FakeEnvironment(),
         bootTime: { fixedBoot })
 
     // Exactly what launchd runs at load: the `watchdog` verb, one tick.
@@ -685,6 +701,7 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
     let watchdog = WatchdogService(
         reader: GuardedJournalReader(url: url, store: store, requiredOwner: getuid()),
         power: power, supervisor: supervisor, notifier: RecordingNotifier(),
+        environment: FakeEnvironment(),
         bootTime: { fixedBoot })
     supervisor.runAtLoad = { _ = try? watchdog.evaluate(now: fixedNow) }
 
@@ -740,6 +757,7 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
     let watchdog = WatchdogService(
         reader: GuardedJournalReader(url: url, store: store, requiredOwner: getuid()),
         power: power, supervisor: supervisor, notifier: RecordingNotifier(),
+        environment: FakeEnvironment(),
         // The machine booted a second AFTER this arm's truncated `setAt`.
         bootTime: { fixedNow.addingTimeInterval(1) })
     supervisor.runAtLoad = { _ = try? watchdog.evaluate(now: fixedNow) }
@@ -768,7 +786,9 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
 /// Builds a watchdog over a scratch journal that already holds `record`.
 private func makeArmedWatchdog(root: URL, record: JournalRecord,
                                initiallyEnabled: Bool = true,
-                               bootTime: Date = fixedBoot)
+                               bootTime: Date = fixedBoot,
+                               environment: FakeEnvironment = FakeEnvironment(),
+                               policy: WatchdogPolicy = .default)
     throws -> (service: WatchdogService, power: RecordingPower,
                store: FileJournalStore, log: CallLog, notifier: RecordingNotifier) {
     let log = CallLog()
@@ -783,6 +803,8 @@ private func makeArmedWatchdog(root: URL, record: JournalRecord,
         power: power,
         supervisor: RecordingSupervisor(log: log),
         notifier: notifier,
+        environment: environment,
+        policy: policy,
         bootTime: { bootTime })
     return (service, power, store, log, notifier)
 }
@@ -966,7 +988,8 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
         reader: GuardedJournalReader(url: url, store: store, requiredOwner: getuid()),
         power: power,
         supervisor: RecordingSupervisor(log: log),
-        notifier: notifier)
+        notifier: notifier,
+        environment: FakeEnvironment())
 
     _ = try service.evaluate(now: fixedNow.addingTimeInterval(5), lastHeartbeat: nil)
 
@@ -1009,9 +1032,157 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
                                      requiredOwner: getuid()),
         power: RecordingPower(log: log, state: .init(false)),
         supervisor: RecordingSupervisor(log: log),
-        notifier: RecordingNotifier())
+        notifier: RecordingNotifier(),
+        environment: FakeEnvironment())
 
     #expect(try service.revertNow() == false)
+}
+
+// MARK: - §8.1 aborts, through the daemon rather than through decide()
+
+@Test func theWatchdogRevertsWhenTheMachineGetsHotUnderAClosedLid() throws {
+    // Handoff §8.1: revert immediately on `thermalState >= .serious` while the
+    // lid is closed. It calls thermal "the real risk", because a MacBook vents
+    // through the hinge area and a closed lid under sustained agent load is the
+    // worst case.
+    //
+    // `decide()` has covered this policy since M0. What was missing was the
+    // WIRING: the daemon called `evaluate(now:)` and the thermal parameter
+    // defaulted to `.nominal`, so the abort could not fire in production no
+    // matter how hot the machine got. This drives the daemon, not `decide()`.
+    //
+    // Named bug this catches: a daemon that reads no thermal state. The TTL
+    // here is 8 hours and the heartbeat is fine, so nothing else can revert.
+    let root = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let armed = try makeArmedWatchdog(
+        root: root, record: armedRecord(priorValue: false, ttlSeconds: 28_800),
+        environment: FakeEnvironment(thermal: .serious))
+
+    let decision = try armed.service.evaluate(
+        // `nil`, so the TTL-only substitution keeps the heartbeat guard quiet
+        // and the input under test is the ONLY thing that can revert.
+        now: fixedNow.addingTimeInterval(60), lastHeartbeat: nil)
+
+    #expect(decision == .revert(.thermalAbort), """
+        the daemon did not abort on a serious thermal state, so §8.1's thermal \
+        rule is dead code in the one feature it exists to bound.
+        """)
+    // §8.1 says revert, notify and log — the same safe action as any other
+    // revert, not a special case.
+    #expect(armed.power.state.current == false)
+    #expect(try armed.store.load() == nil, "the thermal abort left the journal behind")
+    #expect(armed.log.calls.contains("watchdog.uninstall"))
+    #expect(armed.notifier.posted.isEmpty == false)
+}
+
+@Test func theWatchdogRevertsWhenTheBatteryReachesTheFloorOnBatteryPower() throws {
+    // §8.1: revert on battery at or below `batteryFloor`, default 20%.
+    //
+    // Same wiring gap as thermal: `batteryPercent` defaulted to nil and
+    // `onBattery` to false, so this abort could never fire either.
+    let root = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let floor = WatchdogPolicy.default.batteryFloorPercent
+    let armed = try makeArmedWatchdog(
+        root: root, record: armedRecord(priorValue: false, ttlSeconds: 28_800),
+        environment: FakeEnvironment(
+            reading: PowerReading(source: .battery, percent: floor)))
+
+    let decision = try armed.service.evaluate(
+        // `nil`, so the TTL-only substitution keeps the heartbeat guard quiet
+        // and the input under test is the ONLY thing that can revert.
+        now: fixedNow.addingTimeInterval(60), lastHeartbeat: nil)
+
+    #expect(decision == .revert(.batteryFloor))
+    #expect(armed.power.state.current == false)
+    #expect(try armed.store.load() == nil)
+    #expect(armed.log.calls.contains("watchdog.uninstall"))
+    #expect(armed.notifier.posted.isEmpty == false)
+}
+
+@Test func theWatchdogHoldsAtTheSameChargeWhenTheMachineIsOnACPower() throws {
+    // The discriminator for the `onBattery` half of the wiring, and the reason
+    // the test above cannot stand alone.
+    //
+    // A daemon that passed `onBattery: true` unconditionally — or that read the
+    // charge and ignored the source — would pass the battery test and would
+    // also revert every arm on a plugged-in machine sitting at 15%. That is a
+    // desk-bound laptop that refuses to hold, which is the feature not working.
+    let root = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let floor = WatchdogPolicy.default.batteryFloorPercent
+    let armed = try makeArmedWatchdog(
+        root: root, record: armedRecord(priorValue: false, ttlSeconds: 28_800),
+        environment: FakeEnvironment(
+            reading: PowerReading(source: .ac, percent: floor - 5)))
+
+    let decision = try armed.service.evaluate(
+        // `nil`, so the TTL-only substitution keeps the heartbeat guard quiet
+        // and the input under test is the ONLY thing that can revert.
+        now: fixedNow.addingTimeInterval(60), lastHeartbeat: nil)
+
+    #expect(decision == .hold, """
+        the daemon reverted a charge below the floor while on AC power. The \
+        floor is about draining the battery, and a plugged-in machine is not \
+        draining it.
+        """)
+    #expect(armed.power.state.current == true)
+}
+
+@Test func theDaemonsBatteryFloorArrivesThroughTheBoundedRule() throws {
+    // Issue #11's rule, checked on the daemon path: the floor is bounded at ONE
+    // choke point every caller crosses, `BatteryFloor.bounded`, which
+    // `WatchdogPolicy.init` calls rather than keeping its own clamp.
+    //
+    // This asserts the DAEMON honours the bounded value rather than the raw
+    // one. An absurd floor of 1000 bounds to 100, so a machine on battery at
+    // any charge is at or below it and must revert. A second, unbounded path
+    // would compare against 1000, never fire, and leave the abort silently
+    // dead — which is the same class of defect as the unwired input above.
+    let root = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let policy = WatchdogPolicy(heartbeatTimeout: 45, batteryFloorPercent: 1000)
+    #expect(policy.batteryFloorPercent == BatteryFloor.bounded(1000))
+    #expect(policy.batteryFloorPercent == BatteryFloor.permitted.upperBound)
+
+    let armed = try makeArmedWatchdog(
+        root: root, record: armedRecord(priorValue: false, ttlSeconds: 28_800),
+        environment: FakeEnvironment(
+            reading: PowerReading(source: .battery, percent: 100)),
+        policy: policy)
+
+    #expect(try armed.service.evaluate(
+        // `nil`, so the TTL-only substitution keeps the heartbeat guard quiet
+        // and the input under test is the ONLY thing that can revert.
+        now: fixedNow.addingTimeInterval(60), lastHeartbeat: nil)
+        == .revert(.batteryFloor))
+}
+
+@Test func theThermalMirrorMapsEveryStateProcessInfoCanReport() {
+    // `ThermalLevel` is a redeclaration of `ProcessInfo.ThermalState`, so the
+    // mapping between them is a place two enums can silently disagree — and a
+    // wrong mapping here reads `.critical` as `.nominal` and never aborts.
+    //
+    // Each case is a literal in, a literal out, never the mapping's own logic
+    // re-run as the expectation.
+    #expect(SystemWatchdogEnvironment.level(from: .nominal) == .nominal)
+    #expect(SystemWatchdogEnvironment.level(from: .fair) == .fair)
+    #expect(SystemWatchdogEnvironment.level(from: .serious) == .serious)
+    #expect(SystemWatchdogEnvironment.level(from: .critical) == .critical)
+
+    // The two that must clear §8.1's bar, stated as the rule rather than as
+    // two more equalities: the abort fires at `.serious` and above.
+    #expect(SystemWatchdogEnvironment.level(from: .serious).rawValue
+            >= ThermalLevel.serious.rawValue)
+    #expect(SystemWatchdogEnvironment.level(from: .critical).rawValue
+            >= ThermalLevel.serious.rawValue)
+    #expect(SystemWatchdogEnvironment.level(from: .fair).rawValue
+            < ThermalLevel.serious.rawValue)
 }
 
 @Test func theWatchdogDoesNothingWhenNothingIsArmed() throws {
@@ -1029,7 +1200,8 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
                                      requiredOwner: getuid()),
         power: power,
         supervisor: RecordingSupervisor(log: log),
-        notifier: notifier)
+        notifier: notifier,
+        environment: FakeEnvironment())
 
     #expect(try service.evaluate(now: fixedNow, lastHeartbeat: nil) == .hold)
     #expect(log.calls.contains("power.set(false)") == false, "\(log.calls)")
@@ -1190,7 +1362,8 @@ private func buildArmer() throws -> String {
                                      requiredOwner: getuid()),
         power: power,
         supervisor: RecordingSupervisor(log: log),
-        notifier: notifier)
+        notifier: notifier,
+        environment: FakeEnvironment())
 
     let decision = try watchdog.evaluate(
         now: fixedNow.addingTimeInterval(61), lastHeartbeat: nil)
