@@ -20,7 +20,17 @@ SPDX-License-Identifier: Apache-2.0
 Every task's requirements implicitly include this section.
 
 - **Base commit:** cut from `389f10e`. Re-verify every fact in spec §2 before writing copy, and report any delta rather than working around it.
-- **Signed commits.** Every commit uses `git commit -s -S`. Both flags. The DCO sign-off line reads `Signed-off-by: Carlos Eduardo Arango Gutierrez <eduardoa@nvidia.com>`.
+- **Signed commits.** Every commit uses `git commit -s -S`. Both flags. `-s` writes the DCO sign-off for Carlos Eduardo Arango Gutierrez from the repository's configured git identity; do not type the address by hand.
+
+  > **Do not write the author's username into any tracked file.**
+  > `FixtureRedaction_test.swift` defines `forbiddenUsername` and
+  > `noTrackedFileCarriesLiveSessionProse` scans every tracked file for it,
+  > exempting exactly one path — its own. The guard exists because 599
+  > characters of live session text once reached a public repository.
+  >
+  > An earlier version of THIS line spelled the address out and turned the suite
+  > red at `bee1336`. Commit messages are not scanned, so `git commit -s` is
+  > safe. Never add a second exempt path to that guard.
 - **SPDX header** on every new file: `Copyright 2026 Carlos Eduardo Arango Gutierrez` and `SPDX-License-Identifier: Apache-2.0`, in that file type's comment syntax.
 - **The year is 2026.** Never copy a year from an existing file.
 - **No external requests from the site.** No web font, no analytics, no CDN, no tracking script. Every page's head comment already promises this.
