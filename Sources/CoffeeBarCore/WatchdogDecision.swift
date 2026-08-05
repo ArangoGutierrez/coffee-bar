@@ -15,6 +15,8 @@ public enum RevertReason: String, Codable, Equatable, Sendable {
     /// discarded and the setting was restored to `false` instead. Refusing to
     /// TRUST the file is not a reason to leave the machine awake.
     case journalRefused
+    /// A human ran `revert`. Nothing went wrong; they asked.
+    case operatorRequested
 }
 
 public enum WatchdogDecision: Equatable, Sendable {

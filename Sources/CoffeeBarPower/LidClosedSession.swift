@@ -180,75 +180,131 @@ public struct WatchdogService: Sendable {
     private let supervisor: any WatchdogSupervising
     private let notifier: any Notifying
     private let policy: WatchdogPolicy
+    private let bootTime: @Sendable () -> Date
 
+    /// `bootTime` is injectable so a test can drive both sides of §8.2(4)
+    /// without rebooting. Production reads `kern.boottime`.
     public init(reader: GuardedJournalReader,
                 power: any SleepDisabledControlling,
                 supervisor: any WatchdogSupervising,
                 notifier: any Notifying,
-                policy: WatchdogPolicy = .default) {
+                policy: WatchdogPolicy = .default,
+                bootTime: @escaping @Sendable () -> Date = SystemBootTime.current) {
         self.reader = reader
         self.power = power
         self.supervisor = supervisor
         self.notifier = notifier
         self.policy = policy
+        self.bootTime = bootTime
     }
 
-    /// One tick of the 5 s timer, or one boot evaluation.
+    private enum JournalState {
+        case nothingArmed
+        case armed(JournalRecord)
+        /// Refused AND already handled: the setting is restored and the file
+        /// is quarantined.
+        case refused
+    }
+
+    /// One tick of the 5 s timer.
     @discardableResult
     public func evaluate(now: Date,
-                         isBootEvaluation: Bool = false,
                          lastHeartbeat: Date? = nil,
                          thermal: ThermalLevel = .nominal,
                          batteryPercent: Int? = nil,
                          onBattery: Bool = false) throws -> WatchdogDecision {
-        let record: JournalRecord?
+        switch readJournal() {
+        case .refused:
+            return .revert(.journalRefused)
+        case .nothingArmed:
+            return .hold
+        case .armed(let record):
+            let inputs = WatchdogInputs(
+                journal: record,
+                now: now,
+                // No heartbeat channel means TTL-ONLY supervision, not an
+                // instant revert. `decide()` treats a nil heartbeat as
+                // `.heartbeatLost`, which is right when a channel exists and
+                // has gone quiet; on the CLI path there is no channel at all,
+                // and collapsing the two would revert every `arm` within one
+                // tick.
+                //
+                // Substituting `now` is safe because it can only ever make the
+                // heartbeat guard PASS, and `decide()` tests the TTL first — so
+                // no heartbeat, forged or absent, buys a second past expiry.
+                lastHeartbeat: lastHeartbeat ?? now,
+                // §8.2(4) asks whether the MACHINE booted while this journal
+                // was live — an unclean exit. It does NOT ask whether this
+                // process just started, and conflating the two was a defect
+                // that made the feature undo itself: `install()` writes a plist
+                // with `RunAtLoad`, so `arm` starts this daemon, whose first
+                // tick then reverted the journal `arm` had just written. The
+                // measured end state was sleep held, journal deleted and the
+                // daemon booted out, with no attacker anywhere near it.
+                //
+                // `setAt` is truncated DOWN to the second by `HostInfo.now`, so
+                // a journal written in the same second as the boot can read as
+                // older than it. That errs toward reverting, which is the safe
+                // direction.
+                isBootEvaluation: record.setAt < bootTime(),
+                thermal: thermal,
+                batteryPercent: batteryPercent,
+                onBattery: onBattery)
+
+            let decision = decide(inputs, policy: policy)
+            guard case .revert(let reason) = decision else { return decision }
+            try applyRevert(record: record, reason: reason)
+            return decision
+        }
+    }
+
+    /// The `revert` verb: undo an armed run now, whatever its TTL says.
+    ///
+    /// Deliberately NOT "pretend the machine booted". That spelling worked only
+    /// while `isBootEvaluation` was a caller-supplied flag, and it is exactly
+    /// the conflation above. A human asking is its own reason.
+    ///
+    /// Returns whether anything was armed.
+    @discardableResult
+    public func revertNow() throws -> Bool {
+        switch readJournal() {
+        case .refused:
+            return true          // something WAS armed, and it is now undone
+        case .nothingArmed:
+            return false
+        case .armed(let record):
+            try applyRevert(record: record, reason: .operatorRequested)
+            return true
+        }
+    }
+
+    /// Reads the journal, handling a refusal in full.
+    ///
+    /// A refusal fails SAFE, not closed. "Refuse to act on it" (SECURITY.md
+    /// item 2) cannot mean "do nothing": stopping there would leave
+    /// `SleepDisabled` held forever, which is the exact failure §8.2 exists to
+    /// prevent. The untrusted `priorValue` is discarded and the setting goes to
+    /// `false` — the safe direction — rather than to a number an attacker may
+    /// have chosen. The reader has already quarantined the file.
+    ///
+    /// The cost is real: a user who genuinely had `disablesleep` set loses it.
+    /// An untrusted file cannot tell us otherwise.
+    private func readJournal() -> JournalState {
         do {
-            record = try reader.read()
-        } catch let refusal as JournalRefusal {
-            // Fail SAFE, not closed. "Refuse to act on it" (SECURITY.md item 2)
-            // cannot mean "do nothing": stopping here would leave
-            // `SleepDisabled` held forever, which is the exact failure §8.2
-            // exists to prevent.
-            //
-            // So the untrusted `priorValue` is discarded and the setting goes
-            // to `false` — the safe direction — rather than to a number an
-            // attacker may have chosen. The journal is already quarantined by
-            // the reader. The cost is real: a user who genuinely had
-            // `disablesleep` set loses it. An untrusted file cannot tell us
-            // otherwise, and every uncertain path restores the system setting.
+            guard let record = try reader.read() else { return .nothingArmed }
+            return .armed(record)
+        } catch {
             try? power.set(false)
             try? reader.clear()
             try? supervisor.uninstall()
-            notifier.notify(
-                "refused the journal and restored sleep: \(refusal)")
-            return .revert(.journalRefused)
+            notifier.notify("refused the journal and restored sleep: \(error)")
+            return .refused
         }
+    }
 
-        guard let record else { return .hold }
-
-        let inputs = WatchdogInputs(
-            journal: record,
-            now: now,
-            // No heartbeat channel means TTL-ONLY supervision, not an instant
-            // revert. `decide()` treats a nil heartbeat as `.heartbeatLost`,
-            // which is right when a channel exists and has gone quiet; on the
-            // CLI path there is no channel at all, and collapsing the two would
-            // revert every `arm` within one tick.
-            //
-            // Substituting `now` is safe because it can only ever make the
-            // heartbeat guard PASS, and `decide()` tests the TTL first — so no
-            // heartbeat, forged or absent, buys a single second past expiry.
-            lastHeartbeat: lastHeartbeat ?? now,
-            isBootEvaluation: isBootEvaluation,
-            thermal: thermal,
-            batteryPercent: batteryPercent,
-            onBattery: onBattery)
-
-        let decision = decide(inputs, policy: policy)
-        guard case .revert(let reason) = decision else { return decision }
-
-        // The journal is trusted here — it passed every precondition — so the
-        // restore uses its recorded `priorValue`.
+    private func applyRevert(record: JournalRecord, reason: RevertReason) throws {
+        // The journal passed every precondition, so the restore uses its
+        // recorded `priorValue`.
         try power.set(record.priorValue)
         try reader.clear()
         // Best-effort, and last: `bootout` ends the very process running this,
@@ -256,19 +312,25 @@ public struct WatchdogService: Sendable {
         // the revert half-done.
         try? supervisor.uninstall()
         notifier.notify("reverted SleepDisabled to \(record.priorValue): \(reason.rawValue)")
-        return decision
     }
+}
 
-    /// The `revert` verb: undo an armed run now, whatever its TTL says.
-    ///
-    /// Reported separately from `evaluate` because the reason differs — nothing
-    /// went wrong, a human asked. It reuses `evaluate`'s boot path, which
-    /// §8.2(4) already defines as "revert unconditionally", so there is one
-    /// revert implementation rather than two.
-    ///
-    /// Returns whether anything was armed.
-    @discardableResult
-    public func revertNow() throws -> Bool {
-        try evaluate(now: Date(), isBootEvaluation: true) != .hold
+/// When this machine last booted, from `kern.boottime`.
+///
+/// §8.2(4) turns on this value: a journal written BEFORE the last boot is
+/// evidence of an unclean exit, and one written after it is not.
+public enum SystemBootTime {
+    public static func current() -> Date {
+        var boot = timeval()
+        var size = MemoryLayout<timeval>.stride
+        guard sysctlbyname("kern.boottime", &boot, &size, nil, 0) == 0 else {
+            // An unknown boot time must not switch the check off. `now` makes
+            // every journal look older than the boot, so every armed run
+            // reverts on the next tick. That loses the feature and keeps the
+            // machine safe, which is the right way round.
+            return Date()
+        }
+        return Date(timeIntervalSince1970:
+            Double(boot.tv_sec) + Double(boot.tv_usec) / 1_000_000)
     }
 }

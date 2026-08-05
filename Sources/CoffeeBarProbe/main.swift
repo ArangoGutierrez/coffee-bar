@@ -23,7 +23,7 @@ import CoffeeBarPower
 private struct Invocation {
     var verb: ProbeVerb = .default
     var wantsJSON = false
-    var ttlSeconds = JournalRecord.maxTTLSeconds
+    var ttlSeconds = ProbeVerb.defaultTTLSeconds
     /// A token that is not a verb. Carried rather than acted on, so the usage
     /// text can name it.
     var unknownVerb: String?
@@ -164,7 +164,10 @@ case .arm:
 
 case .report:
     do {
-        guard let record = try GuardedJournalReader().read() else {
+        // `quarantineOnRefusal: false`: reading for a human must not move
+        // the journal the daemon still needs. See GuardedJournalReader.init.
+        guard let record = try GuardedJournalReader(
+                quarantineOnRefusal: false).read() else {
             print("nothing armed")
             exit(0)
         }
@@ -197,25 +200,30 @@ case .revert:
 case .watchdog:
     // launchd starts this with `RunAtLoad` and keeps it alive with `KeepAlive`.
     //
-    // The FIRST evaluation is the boot evaluation: §8.2(4) says a journal
-    // present at load means an unclean exit, so it reverts unconditionally
-    // rather than waiting for a TTL that may be hours away.
+    // Nothing here marks the first tick as a boot, and that is the point.
+    // `RunAtLoad` means this job starts whenever the plist is bootstrapped —
+    // which `arm` does, every time — so "this process just started" is NOT
+    // evidence that the machine rebooted. Treating it as such made `arm`
+    // install a daemon whose first act was to revert `arm`: measured end state
+    // was sleep held, journal deleted and the daemon booted out.
+    //
+    // §8.2(4) is answered inside `WatchdogService`, by comparing the journal's
+    // `setAt` against `kern.boottime`. That is the question the handoff is
+    // actually asking.
     //
     // `lastHeartbeat` is nil on this path and stays nil. There is no XPC
     // channel to carry one, so supervision is TTL-only — `WatchdogService`
     // documents why that is safe and why a heartbeat could never extend a hold
     // past its TTL anyway.
     let service = makeWatchdogService()
-    var isBootEvaluation = true
     while true {
         do {
-            _ = try service.evaluate(now: Date(), isBootEvaluation: isBootEvaluation)
+            _ = try service.evaluate(now: Date())
         } catch {
             // A tick that failed must not take the daemon down: the next one
             // may well succeed, and a dead watchdog supervises nothing.
             notifier.notify("watchdog tick failed: \(error)")
         }
-        isBootEvaluation = false
         Thread.sleep(forTimeInterval: 5)   // §8.2(2): a 5 s timer.
     }
 }

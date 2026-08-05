@@ -13,7 +13,7 @@ public enum JournalRefusal: Error, Equatable {
     case pathNotAbsolute(String)
     case unreadablePath(path: String, errno: Int32)
     case insecurePath(path: String, components: [InsecurePathComponent])
-    /// Ownership or mode of the journal file itself did not match.
+    /// Ownership or mode of the journal file or its directory did not match.
     case wrongOwnerOrMode(path: String, uid: uid_t, mode: mode_t)
     case corrupt(String)
 }
@@ -41,19 +41,56 @@ public struct GuardedJournalReader: Sendable {
     /// uid and binary path — to every account on the machine.
     static let requiredFileMode: mode_t = 0o600
 
+    /// The mode the privileged writer gives the journal's own directory.
+    ///
+    /// Exactly 0700, which closes the gap SECURITY.md:184-190 names: the store
+    /// pins the mode of a directory it CREATES and cannot repair one that
+    /// already exists, so a directory an earlier build left 0755 keeps that
+    /// mode and the reader must refuse it.
+    ///
+    /// The document contradicted itself here. Item 1 (SECURITY.md:165-167) asks
+    /// only that a component be root-owned and not group- or other-writable,
+    /// which 0755 satisfies; :187-190 says the helper must refuse exactly that.
+    /// Carlos settled it toward safety. Nothing `FileJournalStore` creates can
+    /// fail this, because it creates 0700.
+    ///
+    /// It binds the journal's OWN directory and no ancestor. Measured on this
+    /// platform, `/`, `/Library` and `/Library/Application Support` are all
+    /// root-owned 0755, so an ancestor-wide rule would refuse every journal in
+    /// production. Ancestors keep the weaker rule, which is also the rule the
+    /// shared `PathSecurity` applies to the program path, where `/usr/bin` is
+    /// 0755 too.
+    static let requiredDirectoryMode: mode_t = 0o700
+
     private let url: URL
     private let store: any JournalStoring
     private let requiredOwner: uid_t
+    private let quarantineOnRefusal: Bool
 
     /// `requiredOwner` defaults to 0, which is the production bar. It widens
     /// only so tests can drive a scratch path; see `PathSecurity`
     /// `.insecureComponents`.
+    ///
+    /// `quarantineOnRefusal` is true for the watchdog and false for `report`.
+    /// Quarantining is a WRITE, and it belongs to the party that also RESTORES
+    /// the setting. A `report` that moved a refused journal aside would leave
+    /// the daemon's next tick reading nothing, answering `.hold`, and holding
+    /// `SleepDisabled` with no record of why — an open-ended hold reached by a
+    /// user merely asking what was armed.
     public init(url: URL = FileJournalStore.systemURL,
                 store: (any JournalStoring)? = nil,
-                requiredOwner: uid_t = 0) {
+                requiredOwner: uid_t = 0,
+                quarantineOnRefusal: Bool = true) {
         self.url = url
         self.store = store ?? FileJournalStore(url: url)
         self.requiredOwner = requiredOwner
+        self.quarantineOnRefusal = quarantineOnRefusal
+    }
+
+    /// Moves a refused journal aside, unless this reader only inspects.
+    private func quarantineIfPermitted() {
+        guard quarantineOnRefusal else { return }
+        try? store.quarantine()
     }
 
     /// The journal, or nil when nothing is armed.
@@ -74,6 +111,23 @@ public struct GuardedJournalReader: Sendable {
         // group-writable state directory is where the next journal would land.
         try refuseInsecurePath(directory.path)
 
+        // And the journal's own directory to the exact mode, which the
+        // ancestry rule alone does not reach. See `requiredDirectoryMode`.
+        var directoryInfo = stat()
+        guard lstat(directory.path, &directoryInfo) == 0 else {
+            let failure = JournalRefusal.unreadablePath(
+                path: directory.path, errno: errno)
+            quarantineIfPermitted()
+            throw failure
+        }
+        let directoryMode = directoryInfo.st_mode & 0o7777
+        guard directoryMode == Self.requiredDirectoryMode else {
+            quarantineIfPermitted()
+            throw JournalRefusal.wrongOwnerOrMode(
+                path: directory.path, uid: directoryInfo.st_uid,
+                mode: directoryMode)
+        }
+
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
 
         // Item 2: the journal's own ownership and mode. `lstat`, so a symlink
@@ -82,13 +136,13 @@ public struct GuardedJournalReader: Sendable {
         var info = stat()
         guard lstat(url.path, &info) == 0 else {
             let failure = JournalRefusal.unreadablePath(path: url.path, errno: errno)
-            try? store.quarantine()
+            quarantineIfPermitted()
             throw failure
         }
         let mode = info.st_mode & 0o7777
         let ownerWrong = info.st_uid != 0 && info.st_uid != requiredOwner
         guard !ownerWrong, mode == Self.requiredFileMode else {
-            try? store.quarantine()
+            quarantineIfPermitted()
             throw JournalRefusal.wrongOwnerOrMode(
                 path: url.path, uid: info.st_uid, mode: mode)
         }
@@ -98,7 +152,7 @@ public struct GuardedJournalReader: Sendable {
         } catch {
             // A corrupt journal is quarantined for the same reason an insecure
             // one is: it proves something was armed and cannot say what.
-            try? store.quarantine()
+            quarantineIfPermitted()
             throw JournalRefusal.corrupt(String(describing: error))
         }
     }
@@ -112,7 +166,7 @@ public struct GuardedJournalReader: Sendable {
         do {
             _ = try PathSecurity.validate(path, requiredOwner: requiredOwner)
         } catch let error as PathSecurityError {
-            try? store.quarantine()
+            quarantineIfPermitted()
             switch error {
             case .notAbsolute(let path):
                 throw JournalRefusal.pathNotAbsolute(path)

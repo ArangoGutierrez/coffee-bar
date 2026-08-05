@@ -26,6 +26,19 @@ public enum ProbeVerb: String, CaseIterable, Sendable {
     case revert
     case watchdog
 
+    /// How long `arm` holds the setting when the caller names no `--ttl`.
+    ///
+    /// 30 minutes, and deliberately NOT `JournalRecord.maxTTLSeconds`. §8.2(5)
+    /// makes 8 h a CAP — the longest hold a user may ASK for — and using it as
+    /// the default confuses two different numbers.
+    ///
+    /// Supervision on this path is TTL-only. There is no heartbeat writer, so
+    /// nothing cuts a hold short when the work finishes early: the default is
+    /// the WORST CASE for a user who arms, walks away and never comes back.
+    /// Eight hours of that is an overnight battery. Half an hour covers an
+    /// ordinary agent run, and `--ttl` buys more, up to the cap.
+    public static let defaultTTLSeconds = 30 * 60
+
     /// What `main.swift` runs when argv names no verb.
     ///
     /// Deliberately the unprivileged one. A privileged default would let a
