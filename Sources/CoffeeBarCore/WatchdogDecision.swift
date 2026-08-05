@@ -11,6 +11,10 @@ public enum RevertReason: String, Codable, Equatable, Sendable {
     case thermalAbort
     case batteryFloor
     case clockAnomaly
+    /// The journal failed a SECURITY.md precondition, so its `priorValue` was
+    /// discarded and the setting was restored to `false` instead. Refusing to
+    /// TRUST the file is not a reason to leave the machine awake.
+    case journalRefused
 }
 
 public enum WatchdogDecision: Equatable, Sendable {

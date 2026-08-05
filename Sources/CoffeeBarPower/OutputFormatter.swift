@@ -5,7 +5,11 @@ import Foundation
 import CoffeeBarCore
 
 public enum OutputFormatter {
-    public static func json(_ report: ProbeReport) throws -> String {
+    /// Generic over `Encodable` rather than fixed to `ProbeReport`: M5's
+    /// `report` verb emits a `JournalRecord`, and a second function would mean
+    /// a second copy of the date strategy below — which is exactly the kind of
+    /// pair that drifts. One encoder configuration, every payload.
+    public static func json(_ value: some Encodable) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         // ISO-8601, not the default .deferredToDate. The reason is
@@ -25,7 +29,7 @@ public enum OutputFormatter {
         // default. That is why report timestamps are stamped with
         // `HostInfo.now()`, which truncates — see `ProbeRun.report`.
         encoder.dateEncodingStrategy = .iso8601
-        return String(decoding: try encoder.encode(report), as: UTF8.self)
+        return String(decoding: try encoder.encode(value), as: UTF8.self)
     }
 
     /// Decoder matching `json(_:)`. Any consumer parsing a probe report must

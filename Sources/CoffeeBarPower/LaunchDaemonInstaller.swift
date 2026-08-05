@@ -133,55 +133,25 @@ public struct LaunchDaemonInstaller: WatchdogSupervising {
     /// ultimately written. Checking components of a name that still contains a
     /// symlink would validate one object and exec another, which someone else
     /// can repoint between the two.
+    /// The rule itself lives in `PathSecurity`, which the M5 journal reader
+    /// asks the same question. Two copies of a security check drift the moment
+    /// one is edited, so this maps the shared verdict onto this type's error
+    /// vocabulary and adds nothing of its own.
     static func validatedProgramPath(_ path: String) throws -> String {
-        guard path.hasPrefix("/") else {
-            throw WatchdogInstallError.programPathNotAbsolute(path)
-        }
-        guard let buffer = realpath(path, nil) else {
-            throw WatchdogInstallError.programPathUnresolvable(
-                path: path, errno: errno)
-        }
-        defer { free(buffer) }
-        let canonical = String(cString: buffer)
-
-        var insecure: [InsecurePathComponent] = []
-        for component in Self.ancestry(of: canonical) {
-            var info = stat()
-            // `lstat`, not `stat`: `realpath` has already removed every
-            // symlink, so anything still reporting as one appeared after the
-            // resolve and must not be followed.
-            guard lstat(component, &info) == 0 else {
+        do {
+            return try PathSecurity.validate(path)
+        } catch let error as PathSecurityError {
+            switch error {
+            case .notAbsolute(let path):
+                throw WatchdogInstallError.programPathNotAbsolute(path)
+            case .unresolvable(let path, let code):
                 throw WatchdogInstallError.programPathUnresolvable(
-                    path: component, errno: errno)
-            }
-            let notOwnedByRoot = info.st_uid != 0
-            let writable =
-                (info.st_mode & mode_t(S_IWGRP | S_IWOTH)) != 0
-            if notOwnedByRoot || writable {
-                insecure.append(InsecurePathComponent(
-                    path: component,
-                    notOwnedByRoot: notOwnedByRoot,
-                    groupOrOtherWritable: writable))
+                    path: path, errno: code)
+            case .insecure(let path, let components):
+                throw WatchdogInstallError.programPathInsecure(
+                    path: path, components: components)
             }
         }
-        guard insecure.isEmpty else {
-            throw WatchdogInstallError.programPathInsecure(
-                path: canonical, components: insecure)
-        }
-        return canonical
-    }
-
-    /// `/usr/bin/true` -> `["/", "/usr", "/usr/bin", "/usr/bin/true"]`.
-    /// The root directory is included: it is a component like any other and a
-    /// group-writable `/` would compromise everything below it.
-    private static func ancestry(of canonicalPath: String) -> [String] {
-        var components = ["/"]
-        var prefix = ""
-        for part in canonicalPath.split(separator: "/") {
-            prefix += "/" + part
-            components.append(prefix)
-        }
-        return components
     }
 
     /// Validates, writes the plist, then hands it to launchd.
