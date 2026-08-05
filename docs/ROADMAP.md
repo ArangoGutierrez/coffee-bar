@@ -126,6 +126,29 @@ explicit that no mechanism exists to promote a process onto P-cores — the READ
 "quiet everything else", never "boost agents". Battery numbers appear only once S6's
 measurement harness has produced them.
 
+## M6 — the demotion journal must stay out of the root helper's reach
+
+Issue #14 added a SECOND journal, for `ProcGovernor`:
+`~/Library/Application Support/coffee-bar/state/demotion-journal.json`, directory
+0700 and file 0600.
+
+It is a separate file for a security reason, not a tidiness one. Process demotion
+is unprivileged and same-uid, so its journal is written by the user's own app and
+is user-owned. The sleep journal is root-owned and, under M5, a **root** process
+reads it as an instruction. Merging the two would put user-writable data into the
+file a privileged process obeys, which is exactly the channel the four
+preconditions below exist to close.
+
+The two therefore live in different trees — `~/Library` against `/Library` — and
+not merely under different names, because precondition 1 checks every component of
+the path.
+
+**Binding requirement for M5 and M6.** The root helper reads
+`FileJournalStore.systemURL` and nothing else. It must never be pointed at
+`FileDemotionJournalStore.userURL`.
+`Tests/CoffeeBarPowerTests/DemotionJournal_test.swift`,
+`theDemotionJournalIsNowhereNearTheFileARootProcessReads`, holds the two apart.
+
 ## M5 security precondition — the journal is an instruction to a root process
 
 Found during M0 Task 5 (2026-07-27), recorded before M5 inherited it, and

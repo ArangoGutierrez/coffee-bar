@@ -143,8 +143,8 @@ not in it is not available.
 | Prevent disk idle | `kIOPMAssertPreventDiskIdle` | user | Rarely needed on SSD-only hardware; skip. |
 | Prevent lid-close sleep | `pmset -a disablesleep 1` (`SleepDisabled`) | **root** | Global, persistent, undocumented. Probe first (S1). |
 | Force display off | `pmset displaysleepnow`, or `IOPMAssertionDeclareUserActivity` inverse / `IODisplayWrangler` idle | user | Required alongside `disablesleep`. Verify in S2. |
-| Demote a process to E-cores | `setpriority(PRIO_DARWIN_BG, pid, 0)` / `taskpolicy -b -p` | user (same uid) — verify | Brake only. Inherited by children. |
-| Undo demotion | `taskpolicy -B -p` | user — verify | Only works on processes that were demoted, not ones born background. |
+| Demote a process to E-cores | `setpriority(PRIO_DARWIN_PROCESS, pid, PRIO_DARWIN_BG)` / `/usr/sbin/taskpolicy -b -p` | user (same uid) — **verified**, S5 | Brake only. Inherited by children. |
+| Undo demotion | `setpriority(PRIO_DARWIN_PROCESS, pid, 0)` / `/usr/sbin/taskpolicy -B -p` | user — **verified**, S5 | Clears only the EXTERNAL channel. A process that backgrounded ITSELF keeps that state — measured. |
 | Promote a process | — | — | **Does not exist.** (Oakley-2022) |
 | Suspend a process | `kill(pid, SIGSTOP)` / `SIGCONT` | user (same uid) | Aggressive tier only. Risks dropped websockets, TLS session death. |
 | Disable App Nap for another app | `defaults write <bundle-id> NSAppSleepDisabled -bool YES` | user | Requires app restart. Offer as a suggestion, do not apply silently. |
@@ -491,16 +491,120 @@ decision), never exit non-zero. A hook that hangs holds up the agent.
 
 ### 5.6 ProcGovernor
 
-- Demote: `setpriority(PRIO_DARWIN_BG, pid, 0)` on same-uid pids; shell out to
-  `/usr/bin/taskpolicy -b -p <pid>` only if the direct syscall path proves insufficient (S5).
-- Restore: `taskpolicy -B -p <pid>`, but **only for pids this app demoted** — track them in the
-  journal. `-B` on a process that was born background is a no-op, and promoting something the
-  system deliberately backgrounded is out of scope.
-- Never touch: anything in `protected`, anything in `agents`, uid ≠ current uid, `pid < 100`,
-  `WindowServer`, `loginwindow`, `coreaudiod`, `avconferenced`, the frontmost application, or
-  any process with an active audio or camera assertion.
-- Restore-on-exit is mandatory, including on `SIGTERM`. Demotion also naturally dies with the
-  process, which limits the blast radius — say so in the docs.
+**Built in issue #14.** `Sources/CoffeeBarPower/ProcGovernor.swift` and the three types
+around it. This section describes what exists; the sketch it replaces got the
+`setpriority` argument order wrong in three places.
+
+`ProcGovernor` is the first thing in this repository that touches a pid it does not own.
+`DemotionProbe` moves `getpid()` and nothing else, which is what makes it safe under a
+crash for free: the state lives on the task that dies.
+
+#### The two sets
+
+The rule is one sentence, and `DemotionPolicy` is the only place it is written:
+
+> A process may be demoted if and only if the user named it in the **demotable** set AND no
+> deny rule matches it. The deny set wins over the demotable set in every case, including
+> when a process is in both.
+
+**Demotable — configurable, and empty by default.** `SettingsKey.demotableProcessNames`,
+a list of process names under `UserDefaults`. Names are matched EXACTLY against the name
+the kernel reports, never as a prefix or a substring: this list decides what MAY be
+demoted, so a loose match widens the blast radius. An absent key reads as EMPTY and not as
+"no restriction" — §2.3 makes the set opt-in only.
+
+**Protected — a deny list nothing can override.** Nine rules, each reported under its own
+`DemotionRefusal` case:
+
+| Rule | Refuses |
+|---|---|
+| `systemProcess` | `pid < 100`. Stricter than "0 and 1", and implies it. |
+| `foreignUID` | another user's process |
+| `coffeeBarItself` | coffee-bar's own pid |
+| `ownProcessGroup` | anything in coffee-bar's process group |
+| `ancestor` | coffee-bar's parent chain — the user's shell and terminal session |
+| `protectedName` | `DemotionPolicy.alwaysProtectedNames`, compiled in and not configurable |
+| `trackedAgent` | an agent tool coffee-bar is tracking |
+| `frontmostApplication` | the application the user is looking at |
+| `notInDemotableSet` | everything else. The default answer. |
+
+Ancestors are a WALK of the parent chain, not a list of shell names: the user's shell may
+be any binary. `alwaysProtectedNames` is compiled in because a protected list behind a
+preference fails open — an empty or unreadable value would disable the protection.
+
+Two limits worth knowing. `proc_pidinfo(PROC_PIDTBSDINFO)` is privileged and answers
+`EPERM` for another user's process, so the deny rules read `PROC_PIDT_SHORTBSDINFO`, which
+answers for every process. That record carries only 15 characters of the name, so every
+entry in `alwaysProtectedNames` fits inside 15 — a longer one would silently fail to match
+the foreign-uid processes the list exists to protect.
+
+The audio and camera assertion rule from the earlier sketch is **not built**. It needs a
+source for those assertions that this package does not have yet.
+
+#### Recovery is a journal a later run reads back
+
+**DECIDED 2026-08-05, over a recommendation panel HARD-DISSENT.** There is no supervisor
+process. The reason is that a supervisor is a second process to install, keep running and
+keep in step — **not** privilege. A supervisor would not have needed root, and an earlier
+claim that it would was wrong and was withdrawn.
+
+`demote(pid)` runs a fixed sequence, and the order is the requirement:
+
+1. Read the process's current state, so the restore target is measured and not assumed.
+2. Refuse unless the policy allows it.
+3. Refuse if the kernel will not say WHICH process it is.
+4. Append the entry to the journal and `F_FULLFSYNC` it.
+5. **Only then** call `setpriority`.
+
+Steps 4 and 5 are in that order because a journal written afterwards is defeated by a
+`SIGKILL` in the window between the two calls: the process is demoted, nothing on disk
+names it, and no later run can undo it. This is the same ordering rule the sleep watchdog
+follows (§8.2(1)).
+
+`recover()` restores an entry only when **all four** of these hold. Each is a separate way
+of promoting a process nobody asked to promote:
+
+1. The journal names it. Nothing else is touched.
+2. It is still alive.
+3. It is still the SAME process. A pid is not an identity, because macOS reuses pids, so
+   the journal carries the process start time as well.
+4. This app set the bit. A process that already carried `EXT_DARWINBG` was put there by
+   some other tool, and clearing it now is the `-B` promotion hazard.
+
+#### The journal is a SECOND file, for a security reason
+
+`~/Library/Application Support/coffee-bar/state/demotion-journal.json`, directory 0700 and
+file 0600. **Never** the sleep journal. That file is root-owned, and under M5 a root
+process reads it and acts on it; `SECURITY.md` calls it "an instruction to a root process"
+and binds four preconditions to it. Process demotion is unprivileged and same-uid, so its
+journal is user-owned. Putting user-writable data into the file a root process obeys would
+build exactly the instruction channel those preconditions exist to close.
+
+The two live in different trees — `~/Library` against `/Library` — and not merely under
+different names, because precondition 1 checks every component of the path.
+
+#### The exposure this leaves
+
+A crash leaves every demoted process demoted **until coffee-bar next starts**. Nothing
+undoes it in between, and for a long-lived process such as a browser that can mean days.
+It is bounded by construction, because darwin background state is a process attribute: it
+dies with the process and never survives a reboot. It is **not solved**. See
+`docs/ACCEPTED-RISKS.md`.
+
+#### Two independent channels
+
+Measured on macOS 26.5.2 (25F84), 2026-08-05, through `proc_pidinfo`:
+
+| state | flags |
+|---|---|
+| untouched | `0x1404010` |
+| after a SELF demote | `0x140c010` — sets `0x8000` |
+| after an EXTERNAL demote | `0x1014010` — sets `0x10000`, clears the donor bit |
+
+An external restore clears only the EXTERNAL bit: a process that backgrounded itself keeps
+`0x8000` through `setpriority(PRIO_DARWIN_PROCESS, pid, 0)` from outside. `getpriority`
+reports only the SELF channel and is blind to the other — never use it to ask about
+another process.
 
 ---
 
@@ -668,7 +772,7 @@ The architecture branches on these. Each is a small standalone binary; results g
   additional entitlement.
 - **S4 — Cursor CLI hooks.** Do `~/.cursor/hooks.json` handlers fire for the CLI agent, or only
   the IDE? Determines whether Cursor CLI is supported or explicitly out of scope.
-- **S5 — Demotion privilege.** Does `setpriority(PRIO_DARWIN_BG)` / `taskpolicy -b -p` succeed
+- **S5 — Demotion privilege.** Does `setpriority(PRIO_DARWIN_PROCESS, pid, PRIO_DARWIN_BG)` / `/usr/sbin/taskpolicy -b -p` succeed
   on a same-uid, hardened-runtime, notarised third-party app (e.g. Slack) without root?
 - **S6 — Battery measurement harness.** Reproducible protocol for measuring drain: fixed agent
   workload, fixed brightness, airplane-mode control, `ioreg -rn AppleSmartBattery` sampling.

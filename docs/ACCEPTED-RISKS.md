@@ -21,6 +21,34 @@ rationale. `Tests/CoffeeBarUITests/ServingModelIngest_test.swift:395`,
 **Reopen when.** The panel gains room to separate "why your click did nothing"
 from "why the machine is not held right now".
 
+## A crash leaves demoted processes demoted until the next start (issue #14)
+
+**Behaviour.** `ProcGovernor` demotes processes coffee-bar does not own. A demotion applied
+to a foreign process is state on THAT process, so it outlives whatever applied it. If
+coffee-bar is `SIGKILL`ed, no cleanup of any kind runs, and every process it had demoted
+stays demoted until coffee-bar next starts and reads its journal back. For a long-lived
+process such as a browser that can mean days.
+
+**Why accepted.** Recovery is a journal a later run reads back, decided on 2026-08-05 over
+a recommendation panel HARD-DISSENT. The alternative was a supervising process that
+outlives the app. That is a second process to install, keep running and keep in step, which
+is a larger permanent cost than the window it closes. It is **not** a privilege question: a
+supervisor would not have needed root, and an earlier claim that it would was wrong and was
+withdrawn.
+
+The exposure is bounded by construction. Darwin background state is a process attribute, so
+it dies with the process and never survives a reboot. "Bounded" can still mean days, and
+nothing here treats this as solved.
+
+**Guard.** `Tests/CoffeeBarPowerTests/ProcGovernorCrashRecovery_test.swift`,
+`aDemotionOutlivesTheSIGKILLedDemoterAndALaterRunUndoesIt`, runs the whole thing: a real
+victim, a real second process running the real governor, a real `SIGKILL`, `proc_pidinfo`
+proving the victim is still demoted, then a later run clearing the bit.
+`Tests/CoffeeBarPowerTests/DemotionCrashPath_test.swift` records the underlying hazard.
+
+**Reopen when.** coffee-bar demotes processes by default rather than by opt-in, or a user
+reports a process that stayed slow after a crash.
+
 ## Staleness is measured on a wall clock (audit id20)
 
 **Behaviour.** `StalePolicy` subtracts wall-clock values. After a backward clock
