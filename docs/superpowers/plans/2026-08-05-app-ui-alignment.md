@@ -348,6 +348,74 @@ hexes, and the tests assert the ratio it must reach."
 
 Read `Sources/CoffeeBarUI/PanelView.swift` in full. The `.orange` advisory lines are at 193, 215 and 231. **They do not change.** Orange means attention, and only attention.
 
+The panel has **three** segmented pickers, not two: Serving (110), Display (137) and Battery floor (159).
+
+- [ ] **Step 1b: Write the failing guard test**
+
+M1 design §5.4 rules out asserting on rendered AppKit text, so nothing can read what the panel DRAWS. This reads what it SAYS to draw. The repo already uses that shape in `AppLayerBoundary_test.swift` and `DocsClaims_test.swift`.
+
+Create `Tests/CoffeeBarUITests/PanelPaletteWiring_test.swift`:
+
+```swift
+// Copyright 2026 Carlos Eduardo Arango Gutierrez
+// SPDX-License-Identifier: Apache-2.0
+
+import Foundation
+import Testing
+
+/// Reads `PanelView.swift` as text. `#filePath` anchors the lookup to THIS
+/// source file, never to an installed or deployed copy, so the guard cannot
+/// green-light a different tree than the one under test.
+private func panelSource() throws -> String {
+    let root = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()   // CoffeeBarUITests
+        .deletingLastPathComponent()   // Tests
+        .deletingLastPathComponent()   // repo root
+    return try String(
+        contentsOf: root.appendingPathComponent("Sources/CoffeeBarUI/PanelView.swift"),
+        encoding: .utf8)
+}
+
+@Test("the panel tints from the model, never from a literal")
+func panelTintsFromTheModel() throws {
+    let source = try panelSource()
+    #expect(source.contains(".tint(brand(.state))"),
+            "the panel must take its tint from BrandPalette via brand(.state)")
+
+    // The bug this catches: someone hardcodes a hex in the view, where no test
+    // can read it. That is the exact failure BrandPalette exists to prevent.
+    let hexLiteral = try Regex("#[0-9A-Fa-f]{6}")
+    #expect(source.firstMatch(of: hexLiteral) == nil,
+            "PanelView must contain no colour literal; values live in BrandPalette")
+}
+
+@Test("the indicator comes from the model, not from a symbol name typed here")
+func indicatorComesFromTheModel() throws {
+    let source = try panelSource()
+    #expect(source.contains("ServingModel.indicator("),
+            "the indicator must come from ServingModel.indicator(isServing:)")
+}
+
+@Test("orange is spent on exactly the three advisory lines")
+func orangeIsSpentOnlyOnTheAdvisories() throws {
+    let source = try panelSource()
+    let occurrences = source.components(separatedBy: ".foregroundStyle(.orange)").count - 1
+
+    // A COUNT, not a presence check. A guard reads what a file says and cannot
+    // see what it omits, so presence alone would stay green if a fourth orange
+    // element appeared or an advisory silently lost its colour. This panel has
+    // already shipped one undocumented control; the count is what catches the
+    // next one.
+    #expect(occurrences == 3,
+            "expected 3 orange advisory lines, found \(occurrences)")
+}
+```
+
+- [ ] **Step 1c: Run it and watch it fail**
+
+Run: `swift test --filter PanelPaletteWiring`
+Expected: FAIL on `panelTintsFromTheModel` — `.tint(brand(.state))` does not exist yet. `orangeIsSpentOnlyOnTheAdvisories` should already PASS at 3; that is the pre-existing state it pins.
+
 - [ ] **Step 2: Add the environment readers**
 
 Inside `public struct PanelView: View`, directly after `@Bindable var model: ServingModel`, add:
@@ -389,7 +457,9 @@ Replace the `Text(model.servingSummary)` block (it currently carries `.font(.cap
 
 - [ ] **Step 4: Tint the controls**
 
-On the outermost `VStack`, directly after `.frame(width: 260)`, add:
+On the outermost `VStack`, directly after `.frame(width: 260)`, add. This
+reaches all three pickers, the Quit button and `AttentionListView` — that is
+intended, not a side effect:
 
 ```swift
         // `state` colours the held segments, which is exactly what a selected
@@ -416,7 +486,7 @@ open build/CoffeeBar.app
 ```
 
 Open the panel from the menu bar. Confirm by eye:
-1. the selected segment of both pickers is roast, not blue;
+1. the selected segment of all THREE pickers (Serving, Display, Battery floor) is roast, not blue;
 2. the cup beside the summary is filled and roast while holding;
 3. it becomes a grey outline after choosing `Off`;
 4. any advisory line is still orange.
@@ -426,7 +496,7 @@ Screenshot the open panel. Check the file is larger than 10 kB before reading it
 - [ ] **Step 8: Commit**
 
 ```bash
-git add Sources/CoffeeBarUI/PanelView.swift
+git add Sources/CoffeeBarUI/PanelView.swift Tests/CoffeeBarUITests/PanelPaletteWiring_test.swift
 git commit -s -S -m "feat(ui): tint the panel with the brand state colour
 
 The selected segment of a picker is a held segment, so state is the

@@ -197,8 +197,9 @@ against the panel's real background and record the result in the task report.
 
 Changes to `Sources/CoffeeBarUI/PanelView.swift`:
 
-1. Apply `.tint(BrandPalette.color(.state, …))` to the panel content. Both
-   `Picker`s and the Quit `Button` follow it.
+1. Apply `.tint(BrandPalette.color(.state, …))` to the panel content. All
+   three `Picker`s — Serving, Display and Battery floor — and the Quit
+   `Button` follow it.
 2. Put the indicator on the `servingSummary` line. Holding shows
    `cup.and.saucer.fill` in `state`. Released shows `cup.and.saucer` in `rest`.
    Both symbols already appear at line 25 as the `MenuBarLabel` fallback, so the
