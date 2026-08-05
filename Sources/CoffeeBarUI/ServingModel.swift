@@ -132,7 +132,31 @@ public final class ServingModel {
     /// apart deliberately. This one sees the user's settings and cannot see
     /// this process; that one sees this process and cannot see the settings.
     /// Merged into one claim, a wired settings file would hide a dead socket.
-    public private(set) var hookHealth: HookHealthStatus = .unreadable
+    ///
+    /// DERIVED from `hookHealths`, never stored beside it. A second stored
+    /// property fed by a second read would agree with the collection until it
+    /// did not, the panel would render one while every existing check drove the
+    /// other, and nothing could see the disagreement —
+    /// `theClaudeCodeHealthTheModelPublishesIsTheOneInTheCollection` refuses it.
+    ///
+    /// `.unreadable` covers both "not read yet" and "no such file". Neither is
+    /// evidence that the entries are gone, which is exactly what `.unreadable`
+    /// means everywhere else in this type.
+    public var hookHealth: HookHealthStatus {
+        hookHealths[.claudeCode] ?? .unreadable
+    }
+
+    /// Every agent tool whose hook file is on this machine, with what that file
+    /// says about coffee-bar's entries.
+    ///
+    /// A tool is ABSENT from this map when its hook file is not on disk, and
+    /// that is the claim the panel needs: an absent file means the user does not
+    /// run that tool, so a Claude-Code-only user is never told to wire Cursor.
+    ///
+    /// Empty until the first `refresh()`. Nothing renders it before then —
+    /// `PanelView.onAppear` calls `refresh()`, and the menu-bar label reads
+    /// `isServing` only.
+    public private(set) var hookHealths: [AgentTool: HookHealthStatus] = [:]
 
     /// Whether this process is serving the ingest socket RIGHT NOW.
     ///
@@ -176,31 +200,58 @@ public final class ServingModel {
     /// be there. That is how a shared settings file gets clobbered, which is
     /// the pattern design §6 exists to avoid.
     ///
-    /// `HookHealth.status(ofSettings:)` never returns `.missing([])`: it reports
-    /// `.wired` when nothing is missing. So the list below is never empty.
+    /// `HookHealth.status(of:for:)` never returns `.missing([])`: it reports
+    /// `.wired` when nothing is missing. So no list below is ever empty.
+    ///
+    /// **One line per tool, in `AgentTool.allCases` order.** A property that
+    /// returned only the first finding would drop two-thirds of the advice for a
+    /// user who runs all three, and `PanelView` renders this verbatim so no
+    /// check could see it happen. The order is fixed because a dictionary has
+    /// none, and an order that reshuffled between refreshes would rewrite the
+    /// panel every 30 seconds under a user trying to read it.
     public var hookAdvisory: String? {
-        switch hookHealth {
+        let lines = AgentTool.allCases.compactMap { tool in
+            hookHealths[tool].flatMap { Self.advisory(for: tool, status: $0) }
+        }
+        return lines.isEmpty ? nil : lines.joined(separator: "\n\n")
+    }
+
+    /// The line for ONE tool, or `nil` when that tool has nothing to report.
+    ///
+    /// It names the file it read, and it names that tool's OWN file: a Cursor
+    /// user is sent to `~/.cursor/hooks.json`, never to `~/.claude/settings.json`.
+    /// The path is the tool's canonical location rather than the URL the reader
+    /// was handed, because that is the file every shipping configuration reads —
+    /// an injected fixture path would name a file inside this repository.
+    static func advisory(for tool: AgentTool, status: HookHealthStatus) -> String? {
+        let file = "~/" + HookHealth.settingsPath(for: tool)
+
+        switch status {
         case .wired:
             return nil
         case .missing(let events):
-            // Names the FILE, and claims nothing about events arriving. Claude
-            // Code merges hooks from ~/.claude/settings.json, a project's
-            // .claude/settings.json and settings.local.json; this reader sees
-            // only the first. Measured while writing this: the hooks actually
-            // capturing events on the maintainer's machine were in the PROJECT
-            // file, so "Not receiving …" was false there while 311 events had
-            // flowed — and it sent the user to hand-edit the one file this
-            // design deliberately never writes.
-            return """
-                No coffee-bar hooks for \(events.joined(separator: ", ")) in \
-                ~/.claude/settings.json. If yours are in a project's \
-                .claude/settings.json, ingest may still be working.
-                """
+            // Names the FILE, and claims nothing about events arriving.
+            let opening = "No coffee-bar hooks for \(events.joined(separator: ", ")) in \(file)."
+            // The merge sentence is CLAUDE CODE ONLY, and that is a measurement
+            // rather than a preference. Claude Code merges hooks from
+            // ~/.claude/settings.json, a project's .claude/settings.json and
+            // settings.local.json; this reader sees only the first. Measured
+            // while writing this: the hooks actually capturing events on the
+            // maintainer's machine were in the PROJECT file, so "Not receiving …"
+            // was false there while 311 events had flowed — and it sent the user
+            // to hand-edit the one file this design deliberately never writes.
+            //
+            // NOTHING equivalent was measured for Codex or for Cursor, so
+            // repeating the sentence for them would invent a claim, in the one
+            // place this product promises to tell the truth.
+            // `onlyTheClaudeCodeLineMentionsAProjectSettingsFile` holds both
+            // halves.
+            guard tool == .claudeCode else { return opening }
+            return opening + " If yours are in a project's .claude/settings.json, "
+                 + "ingest may still be working."
         case .unreadable:
-            return """
-                Cannot read ~/.claude/settings.json, so coffee-bar cannot confirm its \
-                hooks are installed. Agent sessions may not arrive.
-                """
+            return "Cannot read \(file), so coffee-bar cannot confirm its "
+                 + "hooks are installed. Agent sessions may not arrive."
         }
     }
 
@@ -633,8 +684,10 @@ public final class ServingModel {
 
         reading = reader.read()
         // Re-read every time, not once in `init`. The user's recovery path is
-        // to paste the snippet back, and this app runs for days.
-        hookHealth = health.status()
+        // to paste the snippet back, and this app runs for days. It re-reads
+        // every TOOL's file for the same reason, and because a user who
+        // installs Cursor while the app runs must not wait for a relaunch.
+        hookHealths = health.statuses()
         // ASKED, not remembered. The bind is asynchronous, so a `start()` that
         // returned cleanly is not proof the socket is serving, and `stop()`
         // takes it away again.
