@@ -26,8 +26,29 @@ import Darwin
 /// per-user folder, which is owned by the running user, and NONE is group- or
 /// other-writable. That is what lets `requiredOwner: getuid()` exercise the
 /// passing path without a root-owned fixture.
+/// `realpath(3)`, called directly.
+///
+/// NOT `URL.resolvingSymlinksInPath()`, which is measured to be the wrong tool
+/// here: on macOS it special-cases `/private` by REMOVING that prefix, so
+/// `/var/folders/…` comes back unchanged rather than as
+/// `/private/var/folders/…`. Measured — `root.path` 78 characters,
+/// `realpath` 86, equal == false.
+///
+/// The system call is deliberately the oracle. Deriving the expected path from
+/// `PathSecurity.canonical` would test that function against itself.
+private func resolved(_ path: String) throws -> String {
+    let buffer = try #require(realpath(path, nil), "realpath failed for \(path)")
+    defer { free(buffer) }
+    return String(cString: buffer)
+}
+
 private func makeScratchRoot() throws -> URL {
-    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+    // Resolved BEFORE the path is built. The guard reports the RESOLVED
+    // component it actually inspected — as it must, since checking one name and
+    // then trusting another is the substitution `PathSecurity.canonical` exists
+    // to prevent. Comparing against the unresolved form would fail for a reason
+    // that says nothing about the code.
+    let root = URL(fileURLWithPath: try resolved(NSTemporaryDirectory()))
         .appending(path: "coffee-bar-journal-guard-\(UUID().uuidString)")
     try FileManager.default.createDirectory(
         at: root, withIntermediateDirectories: true,
