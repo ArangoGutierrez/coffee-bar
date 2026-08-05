@@ -184,8 +184,8 @@ not in it is not available.
          ▼                              ▼
 ┌────────────────────────┐   ┌────────────────────────────────────┐
 │ com.coffeebar.helper   │   │ ~/.claude/settings.json (http hook)│
-│ launchd daemon, root   │   │ ~/.codex/config.toml   ([[hooks]]) │
-│  · SleepDisabled       │   │ ~/.cursor/hooks.json               │
+│ launchd daemon, root   │   │ ~/.codex/hooks.json      (command) │
+│  · SleepDisabled       │   │ ~/.cursor/hooks.json     (command) │
 │  · mdutil / tmutil     │   └────────────────────────────────────┘
 │  · watchdog + TTL      │
 └────────────────────────┘
@@ -381,37 +381,61 @@ Optional stretch: distribute the whole integration as a **Claude Code plugin** w
 
 #### Codex CLI — command hooks + legacy `notify`
 
-Codex's hook engine reached stable in v0.124.0 (2026-04-23) and is configurable inline in
-`config.toml` as `[[hooks]]` with `event` and `command`
-(developers.openai.com/codex/config-reference; `blakecrosley.com/guides/codex`). Documented
-events: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`,
+Codex's hook engine reached stable in v0.124.0 (2026-04-23). Documented events:
+`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`,
 `PreCompact`, `PostCompact`, `SubagentStart`, `SubagentStop`, `Stop`. **Command handlers only** —
 no HTTP type — so the `coffeebar-hook` shim is required here.
+
+**Corrected 2026-08-05, by measurement against codex-cli 0.146.0.** Everything this section
+used to say about TOML hook tables was wrong, and it was wrong in the expensive direction:
+believing it is why `HookHealth` shipped with no Codex reader at all for two milestones, and
+why the panel handed a Codex user a Claude Code advisory.
+
+Hooks live in **`~/.codex/hooks.json`**, and that file is JSON in **Claude Code's exact
+nesting** — `hooks.<Event>[].matcher` beside `.hooks[].command`, with PascalCase event names.
+So `HookHealth` parses Codex and Claude Code with one reader, and this project needs no TOML
+parser and no dependency to get one.
+
+```json
+// ~/.codex/hooks.json
+{
+  "hooks": {
+    "SessionStart": [
+      {"hooks": [{"type": "command",
+                  "command": "/usr/local/bin/coffeebar-hook --tool=codex",
+                  "timeout": 2}]}
+    ],
+    "PreToolUse": [
+      {"matcher": "Bash|apply_patch|Edit|Write",
+       "hooks": [{"type": "command",
+                  "command": "/usr/local/bin/coffeebar-hook --tool=codex",
+                  "timeout": 2}]}
+    ],
+    "Stop": [
+      {"hooks": [{"type": "command",
+                  "command": "/usr/local/bin/coffeebar-hook --tool=codex",
+                  "timeout": 2}]}
+    ]
+  }
+}
+```
+
+`~/.codex/config.toml` still matters, but it holds no hook definitions. It carries the feature
+gate and a `[hooks.state]` table of trust hashes — and every one of those hash keys points AT
+`~/.codex/hooks.json`, which is the measurement that settles the question.
+
+The legacy `notify` key stays a `config.toml` root key:
 
 ```toml
 # ~/.codex/config.toml — root keys must precede any table
 notify = ["/usr/local/bin/coffeebar-hook", "--tool=codex", "--legacy-notify"]
-
-[[hooks]]
-event   = "SessionStart"
-command = ["/usr/local/bin/coffeebar-hook", "--tool=codex"]
-timeout = 2000
-
-[[hooks]]
-event   = "PermissionRequest"
-command = ["/usr/local/bin/coffeebar-hook", "--tool=codex"]
-timeout = 2000
-
-[[hooks]]
-event   = "Stop"
-command = ["/usr/local/bin/coffeebar-hook", "--tool=codex"]
-timeout = 2000
 ```
 
 Notes that will cost time if missed:
-- Some Codex builds gate the engine behind `[features] codex_hooks = true`; without it hooks
-  are silent no-ops (`agenticcontrolplane.com/blog/codex-cli-hooks-reference`, 2026-05).
-  Detect and prompt rather than writing the flag silently.
+- The engine is gated behind a `[features]` flag, and the key is **`hooks = true`**. Measured
+  on 0.146.0. A longer `codex_`-prefixed spelling of that key is still in circulation in
+  third-party write-ups and is wrong for this build. Without the flag hooks are silent
+  no-ops. Detect and prompt rather than writing the flag silently.
 - `notify` is **ignored in project-local `.codex/config.toml`** and only honoured at user
   scope. Write to `~/.codex/config.toml` only.
 - Legacy `notify` passes its JSON as **argv[1], not stdin**, and fires only on

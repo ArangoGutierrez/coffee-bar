@@ -215,8 +215,11 @@ func theSettingsFixturesForEachToolAreOnDisk(
     // flat one, "to be safe". Cursor never reads an inner `hooks` array, so a
     // file written that way is wired for nothing — and reporting it healthy is
     // the silent failure design §6 exists to remove.
+    // `\#` and not `\`: inside a raw `#"""` string a bare backslash is LITERAL,
+    // so it lands in the JSON and every one of these fixtures parses as
+    // `.unreadable` — which passes `status != .wired` while measuring nothing.
     let nested = Data(#"""
-        {"hooks": {"sessionStart": [{"hooks": [{"type": "command", \
+        {"hooks": {"sessionStart": [{"hooks": [{"type": "command", \#
         "command": "/usr/local/bin/coffeebar-hook --tool=cursor"}]}]}}
         """#.utf8)
 
@@ -264,11 +267,11 @@ func theSettingsFixturesForEachToolAreOnDisk(
     // Both routes reach `.wired` through the SAME event, so the pair is what is
     // measured and not the marker list restated.
     let viaShim = Data(#"""
-        {"hooks": {"Stop": [{"hooks": [{"type": "command", \
+        {"hooks": {"Stop": [{"hooks": [{"type": "command", \#
         "command": "/usr/local/bin/coffeebar-hook --tool=claudeCode"}]}]}}
         """#.utf8)
     let viaSocket = Data(#"""
-        {"hooks": {"Stop": [{"hooks": [{"type": "command", \
+        {"hooks": {"Stop": [{"hooks": [{"type": "command", \#
         "command": "curl -sS --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/ingest"}]}]}}
         """#.utf8)
 
@@ -375,4 +378,100 @@ func theClaudeCodeVerdictIsTheSameThroughBothEntryPoints(_ name: String) throws 
     let paths = AgentTool.allCases.map { HookHealth.settingsPath(for: $0) }
     #expect(Set(paths).count == AgentTool.allCases.count,
             "two tools share one hook file: \(paths)")
+}
+
+/// No source or document still says Codex keeps its hooks in `config.toml`.
+///
+/// **A failure seen twice ships an executable check, not a note.** This claim
+/// reached `origin/main` in three places at once — a `HookHealth` doc comment, a
+/// HANDOFF architecture diagram and a HANDOFF section with worked `[[hooks]]`
+/// TOML — and it was the reason no Codex reader was written for two milestones.
+/// A one-time grep proves today; this goes red when the claim comes back.
+///
+/// It hunts the CLAIM, not the filename. `TelemetryRecon` reads
+/// `~/.codex/config.toml` for `[otel]`, design §15.4 and the roadmap both
+/// describe that correctly, and this file's own correction says the file "holds
+/// no hook definitions". Banning the filename would be red on all four, and a
+/// guard that is red on correct code gets deleted rather than obeyed.
+///
+/// So each pattern below is a fingerprint of the false claim itself:
+///
+///   - `[[hooks]]` — the TOML array-of-tables syntax. codex-cli 0.146.0 has no
+///     such table; it only ever appeared in the worked example that was wrong.
+///   - `codex_hooks` — the feature key that does not exist. The real gate is
+///     `[features] hooks = true`.
+///   - a sentence PLACING the hooks in that file — the shipped `HookHealth`
+///     comment carried neither token above, so without this the worst of the
+///     three claims could come back unnoticed.
+///
+/// **LIMIT, stated rather than hidden: the third pattern reads ONE LINE at a
+/// time.** A future claim split so that "keeps its hooks" and `config.toml`
+/// land on different lines walks past it. That is a deliberate trade and not an
+/// oversight: widening the window to two lines turns this red on the correction
+/// in `HookHealth.settingsPath(for:)`, which quotes the old sentence in order to
+/// refute it. A guard that is red on correct code gets deleted rather than
+/// obeyed, so the narrower check is the one that survives to catch anything.
+///
+/// The shipped claim DID sit on one line, and `M8` in the mutation record proves
+/// this goes red when that exact sentence is restored.
+@Test func noSourceOrDocumentStillPutsTheCodexHooksInConfigToml() throws {
+    let root = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()    // …/Tests/CoffeeBarCoreTests
+        .deletingLastPathComponent()    // …/Tests
+        .deletingLastPathComponent()    // repo root
+
+    /// True when one line asserts that Codex's hooks LIVE in `config.toml`.
+    func placesTheHooksInTheTomlFile(_ line: String) -> Bool {
+        let lowered = line.lowercased()
+        guard lowered.contains("config.toml") else { return false }
+        return ["hooks in", "hooks live in", "hooks are in", "hooks are configured in",
+                "keeps its hooks", "hook file", "hooks file"]
+            .contains { lowered.contains($0) }
+    }
+
+    // `docs/superpowers/` is deliberately out of scope: those are the dated
+    // plans and specs this work was done FROM, and rewriting the record of what
+    // was believed in July would destroy the evidence trail rather than correct
+    // a claim anybody reads today.
+    var scanned: [String] = []
+    var offenders: [String] = []
+    for directory in ["Sources", "docs"] {
+        let base = root.appending(path: directory)
+        let walker = try #require(FileManager.default.enumerator(atPath: base.path),
+                                  "cannot walk \(base.path); this guard scans nothing")
+        for case let relative as String in walker {
+            guard relative.hasSuffix(".swift") || relative.hasSuffix(".md") else { continue }
+            guard !relative.hasPrefix("superpowers/") else { continue }
+            guard let text = try? String(contentsOf: base.appending(path: relative),
+                                         encoding: .utf8) else { continue }
+            scanned.append("\(directory)/\(relative)")
+
+            for (number, line) in text.split(separator: "\n", omittingEmptySubsequences: false)
+                                      .enumerated() {
+                let body = String(line)
+                guard body.contains("[[hooks]]")
+                        || body.contains("codex_hooks")
+                        || placesTheHooksInTheTomlFile(body)
+                else { continue }
+                offenders.append("\(directory)/\(relative):\(number + 1): "
+                                 + body.trimmingCharacters(in: .whitespaces))
+            }
+        }
+    }
+
+    // A walk that reached nothing finds no offender and reads as success. Anchor
+    // on the two files the claim lived in.
+    #expect(scanned.contains("Sources/CoffeeBarCore/HookHealth.swift"),
+            "the scan never reached HookHealth.swift; it read \(scanned.count) file(s)")
+    #expect(scanned.contains("docs/coffee-bar-HANDOFF.md"),
+            "the scan never reached the handoff; it read \(scanned.count) file(s)")
+
+    #expect(offenders.isEmpty, """
+        \(offenders.count) line(s) still tie Codex's hooks to config.toml:
+        \(offenders.joined(separator: "\n"))
+        Measured on codex-cli 0.146.0: the hooks live in ~/.codex/hooks.json, in \
+        Claude Code's exact JSON nesting. config.toml carries a `[features] \
+        hooks = true` gate and a `[hooks.state]` table of trust hashes whose keys \
+        point AT hooks.json. This package parses no TOML.
+        """)
 }
