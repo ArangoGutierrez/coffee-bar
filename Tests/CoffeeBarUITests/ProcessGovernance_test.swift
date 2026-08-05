@@ -165,7 +165,7 @@ private func slackRunning(frontmost: pid_t? = nil) -> Fixture {
 
         let decision = fixture.governance.reconcile(
             onBattery: true,
-            workingAgentPIDs: [777],
+            workingAgentCount: 1,
             protectedAgentPIDs: [777],
             demotableNames: ["Slack"],
             quietEverythingElse: true)
@@ -192,7 +192,7 @@ private func slackRunning(frontmost: pid_t? = nil) -> Fixture {
 
         let decision = fixture.governance.reconcile(
             onBattery: false,
-            workingAgentPIDs: [777],
+            workingAgentCount: 1,
             protectedAgentPIDs: [777],
             demotableNames: ["Slack"],
             quietEverythingElse: true)
@@ -211,7 +211,7 @@ private func slackRunning(frontmost: pid_t? = nil) -> Fixture {
 
         let decision = fixture.governance.reconcile(
             onBattery: true,
-            workingAgentPIDs: [],
+            workingAgentCount: 0,
             protectedAgentPIDs: [],
             demotableNames: ["Slack"],
             quietEverythingElse: true)
@@ -235,7 +235,7 @@ private func slackRunning(frontmost: pid_t? = nil) -> Fixture {
 
         let decision = fixture.governance.reconcile(
             onBattery: true,
-            workingAgentPIDs: [777],
+            workingAgentCount: 1,
             protectedAgentPIDs: [777],
             demotableNames: [],
             quietEverythingElse: true)
@@ -258,7 +258,7 @@ private func slackRunning(frontmost: pid_t? = nil) -> Fixture {
 
         let decision = fixture.governance.reconcile(
             onBattery: true,
-            workingAgentPIDs: [777],
+            workingAgentCount: 1,
             protectedAgentPIDs: [777],
             demotableNames: ["Slack"],
             quietEverythingElse: false)
@@ -284,7 +284,7 @@ private func slackRunning(frontmost: pid_t? = nil) -> Fixture {
         defer { kernelName.removeJournal() }
 
         #expect(kernelName.governance.reconcile(
-            onBattery: true, workingAgentPIDs: [777], protectedAgentPIDs: [777],
+            onBattery: true, workingAgentCount: 1, protectedAgentPIDs: [777],
             demotableNames: ["Code"], quietEverythingElse: true) == .quiet)
         #expect(kernelName.kernel.demoted == [slackPID],
                 "the kernel's own name for the process did not match the set")
@@ -293,7 +293,7 @@ private func slackRunning(frontmost: pid_t? = nil) -> Fixture {
         defer { displayName.removeJournal() }
 
         #expect(displayName.governance.reconcile(
-            onBattery: true, workingAgentPIDs: [777], protectedAgentPIDs: [777],
+            onBattery: true, workingAgentCount: 1, protectedAgentPIDs: [777],
             demotableNames: ["Visual Studio Code"], quietEverythingElse: true) == .quiet)
         #expect(displayName.kernel.demoted.isEmpty,
                 "a display name matched a process whose kernel name is Code")
@@ -314,7 +314,7 @@ private func slackRunning(frontmost: pid_t? = nil) -> Fixture {
         defer { fixture.removeJournal() }
 
         #expect(fixture.governance.reconcile(
-            onBattery: true, workingAgentPIDs: [777], protectedAgentPIDs: [777],
+            onBattery: true, workingAgentCount: 1, protectedAgentPIDs: [777],
             demotableNames: ["Slack"], quietEverythingElse: true) == .quiet)
 
         #expect(fixture.kernel.demoted.isEmpty,
@@ -329,7 +329,7 @@ private func slackRunning(frontmost: pid_t? = nil) -> Fixture {
         defer { fixture.removeJournal() }
 
         #expect(fixture.governance.reconcile(
-            onBattery: true, workingAgentPIDs: [slackPID], protectedAgentPIDs: [slackPID],
+            onBattery: true, workingAgentCount: 1, protectedAgentPIDs: [slackPID],
             demotableNames: ["Slack"], quietEverythingElse: true) == .quiet)
 
         #expect(fixture.kernel.demoted.isEmpty, "a tracked agent's process was demoted")
@@ -347,7 +347,7 @@ private func slackRunning(frontmost: pid_t? = nil) -> Fixture {
         defer { fixture.removeJournal() }
 
         #expect(fixture.governance.reconcile(
-            onBattery: true, workingAgentPIDs: [777], protectedAgentPIDs: [777],
+            onBattery: true, workingAgentCount: 1, protectedAgentPIDs: [777],
             demotableNames: ["zsh"], quietEverythingElse: true) == .quiet)
 
         #expect(fixture.kernel.demoted.isEmpty, "coffee-bar's own parent shell was demoted")
@@ -367,7 +367,7 @@ private func slackRunning(frontmost: pid_t? = nil) -> Fixture {
         defer { fixture.removeJournal() }
 
         #expect(fixture.governance.reconcile(
-            onBattery: true, workingAgentPIDs: [777], protectedAgentPIDs: [777],
+            onBattery: true, workingAgentCount: 1, protectedAgentPIDs: [777],
             demotableNames: ["coffeebar-hook"], quietEverythingElse: true) == .quiet)
 
         #expect(fixture.kernel.demoted.isEmpty, "coffee-bar's own hook shim was demoted")
@@ -387,7 +387,7 @@ private func slackRunning(frontmost: pid_t? = nil) -> Fixture {
 
         for _ in 0..<3 {
             _ = fixture.governance.reconcile(
-                onBattery: true, workingAgentPIDs: [777], protectedAgentPIDs: [777],
+                onBattery: true, workingAgentCount: 1, protectedAgentPIDs: [777],
                 demotableNames: ["Slack"], quietEverythingElse: true)
         }
 
@@ -403,12 +403,12 @@ private func slackRunning(frontmost: pid_t? = nil) -> Fixture {
         defer { fixture.removeJournal() }
 
         _ = fixture.governance.reconcile(
-            onBattery: true, workingAgentPIDs: [777], protectedAgentPIDs: [777],
+            onBattery: true, workingAgentCount: 1, protectedAgentPIDs: [777],
             demotableNames: ["Slack"], quietEverythingElse: true)
         #expect(fixture.kernel.demoted == [slackPID], "nothing was quieted, so nothing can restore")
 
         let decision = fixture.governance.reconcile(
-            onBattery: false, workingAgentPIDs: [777], protectedAgentPIDs: [777],
+            onBattery: false, workingAgentCount: 1, protectedAgentPIDs: [777],
             demotableNames: ["Slack"], quietEverythingElse: true)
 
         #expect(decision == .restore)
@@ -436,6 +436,37 @@ private func slackRunning(frontmost: pid_t? = nil) -> Fixture {
         #expect(fixture.kernel.restored == [slackPID],
                 "a demotion an earlier run recorded was left in place")
         #expect(try fixture.journal.load() == nil)
+    }
+
+    @Test func aWorkingSessionWithNoPidStillMeetsTheAgentCondition() throws {
+        // THE condition that decides whether this feature works at all in a
+        // shipped build, and it is measured here rather than assumed.
+        //
+        // `AgentSession` carries a `pid`, and it is ALWAYS `nil` in production:
+        // `HookEvent` has no pid field, and `SessionHub` builds every session
+        // with `pid: nil`. So a trigger whose "an agent is working" condition
+        // counted session PIDS would be false on every real machine, for ever.
+        // The switch would be on, the list would be configured, the battery
+        // would be discharging, and nothing would happen — the exact "appears
+        // configured and does nothing" failure this task exists to avoid.
+        //
+        // The condition is therefore a COUNT of working sessions. The pids are
+        // still passed, as `protectedAgentPIDs`, because that is a PROTECTION:
+        // it is empty today for the same upstream reason, and an empty deny set
+        // protects nothing while a wrong trigger breaks everything.
+        let fixture = slackRunning()
+        defer { fixture.removeJournal() }
+
+        let decision = fixture.governance.reconcile(
+            onBattery: true,
+            workingAgentCount: 1,
+            protectedAgentPIDs: [],
+            demotableNames: ["Slack"],
+            quietEverythingElse: true)
+
+        #expect(decision == .quiet)
+        #expect(fixture.kernel.demoted == [slackPID],
+                "a working session with no pid did not meet the agent condition")
     }
 
     @Test func restoringPromotesNothingTheJournalDoesNotName() throws {

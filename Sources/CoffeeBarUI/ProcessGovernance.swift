@@ -162,12 +162,21 @@ public struct ProcessGovernance: Sendable {
     ///
     /// `static`, because it reads none of this type's state, and a check that
     /// wants to ask it a question should not have to build a governor first.
+    ///
+    /// **Condition 2 is a COUNT of working sessions and never a set of pids,
+    /// and that is measured rather than a preference.** `AgentSession` carries
+    /// a `pid` and it is ALWAYS `nil` in a shipped build: `HookEvent` has no pid
+    /// field and `SessionHub` constructs every session with `pid: nil`. A
+    /// condition that required a non-empty pid set would therefore be false on
+    /// every real machine for ever — the switch on, the list configured, the
+    /// battery discharging, and nothing happening.
+    /// `aWorkingSessionWithNoPidStillMeetsTheAgentCondition` holds it.
     public static func decision(onBattery: Bool,
-                                workingAgentPIDs: Set<pid_t>,
+                                workingAgentCount: Int,
                                 demotableNames: Set<String>,
                                 quietEverythingElse: Bool) -> QuietOthersDecision {
         guard onBattery,
-              workingAgentPIDs.isEmpty == false,
+              workingAgentCount > 0,
               demotableNames.isEmpty == false,
               quietEverythingElse
         else { return .restore }
@@ -181,18 +190,25 @@ public struct ProcessGovernance: Sendable {
     /// never has to wait to find out that nothing happened.
     ///
     /// - Parameters:
-    ///   - workingAgentPIDs: the agents doing work, which drives condition 2.
+    ///   - workingAgentCount: how many sessions are doing work, which drives
+    ///     condition 2.
     ///   - protectedAgentPIDs: every agent coffee-bar tracks, working or not.
-    ///     WIDER than the set above on purpose: an agent blocked on the user is
-    ///     still an agent, and demoting it is still self-defeating.
+    ///     WIDER than the working sessions on purpose: an agent blocked on the
+    ///     user is still an agent, and demoting it is still self-defeating.
+    ///
+    ///     **Empty in a shipped build today, and that is stated rather than
+    ///     hidden.** No ingest payload carries a pid, so `AgentSession.pid` is
+    ///     always `nil`. The rule is wired and the data is missing, which is a
+    ///     protection that does nothing until ingest learns a pid — never a
+    ///     protection that was left switched off here.
     @discardableResult
     public func reconcile(onBattery: Bool,
-                          workingAgentPIDs: Set<pid_t>,
+                          workingAgentCount: Int,
                           protectedAgentPIDs: Set<pid_t>,
                           demotableNames: Set<String>,
                           quietEverythingElse: Bool) -> QuietOthersDecision {
         let decision = Self.decision(onBattery: onBattery,
-                                     workingAgentPIDs: workingAgentPIDs,
+                                     workingAgentCount: workingAgentCount,
                                      demotableNames: demotableNames,
                                      quietEverythingElse: quietEverythingElse)
 
