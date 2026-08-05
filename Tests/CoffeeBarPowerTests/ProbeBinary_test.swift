@@ -89,16 +89,28 @@ private func probeBinaryPath() -> String {
     #expect(run.exitCode == 64)
     #expect(run.stdout == "")
 
+    // ROWS, not a substring search over the whole text. `revert`'s summary
+    // legitimately contains the word "watchdog", so a `contains` check stays
+    // green with the watchdog row deleted — measured, by mutation.
+    let advertised = advertisedVerbs(in: run.stderr)
+    #expect(advertised.isEmpty == false, """
+        no verb rows were parsed out of the binary's output, so this check \
+        read nothing.
+        stderr:
+        \(run.stderr)
+        """)
+
     for verb in ProbeVerb.allCases {
-        #expect(run.stderr.contains(verb.rawValue), """
-            the shipped binary's usage never names "\(verb.rawValue)".
+        #expect(advertised.contains(verb.rawValue), """
+            the shipped binary's usage carries no row for "\(verb.rawValue)".
+            rows found: \(advertised)
             stderr:
             \(run.stderr)
             """)
     }
-    // Named explicitly because it is THE defect: handled at v0.1 and
-    // advertised nowhere.
-    #expect(run.stderr.contains("watchdog"))
+    // The two lists are the same SET. Named explicitly because `watchdog` is
+    // THE v0.1 defect: handled by the binary and advertised nowhere.
+    #expect(Set(advertised) == Set(ProbeVerb.allCases.map(\.rawValue)))
 }
 
 @Test func theShippedBinaryRefusesAPrivilegedVerbInsteadOfElevating() throws {

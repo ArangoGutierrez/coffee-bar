@@ -19,13 +19,38 @@ import Foundation
 // `default`, which makes a missing verb a compile error rather than a silent
 // omission. These tests pin the half the compiler cannot see.
 
+/// The verb each usage ROW advertises, in order.
+///
+/// A row is an indented line, and its first token is the verb. Parsing rows is
+/// the whole point: a plain `usage.contains("watchdog")` is satisfied by the
+/// word appearing ANYWHERE, and `revert`'s summary line legitimately reads
+/// "restore the prior sleep setting and remove the watchdog".
+///
+/// That is not hypothetical. Mutation testing built exactly that hole: deleting
+/// the `watchdog` ROW left a `contains` check green, because the word survived
+/// inside another verb's description. A guard that cannot tell a row from a
+/// mention does not guard the list.
+func advertisedVerbs(in usage: String) -> [String] {
+    usage
+        .split(separator: "\n")
+        .filter { $0.hasPrefix("  ") }
+        .compactMap { $0.split(whereSeparator: \.isWhitespace).first.map(String.init) }
+        .filter { ProbeVerb(rawValue: $0) != nil }
+}
+
 @Test func theUsageTextAdvertisesEveryVerbTheBinaryHandles() {
     // Named bug this catches, and it SHIPPED in v0.1: `watchdog` handled and
     // unadvertised. A user reading `--help` cannot find a verb that exists.
+    let advertised = advertisedVerbs(in: ProbeVerb.usage)
+
+    #expect(advertised.isEmpty == false,
+            "no verb rows were parsed, so this check read nothing")
+
     for verb in ProbeVerb.allCases {
-        #expect(ProbeVerb.usage.contains(verb.rawValue), """
-            the usage text never names "\(verb.rawValue)", which the binary \
-            handles. That is the v0.1 defect exactly.
+        #expect(advertised.contains(verb.rawValue), """
+            the usage text carries no ROW for "\(verb.rawValue)", which the \
+            binary handles. That is the v0.1 defect exactly.
+            rows found: \(advertised)
             usage:
             \(ProbeVerb.usage)
             """)
@@ -37,16 +62,18 @@ import Foundation
     // and NOT handled sends the user to run a command that exits 64. Both
     // directions are needed — v0.1 was wrong one way, and a hand-edited usage
     // string is just as easily wrong the other.
-    let advertised = ProbeVerb.usage
+    // Deliberately NOT `advertisedVerbs(in:)`, which discards anything that is
+    // not a known verb — the exact thing this check is hunting for.
+    let tokens = ProbeVerb.usage
         .split(separator: "\n")
         // The verb rows are the indented ones; the "usage:" banner is not.
         .filter { $0.hasPrefix("  ") }
         .compactMap { $0.split(whereSeparator: \.isWhitespace).first.map(String.init) }
 
-    #expect(advertised.isEmpty == false,
+    #expect(tokens.isEmpty == false,
             "no verb rows were parsed out of the usage text, so this check read nothing")
 
-    for token in advertised {
+    for token in tokens {
         #expect(ProbeVerb(rawValue: token) != nil, """
             the usage text advertises "\(token)", which is not a verb the \
             binary handles. Running it exits 64.
@@ -55,7 +82,7 @@ import Foundation
 
     // Both lists are the same SET, not merely overlapping. A row parsed twice,
     // or a verb listed twice and another dropped, passes both loops above.
-    #expect(Set(advertised) == Set(ProbeVerb.allCases.map(\.rawValue)))
+    #expect(Set(tokens) == Set(ProbeVerb.allCases.map(\.rawValue)))
 }
 
 @Test func everyVerbCarriesItsOwnSummaryLine() {
