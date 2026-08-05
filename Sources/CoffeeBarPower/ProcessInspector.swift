@@ -153,8 +153,27 @@ public struct SystemProcessInspector: ProcessInspecting {
     ///
     /// `proc_bsdshortinfo.pbsi_comm` is `char[MAXCOMLEN]` — 16 bytes with a
     /// terminator. Every name in `DemotionPolicy.alwaysProtectedNames` fits
-    /// inside it, because a protected name that did not would silently fail to
-    /// match the foreign-uid processes it exists to protect.
+    /// inside it, and the reason is NOT the one this comment used to give.
+    ///
+    /// It said a longer name would fail to match the foreign-uid processes the
+    /// list exists to protect. It could not: `DemotionPolicy.verdict(for:)` runs
+    /// the `foreignUID` rule BEFORE the `protectedName` rule, so another user's
+    /// process is refused before its name is read.
+    /// `aForeignProcessIsRefusedByItsUidBeforeItsNameIsEverConsulted` measures
+    /// that, after a mutation swapping the two rules survived the whole suite.
+    ///
+    /// The reachable case is a process this user OWNS whose privileged record
+    /// `snapshot(of:)` could not read — it exits between the two reads. The name
+    /// then falls back to `pbsi_comm`, and the uid rule does not fire, so the
+    /// protected list IS consulted against 15 characters. A 21-character entry
+    /// would match the full name, miss the truncated one, and fall through to
+    /// the demotable set.
+    /// `everyProtectedNameStillMatchesWhenOnlyTheShortFieldIsAvailable` holds
+    /// it as behaviour, and `everyAlwaysProtectedNameFitsTheShortField` holds
+    /// the bound itself.
+    ///
+    /// A guard is kept by the reason attached to it. A wrong reason is what a
+    /// later author deletes it on.
     public static let shortNameLimit = 15
 
     public init() {}

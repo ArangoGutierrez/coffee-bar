@@ -587,8 +587,21 @@ preference fails open — an empty or unreadable value would disable the protect
 Two limits worth knowing. `proc_pidinfo(PROC_PIDTBSDINFO)` is privileged and answers
 `EPERM` for another user's process, so the deny rules read `PROC_PIDT_SHORTBSDINFO`, which
 answers for every process. That record carries only 15 characters of the name, so every
-entry in `alwaysProtectedNames` fits inside 15 — a longer one would silently fail to match
-the foreign-uid processes the list exists to protect.
+entry in `alwaysProtectedNames` fits inside 15.
+
+**The reason for that bound is not the obvious one, and the obvious one is wrong.** An
+earlier draft of this section said a longer name would fail to match the foreign-uid
+processes the list exists to protect. It could not: the `foreignUID` rule runs before the
+`protectedName` rule, so another user's process is refused before its name is read. A
+mutation swapping the two rules survived the entire suite, which is how the claim went
+unchecked for as long as it did.
+
+The case the bound really guards is a process **this user owns** whose privileged record
+cannot be read, which happens when the process exits between the two reads.
+`SystemProcessInspector.snapshot(of:)` then falls back to the 15-character field while the
+uid rule does not fire, so the protected list is matched against a truncated name. A
+21-character entry would match the full name, miss the truncated one, and fall through to
+the demotable set.
 
 The audio and camera assertion rule from the earlier sketch is **not built**. It needs a
 source for those assertions that this package does not have yet.

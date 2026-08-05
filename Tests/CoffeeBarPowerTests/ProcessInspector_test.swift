@@ -311,10 +311,21 @@ func waitForFlags(of pid: pid_t, within seconds: TimeInterval,
 
     @Test func everyAlwaysProtectedNameFitsTheShortField() {
         // The trap the two readings leave behind, pinned so it cannot be walked
-        // into. A process another user owns reports only `pbsi_comm`, which
-        // holds 15 characters. A protected name longer than that would never
-        // match such a process — and `WindowServer` and `coreaudiod` are exactly
-        // the foreign-uid processes the list exists to protect.
+        // into. A process can report only `pbsi_comm`, which holds 15
+        // characters, and a protected name longer than that would never match
+        // one.
+        //
+        // The reason this comment used to give was WRONG: it said the foreign-
+        // uid processes the list exists to protect would fail to match. They
+        // cannot reach the name rule at all, because `verdict(for:)` refuses on
+        // `foreignUID` first —
+        // `aForeignProcessIsRefusedByItsUidBeforeItsNameIsEverConsulted`.
+        //
+        // The reachable case is a process this user OWNS whose privileged
+        // record could not be read, which drops `snapshot(of:)` back to the
+        // short field with the uid rule not firing.
+        // `everyProtectedNameStillMatchesWhenOnlyTheShortFieldIsAvailable`
+        // states the same bound as a verdict rather than as a count.
         for name in DemotionPolicy.alwaysProtectedNames {
             #expect(name.count <= SystemProcessInspector.shortNameLimit,
                     "\(name) is \(name.count) characters and cannot match another user's process")

@@ -330,4 +330,73 @@ private func firstForeignUIDProcess(_ inspector: SystemProcessInspector) -> Proc
         #expect(!ancestors.contains(child.pid), "a process is not its own ancestor")
         #expect(ancestors.count < 64, "the walk did not terminate promptly")
     }
+
+    // MARK: - Which rule refuses, and not merely that one did
+
+    @Test func aForeignProcessIsRefusedByItsUidBeforeItsNameIsEverConsulted() {
+        // Nothing pinned this ordering, and that was measured rather than
+        // supposed: moving the `foreignUID` rule below `protectedName` left all
+        // 700 checks green. Both are deny rules, so the invariant every other
+        // check in this file holds — allowed if and only if named AND no deny
+        // rule matches — is blind to their order.
+        //
+        // The order decides WHICH refusal a user is shown, and that is the whole
+        // reason `DemotionRefusal` carries nine cases instead of one: "you named
+        // another user's process" and "you named a process the system depends
+        // on" send the user to change different things.
+        //
+        // It also settles a reason that was attached to the 15-character bound
+        // on `alwaysProtectedNames` and was wrong. That bound cannot exist so
+        // that foreign-uid processes match the protected list, because a
+        // foreign-uid process never reaches the list.
+        let policy = DemotionPolicy(demotableNames: ["WindowServer"],
+                                    selfPID: 4001, selfUID: getuid(), selfPGID: 4002)
+
+        // Another user's WindowServer: in the protected list AND foreign.
+        let foreign = snapshot(pid: 5000, uid: getuid() &+ 1, ppid: 1, pgid: 999_001,
+                               name: "WindowServer")
+        #expect(policy.verdict(for: foreign) == .refused(.foreignUID),
+                "a foreign-uid process reached the name rule; the uid rule must refuse first")
+
+        // The same name, this user's own process, so the name rule is the one
+        // left to fire. Without this the check above would pass for a policy
+        // that had lost the protected-name rule altogether.
+        let mine = snapshot(pid: 5001, uid: getuid(), ppid: 1, pgid: 999_001,
+                            name: "WindowServer")
+        #expect(policy.verdict(for: mine) == .refused(.protectedName))
+    }
+
+    @Test func everyProtectedNameStillMatchesWhenOnlyTheShortFieldIsAvailable() {
+        // The TRUE reason for the bound on `alwaysProtectedNames`, stated as
+        // behaviour instead of as a character count.
+        //
+        // The reachable path is not a foreign-uid process — that one is refused
+        // by uid first, as the check above pins. It is a process this user OWNS
+        // whose privileged record `SystemProcessInspector.snapshot(of:)` could
+        // not read, which happens when the process exits between the two reads.
+        // `snapshot(of:)` then falls back to `pbsi_comm`, 15 characters, and the
+        // uid is still this user's, so the name rule IS consulted against a
+        // truncated name.
+        //
+        // The bug: a 21-character entry added to the protected list. It would
+        // match the full name and silently fail to match the truncated one, so
+        // the process would fall through to the demotable set — and a user who
+        // had named it would demote a process the list exists to protect.
+        // Asserting `name.count <= 15` says the same thing; asserting the
+        // verdict says it in the terms the failure arrives in.
+        let policy = DemotionPolicy(demotableNames: DemotionPolicy.alwaysProtectedNames,
+                                    selfPID: 4001, selfUID: getuid(), selfPGID: 4002)
+
+        for name in DemotionPolicy.alwaysProtectedNames {
+            let truncated = String(name.prefix(SystemProcessInspector.shortNameLimit))
+            let short = snapshot(pid: 5000, uid: getuid(), ppid: 1, pgid: 999_001,
+                                 name: truncated)
+            #expect(policy.verdict(for: short) == .refused(.protectedName),
+                    """
+                    \(name) is \(name.count) characters, so the kernel's short field \
+                    reports "\(truncated)" and the protected list does not match it. \
+                    A user who named that process would demote it.
+                    """)
+        }
+    }
 }
