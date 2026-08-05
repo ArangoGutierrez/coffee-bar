@@ -265,11 +265,17 @@ private func openDescriptorCount() throws -> Int {
 /// at that instant. Those descriptors are TRANSIENT — they come and go. A leak
 /// does not. The minimum over a short window therefore tracks the steady state,
 /// which is the only thing this guard is about.
-private func settledDescriptorCount(samples: Int = 3) throws -> Int {
+///
+/// It REDUCES the noise; it does not remove it. Measured across 12 full-suite
+/// runs under concurrent load, this endpoint read anywhere from 8 to 29 while
+/// the steady state was 4. Sampling for longer does not close that gap, because
+/// there is no instant in a loaded run when nothing else holds a descriptor.
+/// The guard below is sized against the residue rather than pretending it away.
+private func settledDescriptorCount(samples: Int = 6) throws -> Int {
     var lowest = Int.max
     for index in 0..<samples {
         lowest = min(lowest, try openDescriptorCount())
-        if index < samples - 1 { Thread.sleep(forTimeInterval: 0.05) }
+        if index < samples - 1 { Thread.sleep(forTimeInterval: 0.07) }
     }
     return lowest
 }
@@ -290,9 +296,28 @@ private func settledDescriptorCount(samples: Int = 3) throws -> Int {
     // fix: the full suite passed 8 of 10 runs, with deltas of 33 and 35 against
     // a limit of 20.
     //
-    // The threshold is generous against transient noise and tight against the
-    // defect: 20 calls strand 40 descriptors when the closes are gone, which is
-    // most of a factor of three above this limit.
+    // **Why 100 calls and not 20.** The first version of this guard measured 20
+    // calls against a limit of 15 and flaked, 1 run in 10 under load, at a
+    // delta of 18. Raising the limit would have been the wrong lever: the noise
+    // is not a defect to tolerate but a property of measuring a process-wide
+    // count while other tests legitimately hold descriptors.
+    //
+    // The noise does NOT grow with the number of calls. It is bounded by how
+    // many descriptors other tests hold at the two sampling INSTANTS, and the
+    // window between them does not change that. The signal does grow, linearly:
+    // two stranded per call. So the fix is to lengthen the run, not to loosen
+    // the limit.
+    //
+    // Measured, 12 full-suite runs under concurrent load, this configuration:
+    // deltas -21 -18 -13 -11 -11 -6 -5 -3 -3 -3 +3 +4. The worst POSITIVE was
+    // +4 and the worst magnitude in either direction was 21. The limit is 60,
+    // which is about three times that residue. The defect produces 200, which
+    // is more than three times the limit. Both margins are bigger than the ones
+    // `realRunnerDoesNotStrandPipeDescriptorsAcrossRepeatedCalls` runs on.
+    //
+    // Deltas skew NEGATIVE because `before` is read while the suite is at its
+    // busiest and `after` once neighbours have finished. That direction is
+    // harmless here; only a positive excursion can trip this.
     let sandbox = ShimSocketSandbox()
     defer { sandbox.remove() }
     try sandbox.makeDirectory()
@@ -303,7 +328,7 @@ private func settledDescriptorCount(samples: Int = 3) throws -> Int {
     _ = try runShim(["--socket=\(sandbox.path)"], stdin: payload)
 
     let before = try settledDescriptorCount()
-    for _ in 0..<20 {
+    for _ in 0..<100 {
         // No listener is bound at this path, so each run takes the silent
         // not-running path and returns at once. The descriptors are opened
         // either way — this guard is about the helper, not about delivery.
@@ -312,10 +337,11 @@ private func settledDescriptorCount(samples: Int = 3) throws -> Int {
     }
     let after = try settledDescriptorCount()
 
-    #expect(after - before <= 15,
+    #expect(after - before <= 60,
             """
-            the harness stranded \(after - before) descriptors over 20 runs \
-            (\(before) -> \(after)). Every test in this file pays it, and so \
+            the harness stranded \(after - before) descriptors over 100 runs \
+            (\(before) -> \(after)), against a limit of 60 and a measured \
+            worst-case transient of 21. Every test in this file pays it, and so \
             does every test in the suite that counts descriptors.
             """)
 }
