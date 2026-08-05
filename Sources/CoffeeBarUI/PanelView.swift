@@ -299,6 +299,31 @@ public struct PanelView: View {
 
             Divider()
 
+            // Lid-closed mode, which this panel deliberately cannot switch on.
+            //
+            // It needs root, and coffee-bar never elevates its own privilege,
+            // so the honest surface is the command rather than a control. The
+            // sentence also says what the app CANNOT see: the journal is
+            // root-owned and unreadable here, measured, so a panel that stayed
+            // silent would read as "lid-closed mode is off" — a claim with no
+            // evidence behind it.
+            //
+            // Rendered verbatim from the model, with no text built here, for
+            // the reason every other line in this file gives: M1 design §5.4
+            // forbids asserting on rendered AppKit text, so a sentence composed
+            // in this view is a sentence no check reads. The wording lives on
+            // `ServingModel.lidClosedAdvisory` and is asserted there.
+            //
+            // Unconditional, unlike the advisories above. There is no state to
+            // condition it on — that is the point of it.
+            Text(ServingModel.lidClosedAdvisory)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+
+            Divider()
+
             Label(batteryLine, systemImage: "bolt")
                 .font(.caption)
                 .foregroundStyle(.secondary)

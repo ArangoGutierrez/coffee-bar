@@ -1039,6 +1039,57 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     }
 }
 
+@Test func theAppLayerNeverReachesForPrivilegeEscalation() throws {
+    // Design §6.3 and SECURITY.md's "It never elevates its own privilege".
+    //
+    // M5 put a root path in this product for the first time, and the whole
+    // safety of it rests on WHO takes that path: the user types
+    // `sudo coffee-bar-probe arm` in their own shell. An app that could elevate
+    // itself would turn an opt-in root action into one a menu bar click
+    // performs, which is the design SECURITY.md rules out — and the policy now
+    // promises it to readers, so this is a commitment rather than a preference.
+    //
+    // Named bug this catches: an "Arm lid-closed mode" button wired to
+    // `AuthorizationExecuteWithPrivileges`, or to a `Process` running
+    // `/usr/bin/sudo`. Both compile, both work, and every other check in this
+    // file stays green — the app layer's existing denylist is about DISPLAY
+    // assertions and knows nothing about privilege.
+    //
+    // The word `sudo` is deliberately ABSENT from the list. `ServingModel`
+    // prints `sudo coffee-bar-probe arm` for the user to run, which is the
+    // shipped design, and `swiftCodeWithoutComments` keeps string literals — so
+    // banning the word would be red on exactly the correct code. What is banned
+    // is EXECUTING with elevated privilege, not naming the command.
+    let files = try appLayerSources()
+    #expect(files.count == expectedSourceCount,
+            "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
+
+    let forbidden = [
+        "AuthorizationCreate",              // and AuthorizationCreateFromExternalForm
+        "AuthorizationExecuteWithPrivileges",
+        "AuthorizationRef",
+        "SMAppService",                     // registers a daemon from the app bundle
+        "SMJobBless",
+        "STPrivilegedTask",
+        "setuid",
+        "seteuid",
+        "launchctl",                        // loading a daemon is the daemon's install path
+        "NSAppleScript",                    // "with administrator privileges"
+    ]
+
+    for file in files {
+        let code = swiftCodeWithoutComments(try String(contentsOf: file, encoding: .utf8))
+        for name in forbidden {
+            #expect(!code.contains(name), """
+                \(file.lastPathComponent) names \(name) in CODE. coffee-bar never \
+                elevates its own privilege: the root path is opt-in and the user \
+                runs it themselves. The app prints the command and does not run \
+                it. A comment may name the API; calling one is what this refuses.
+                """)
+        }
+    }
+}
+
 // MARK: - Network egress
 
 @Test func noLinkedTargetCanReachTheNetworkByAddress() throws {
@@ -1335,6 +1386,45 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
             and the checks that assert its value.
             """)
     }
+}
+
+@Test func thePanelTellsTheUserHowToArmLidClosedMode() throws {
+    // The same tripwire as the three checks above, for issue #13's panel half.
+    //
+    // Lid-closed mode is the one capability with NO control in this panel, and
+    // that is deliberate: it needs root, and coffee-bar never elevates its own
+    // privilege. What is left is telling the user the command — so if
+    // `PanelView` never reads the property, the feature reaches the user
+    // nowhere at all and the app simply has no lid-closed mode as far as anyone
+    // can tell.
+    //
+    // The property carries the command AND the statement that this app cannot
+    // read whether the mode is armed. Both halves matter and they are one
+    // property for that reason; see
+    // `theLidClosedAdvisoryCarriesBothTheCommandAndWhatTheAppCannotSee`.
+    //
+    // Same LIMIT as the checks above, stated rather than hidden: this proves
+    // the panel NAMES the property, not that it renders it. M1 design §5.4
+    // forbids asserting on rendered AppKit text.
+    let files = try appLayerSources()
+    #expect(files.count == expectedSourceCount,
+            "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
+
+    let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
+                             "the app layer no longer compiles a PanelView.swift")
+    let source = try String(contentsOf: panel, encoding: .utf8)
+
+    // `ServingModel.lidClosedAdvisory` rather than `model.lidClosedAdvisory`:
+    // the sentence depends on no instance state — only on `ProbeVerb` — so it
+    // is a static, exactly like `ServingModel.displayLabel`. Requiring the
+    // instance spelling would have forced a property that ignores its own
+    // instance, which reads as though the panel were reporting live state. It
+    // is not, and that is the whole point of this surface.
+    #expect(source.contains("ServingModel.lidClosedAdvisory"), """
+        PanelView.swift never reads ServingModel.lidClosedAdvisory, so the only \
+        route a user has to lid-closed mode — the command to run — reaches them \
+        nowhere. Render it, or delete the property and the checks on its text.
+        """)
 }
 
 @Test func thePanelOffersTheDisplayHoldControl() throws {
