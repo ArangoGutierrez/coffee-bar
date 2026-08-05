@@ -181,6 +181,17 @@ private final class FakeSettings: SettingsStoring, @unchecked Sendable {
     func setInteger(_ value: Int, forKey key: String) {
         lock.lock(); defer { lock.unlock() }; values[key] = value
     }
+
+    // `as?` and not a force cast, for the reason `UserDefaultsSettingsStore`
+    // gives: this store answers `nil` both for a key nobody wrote and for one
+    // holding something that is not a list of strings.
+    func stringArray(forKey key: String) -> [String]? {
+        lock.lock(); defer { lock.unlock() }; return values[key] as? [String]
+    }
+
+    func setStringArray(_ value: [String], forKey key: String) {
+        lock.lock(); defer { lock.unlock() }; values[key] = value
+    }
 }
 
 private let t0 = Date(timeIntervalSince1970: 1_000_000)
