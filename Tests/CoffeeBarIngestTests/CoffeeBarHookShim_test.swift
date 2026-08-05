@@ -585,6 +585,95 @@ func eachToolsOwnRecordedPayloadArrivesUnderItsOwnOrigin(_ tool: AgentTool) thro
     }
 }
 
+// MARK: - A human at a terminal is not hook mode
+
+/// A real pseudo-terminal, so the child's `isatty(0)` is true.
+///
+/// Nothing else will do. Handing the child a pipe, a file or `/dev/null` all
+/// report false, which is the hook-mode branch — so a test built on any of them
+/// could never reach the code below and would be green whatever it asserted.
+private final class PseudoTerminal {
+    let primary: Int32
+    let secondary: Int32
+
+    init?() {
+        let opened = posix_openpt(O_RDWR | O_NOCTTY)
+        guard opened >= 0, grantpt(opened) == 0, unlockpt(opened) == 0,
+              let name = ptsname(opened)
+        else {
+            if opened >= 0 { Darwin.close(opened) }
+            return nil
+        }
+        let follower = open(String(cString: name), O_RDWR | O_NOCTTY)
+        guard follower >= 0 else {
+            Darwin.close(opened)
+            return nil
+        }
+        primary = opened
+        secondary = follower
+    }
+
+    func close() {
+        Darwin.close(secondary)
+        Darwin.close(primary)
+    }
+}
+
+@Test func aUsageErrorFromATerminalExitsSixtyFourInsteadOfZero() throws {
+    // The one exception to "always exit 0", and the reason it is safe: exit 0
+    // exists so a failing hook cannot hold up an agent, and a person typing at
+    // a terminal is not an agent. `coffee-bar-probe` already exits 64 for a
+    // verb it does not implement, so this matches a convention the project has.
+    //
+    // Named bug this catches: the terminal branch keyed off something other
+    // than `isatty` — an environment variable, or the absence of `--socket` —
+    // which would make a real hook exit 64 under whatever condition it picked
+    // and hold up the agent on every tool call. Only a REAL pty can tell the
+    // two branches apart, so this test builds one.
+    let binary = try shimBinaryPath()
+    let terminal = try #require(PseudoTerminal(), "could not open a pty; this guard cannot run")
+    defer { terminal.close() }
+
+    let outPipe = Pipe()
+    let errPipe = Pipe()
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: binary)
+    process.arguments = ["--tool=nonsense"]
+    process.standardInput = FileHandle(fileDescriptor: terminal.secondary, closeOnDealloc: false)
+    process.standardOutput = outPipe
+    process.standardError = errPipe
+
+    try process.run()
+    let killed = KilledFlag()
+    let watchdog = DispatchWorkItem {
+        if process.isRunning {
+            killed.set()
+            kill(process.processIdentifier, SIGKILL)
+        }
+    }
+    DispatchQueue.global().asyncAfter(deadline: .now() + shimWatchdogSeconds, execute: watchdog)
+    defer { watchdog.cancel() }
+
+    let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+    let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+
+    #expect(!killed.isSet, "the shim hung on a terminal instead of reporting the usage error")
+    #expect(process.terminationReason == .exit)
+    #expect(process.terminationStatus == 64,
+            "a usage error from a terminal exited \(process.terminationStatus); coffee-bar-probe uses 64")
+
+    // Still not standard output, even here. The same binary is wired into an
+    // agent, and a person who runs it by hand must not learn a habit the hook
+    // path forbids.
+    #expect(outData.isEmpty,
+            Comment(rawValue: "usage went to stdout: "
+                    + String(decoding: outData.prefix(80), as: UTF8.self)))
+    let text = String(decoding: errData, as: UTF8.self)
+    #expect(text.contains("nonsense"))
+    #expect(text.contains("usage:"), "a terminal user got no usage text")
+}
+
 // MARK: - Too large
 
 @Test func aPayloadOverTheListenersCapIsRefusedAndTheShimStillExitsZero() throws {
