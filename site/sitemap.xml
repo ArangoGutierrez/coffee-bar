@@ -3,27 +3,52 @@
   Copyright 2026 Carlos Eduardo Arango Gutierrez
   SPDX-License-Identifier: Apache-2.0
 
-  Exactly the four pages that exist under site/. A sitemap that names a 404 is
+  Exactly the six pages that exist under site/. A sitemap that names a 404 is
   worse than no sitemap, so add an entry only after the file lands.
 
-  lastmod comes from git, never from memory:
-    git log -1 --format=%ad --date=short -- site/
+  WARNING. An XML comment cannot contain a double hyphen. This file was
+  unparseable from the day it was written until 2026-08-05, because this comment
+  spelled out a git command containing them: xmllint rejected it and so would
+  every crawler. Never paste a shell command with long flags into this comment.
+
+  lastmod comes from git, never from memory. For one page, read the short author
+  date of the last commit that touched it. The command lives in
+  docs/BUILDING.md, not here, for the reason above.
+
+  terms.html and privacy.html joined on 2026-08-05. Nothing owned this file when
+  they landed: the plan that added the two pages gave it no task, and the gap was
+  caught only because a builder read this comment and noticed it had stopped
+  being true. No test reads this file, so the comment is the whole defence. A
+  file whose comment asserts a COUNT needs an owner in any plan that changes it.
+
+  Every page reads 2026-08-05 because the two new pages added a Terms and a
+  Privacy link to the footer, and the footer is byte-identical across all six by
+  guard everyPageCarriesTheSameFooter. One footer edit touches every page, by
+  design.
 -->
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>https://arangogutierrez.github.io/coffee-bar/</loc>
-    <lastmod>2026-08-04</lastmod>
+    <lastmod>2026-08-05</lastmod>
   </url>
   <url>
     <loc>https://arangogutierrez.github.io/coffee-bar/install.html</loc>
-    <lastmod>2026-08-04</lastmod>
+    <lastmod>2026-08-05</lastmod>
   </url>
   <url>
     <loc>https://arangogutierrez.github.io/coffee-bar/docs.html</loc>
-    <lastmod>2026-08-04</lastmod>
+    <lastmod>2026-08-05</lastmod>
   </url>
   <url>
     <loc>https://arangogutierrez.github.io/coffee-bar/changelog.html</loc>
-    <lastmod>2026-08-04</lastmod>
+    <lastmod>2026-08-05</lastmod>
+  </url>
+  <url>
+    <loc>https://arangogutierrez.github.io/coffee-bar/terms.html</loc>
+    <lastmod>2026-08-05</lastmod>
+  </url>
+  <url>
+    <loc>https://arangogutierrez.github.io/coffee-bar/privacy.html</loc>
+    <lastmod>2026-08-05</lastmod>
   </url>
 </urlset>
