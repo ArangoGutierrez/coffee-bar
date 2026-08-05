@@ -951,3 +951,18 @@ public final class ServingModel {
         return .batteryFloor(percent: measured, floor: floor)
     }
 }
+
+extension ServingModel {
+    /// What the panel draws beside `servingSummary`.
+    ///
+    /// `static` and `nonisolated` on purpose. A swift-testing `@Test` function
+    /// is nonisolated, and `ServingModel` is main-actor isolated, so an
+    /// instance method here could not be called from a test without annotating
+    /// the test `@MainActor` — which would hide the property rather than test
+    /// it. This takes a Bool and returns a value; it holds no actor state.
+    nonisolated public static func indicator(isServing: Bool) -> IndicatorSpec {
+        isServing
+            ? IndicatorSpec(symbolName: "cup.and.saucer.fill", role: .state)
+            : IndicatorSpec(symbolName: "cup.and.saucer", role: .rest)
+    }
+}
