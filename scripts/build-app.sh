@@ -99,7 +99,15 @@ fi
 # TARBALL, which carries no `.git`, so `git describe` finds nothing there and
 # every brew-installed app would otherwise report `0.0.0-dev`. The formula knows
 # the version it is building and passes it in.
-VERSION_RAW="${COFFEE_BAR_VERSION:-$(git -C "${REPO_ROOT}" describe --tags --abbrev=0 2>/dev/null || true)}"
+#
+# `--abbrev=0` is deliberately ABSENT. It prints the bare tag name and drops the
+# commit distance, so every build descended from a tag reported itself AS that
+# tag: a build 16 commits past v0.1.1 displayed "Version 0.1.1". At a tagged
+# commit `git describe --tags` still returns exactly that tag, so a release is
+# unaffected; only descendants gain the `-<n>-g<sha>` suffix. `--dirty` marks an
+# uncommitted tree, because a build from modified sources is not the commit it
+# names.
+VERSION_RAW="${COFFEE_BAR_VERSION:-$(git -C "${REPO_ROOT}" describe --tags --dirty 2>/dev/null || true)}"
 VERSION="${VERSION_RAW#v}"
 VERSION="${VERSION:-0.0.0-dev}"
 
