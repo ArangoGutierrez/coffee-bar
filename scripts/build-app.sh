@@ -99,14 +99,22 @@ fi
 # TARBALL, which carries no `.git`, so `git describe` finds nothing there and
 # every brew-installed app would otherwise report `0.0.0-dev`. The formula knows
 # the version it is building and passes it in.
-VERSION_RAW="${COFFEE_BAR_VERSION:-$(git -C "${REPO_ROOT}" describe --tags --abbrev=0 2>/dev/null || true)}"
+#
+# `--abbrev=0` is deliberately ABSENT. It prints the bare tag name and drops the
+# commit distance, so every build descended from a tag reported itself AS that
+# tag: a build 16 commits past v0.1.1 displayed "Version 0.1.1". At a tagged
+# commit `git describe --tags` still returns exactly that tag, so a release is
+# unaffected; only descendants gain the `-<n>-g<sha>` suffix. `--dirty` marks an
+# uncommitted tree, because a build from modified sources is not the commit it
+# names.
+VERSION_RAW="${COFFEE_BAR_VERSION:-$(git -C "${REPO_ROOT}" describe --tags --dirty 2>/dev/null || true)}"
 VERSION="${VERSION_RAW#v}"
 VERSION="${VERSION:-0.0.0-dev}"
 
 if [ -n "${COFFEE_BAR_VERSION:-}" ]; then
     echo "==> version ${VERSION} (from COFFEE_BAR_VERSION)"
 elif [ -n "${VERSION_RAW}" ]; then
-    echo "==> version ${VERSION} (from git tag ${VERSION_RAW})"
+    echo "==> version ${VERSION} (from git describe ${VERSION_RAW})"
 else
     echo "==> version ${VERSION} (no git tag in this repo; untagged fallback)"
 fi
@@ -196,6 +204,56 @@ command cp -f "${REPO_ROOT}/LICENSE" "${CONTENTS}/Resources/LICENSE"
     || die "LICENSE did not land in the bundle"
 echo "    LICENSE copied ($(wc -c < "${CONTENTS}/Resources/LICENSE" | tr -d ' ') bytes)"
 
+# --- app icon ---------------------------------------------------------------
+#
+# The bundle carried no icon at all until now, so Finder drew the generic one.
+#
+# `iconutil` is used rather than `actool` deliberately. `actool` is the shared
+# xcrun shim and needs a full Xcode: `DEVELOPER_DIR=/nonexistent actool
+# --version` fails with "missing DEVELOPER_DIR path". `iconutil` is a real
+# binary and still runs without one. The Homebrew formula builds from a tarball
+# on machines that may carry only the Command Line Tools, so requiring Xcode
+# here would break install for those users.
+#
+# The iconset is COPIED before use. `assets/art/appicon/make-icns.sh` renames
+# `-2x` to `@2x` in place, and a build must never mutate the tracked tree.
+
+ICONSET_SRC="${REPO_ROOT}/assets/art/appicon/AppIcon.iconset"
+[ -d "${ICONSET_SRC}" ] || die "iconset not found at ${ICONSET_SRC}"
+
+ICON_TMP="$(mktemp -d)"
+trap 'rm -rf "${ICON_TMP}"' EXIT
+
+command cp -R "${ICONSET_SRC}" "${ICON_TMP}/AppIcon.iconset"
+
+# The export pipeline strips `@` from filenames (assets/art/README.md). iconutil
+# requires it back. Rename inside the COPY.
+for f in "${ICON_TMP}/AppIcon.iconset"/*-2x.png; do
+    [ -f "${f}" ] || continue
+    mv "${f}" "${f%-2x.png}@2x.png"
+done
+
+iconutil -c icns "${ICON_TMP}/AppIcon.iconset" -o "${CONTENTS}/Resources/AppIcon.icns" \
+    || die "iconutil failed to build AppIcon.icns"
+
+# `iconutil` can report success and write nothing useful.
+[ -s "${CONTENTS}/Resources/AppIcon.icns" ] \
+    || die "AppIcon.icns is missing or empty in the bundle"
+echo "    app icon: $(wc -c <"${CONTENTS}/Resources/AppIcon.icns" | tr -d ' ') bytes"
+
+# `-s` proves only that bytes exist. An iconset missing its large sizes still
+# produces a VALID .icns, and the app then ships a blurry icon that nothing
+# catches. 1024 is the size Finder and the App Switcher actually reach for.
+#
+# `sips` exits 0 on a missing or corrupt file and prints nothing, so the empty
+# string — not a non-zero status — is what reaches the comparison below. That
+# is why this reads the VALUE back rather than gating on the exit code.
+icon_px="$(sips -g pixelWidth "${CONTENTS}/Resources/AppIcon.icns" 2>/dev/null \
+    | awk '/pixelWidth:/ {print $2}')"
+[ "${icon_px}" = "1024" ] \
+    || die "AppIcon.icns reports pixelWidth '${icon_px}', expected 1024"
+echo "    app icon: 1024x1024"
+
 # --- Info.plist --------------------------------------------------------------
 #
 # CFBundleVersion stays at 1: it is the build number, not the marketing version.
@@ -214,6 +272,8 @@ cat >"${CONTENTS}/Info.plist" <<PLIST
     <string>${BUNDLE_ID}</string>
     <key>CFBundleExecutable</key>
     <string>${PRODUCT}</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -241,6 +301,11 @@ plutil -lint "${CONTENTS}/Info.plist" || die "Info.plist failed plutil -lint"
 ui_element="$(plutil -extract LSUIElement raw -o - "${CONTENTS}/Info.plist")"
 [ "${ui_element}" = "true" ] || die "LSUIElement is '${ui_element}', expected true"
 echo "    LSUIElement=true (no Dock icon)"
+
+# -lint accepts any well-formed plist, so read the icon key back explicitly.
+icon_file="$(plutil -extract CFBundleIconFile raw -o - "${CONTENTS}/Info.plist")"
+[ "${icon_file}" = "AppIcon" ] || die "CFBundleIconFile is '${icon_file}', expected AppIcon"
+echo "    CFBundleIconFile=AppIcon"
 
 # --- done --------------------------------------------------------------------
 

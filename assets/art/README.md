@@ -33,22 +33,83 @@ Holding both accents out of body text in both appearances keeps this one rule
 instead of four exceptions. Ink **on** `action` is the safe inverse — 8.51
 (light) and 9.10 (dark) — so a filled button carries body text.
 
-The accent moved off `#76B900` on 2026-08-04. That green is NVIDIA's brand
-colour and this is a personal Apache-2.0 product, so it can read as corporate
-endorsement — and coffee is not green.
+In the **app**, `state` tints the selected segment of all three pickers —
+Serving, Display and Battery floor — because a selected segment is a held
+segment. The indicator beside the serving summary takes `state` while a hold is
+active and `rest` when it is released; its symbol also changes shape, filled to
+outline, so the state survives Differentiate Without Color. Those four controls
+are the only places the app asks this palette for a colour.
 
-> **The recolour is not finished.** `site/**` carries the new accents. The app
-> icon sources under `assets/art/appicon/**`, the web set under
-> `assets/art/web/**`, and the GitHub art under `assets/art/github/**` all still
-> carry `#76B900`. Re-cutting them, and rebuilding `AppIcon.icns`, is a tracked
-> follow-up and is out of scope for the site redesign (design §8). Until it
-> lands, the installed app icon stays green while the site is roast.
+Warnings are the **one declared exception** to "Never mix `state` and `action`"
+above, and the app's panel is where it shows: the advisory lines sit beside the
+`state`-tinted pickers.
+
+Warnings pin no hex. They take SwiftUI's semantic `.orange`, so the system keeps
+control of how that colour adapts to the appearance and to Increase Contrast.
+That is the same pigment as `action`. The exception is narrow and deliberate:
+`warning` means attention, and `.orange` is the colour macOS users already read
+that way. The rule still holds where it can be enforced — the app's `ColorRole`
+has no `action` case, so no caller can name the role. The web-only clause covers
+the role, not this one system pigment. As caption text on a light backdrop
+`.orange` falls below 4.5:1; that gap is open as issue #30.
+
+**The decision, 2026-08-04.** The accent moved off `#76B900`. That green is
+NVIDIA's brand colour and this is a personal Apache-2.0 product, so it can read
+as corporate endorsement — and coffee is not green.
+
+> **The art landed, 2026-08-05.** Of the 62 rasters under
+> `assets/art/**`, `recut.sh` re-cuts 34 from the vector sources: the `default`
+> and `dark` appicon renders, the iconset, all of `web/` and both repo avatars.
+> `remap.py` recolours the 6 that have no vector source — the four wordmarks
+> and the two composite `github/` images — by rotating the retired hue and
+> keeping each pixel's saturation, value and alpha. Authoring real vector
+> sources for those six is still open. The other 22 rasters carry no accent at
+> all — the 15 menu-bar templates and the 7 greyscale `mono` appicon renders.
+> `census.py` opens every raster. It fails on any pixel that is exactly
+> `#76B900`, and on any pixel in the green hue band 70–100° **above** the
+> floors `s > 0.25` and `v > 0.20`. Below those floors it does not look.
+
+**What the guard cannot see.** The two floors exist so that near-neutral pixels
+— dark ink, pale paper — are not read as green. `remap.py` tests the same
+predicate, so it recoloured exactly what `census.py` can report and skipped
+exactly what `census.py` cannot. Zero exact `#76B900` pixels remain anywhere. A
+wider sweep — hue 55–145°, `s > 0.10`, `v > 0.10` — finds 708 pixels of
+anti-aliasing residue in four files, measured 2026-08-05:
+
+| file | residual px | canvas px |
+|---|---|---|
+| `wordmark/coffee-bar-wordmark-dark-2x.png` | 341 | 864,000 |
+| `github/readme-header-1600x400.png` | 187 | 640,000 |
+| `wordmark/coffee-bar-wordmark-light-2x.png` | 131 | 864,000 |
+| `github/social-preview-1280x640.png` | 49 | 819,200 |
+
+These are edge blends of the retired accent, not the accent. For example
+`#1E2E00` is `#76B900` at a quarter of its brightness, so `v` = 0.180 and the
+`v` floor excludes it; `#D3E3B3` is `#76B900` blended 75 % toward the
+dark-appearance ink `#F2F1EE`, so `s` = 0.211 and the `s` floor excludes it.
+Both 1x wordmarks are clean, so the residue in the two `-2x` wordmarks is a
+sub-pixel hairline at 1x. Real vector sources for these six files remove it.
+That work is still open, as above.
 
 The menu-bar glyph has no colour at all — it is alpha only.
 
-> **Filenames:** the export pipeline strips `@` from filenames, so `@2x`/`@3x` assets
-> arrive as `-2x`/`-3x`. Run `menubar/fix-names.sh` and `appicon/make-icns.sh` once
-> after unzipping to restore them.
+> **Filenames:** the export pipeline strips `@` from filenames, so `@2x`/`@3x`
+> assets arrive as `-2x`/`-3x`.
+>
+> **Only for a fresh art delivery unzipped over the tree:** run
+> `menubar/fix-names.sh` and `appicon/make-icns.sh` once to restore the names.
+>
+> Do **not** run them on a normal checkout. `make-icns.sh` renames the five
+> `-2x` files to `@2x` inside the tracked `AppIcon.iconset` and writes an
+> untracked `AppIcon.icns` beside it, so it dirties tracked art. A later
+> `recut.sh` writes the five `-2x` names back beside the five stale `@2x`
+> names, which leaves 67 PNGs under `assets/art/**` against the
+> `EXPECTED_TOTAL = 62` that `census.py` asserts — the guard then fails.
+>
+> A normal build needs neither script. Since the app-icon commit,
+> `scripts/build-app.sh` builds the bundle's `.icns` itself: it copies the
+> iconset to a temporary directory and renames the copy, so the tracked files
+> stay clean.
 
 ## menubar/  — NSImage template images
 `svg/`, `pdf/` (vector, 16pt — the format AppKit prefers), `png/` (16/32/48).
@@ -73,9 +134,32 @@ Never tint these yourself, never ship a coloured menu-bar variant.
   layers carry alpha. This is what Icon Composer wants.
 - `AppIcon.icon/` — Icon Composer bundle (`icon.json` + `Assets/`). Open it once in
   Icon Composer to confirm layer order and re-save before shipping.
+
+  **Read this before a dark re-save.** `icon.json` binds ONE liquid layer,
+  `Assets/liquid.svg`, and that file carries the LIGHT `state` token `#A2571E`.
+  A single accent served both appearances before the recolour, so one file was
+  right; it no longer is. The dark token `#B8682A` now sits beside it in
+  `Assets/liquid-dark.svg`, which is byte-identical to `layers/dark-3-liquid.svg`
+  — as `Assets/liquid.svg` is to `layers/default-3-liquid.svg`.
+
+  `icon.json` does NOT reference that new file, and that is deliberate: the
+  bundle holds no per-appearance key to copy. `vessel-dark.svg` and
+  `vessel-mono.svg` sit in `Assets/` unreferenced in the same way, so there is
+  no example here to follow. Bind the dark liquid inside Icon Composer and let
+  the app write its own key. Do not hand-write a key into `icon.json`.
+
+  Nothing in the build path reads this bundle, so no shipped artifact carries
+  the wrong token. `scripts/build-app.sh` builds the `.icns` from
+  `AppIcon.iconset/`. `recut.sh` renders every raster from
+  `appicon/svg/AppIcon-default.svg`, `appicon/svg/AppIcon-dark.svg` and
+  `site/appicon-web.svg`.
 - `svg/`, `pdf/` — flattened 1024 vector, one per appearance.
 - `png/{default,dark,mono}/` — 16…1024 rasters.
-- `AppIcon.iconset/` + `make-icns.sh` → `AppIcon.icns` via `iconutil`.
+- `AppIcon.iconset/` + `make-icns.sh` → `AppIcon.icns` via `iconutil`. Run
+  `make-icns.sh` only on a fresh delivery: it renames the tracked `-2x` files in
+  place, and the census then fails after the next `recut.sh` — see **Filenames**
+  above. `scripts/build-app.sh` builds the app's `.icns` from a copy of this
+  iconset, so a normal build runs nothing here.
 
 ## web/
 `favicon.svg` (monochrome, `prefers-color-scheme` aware), `favicon-16/32/48.png`,

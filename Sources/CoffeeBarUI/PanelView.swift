@@ -30,6 +30,15 @@ public struct MenuBarLabel: View {
 public struct PanelView: View {
     @Bindable var model: ServingModel
 
+    // Read here rather than inside BrandPalette so the palette stays a pure
+    // value type that a test can call without an Environment.
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+
+    private func brand(_ role: ColorRole) -> Color {
+        BrandPalette.color(role, scheme: colorScheme, contrast: colorSchemeContrast)
+    }
+
     public init(model: ServingModel) {
         self.model = model
     }
@@ -136,6 +145,12 @@ public struct PanelView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            // `state` colours the held segments and nothing else
+            // (assets/art/README.md lines 18-20). Placed per-picker rather than
+            // on the enclosing VStack: `.tint` is an Environment value, so one
+            // call up there also painted the Quit button and every focus ring —
+            // controls the brand doc assigns to `action`, which is web-only.
+            .tint(brand(.state))
 
             // The second control, and a SEPARATE question from the one above.
             // That one says whether to hold at all; this says whether a hold
@@ -162,6 +177,7 @@ public struct PanelView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            .tint(brand(.state))
 
             // The third control, and a third separate question: how much
             // battery a hold may spend. Issue #11 made the floor a setting
@@ -185,6 +201,7 @@ public struct PanelView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            .tint(brand(.state))
 
             // What is ACTUALLY held, beside the two controls that asked for it.
             // The user has to be able to see that Auto is holding right now, or
@@ -197,10 +214,21 @@ public struct PanelView: View {
             // claim no check could reach, because M1 design §5.4 rules out
             // asserting on this view. The wording now lives on
             // `ServingModel.servingSummary` and is asserted there.
-            Text(model.servingSummary)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            // The indicator is the only place brand colour touches the panel
+            // body, and it is a GRAPHIC, not text — 3:1, not 4.5:1. The symbol
+            // changes shape as well as colour (filled versus outline), so the
+            // state survives Differentiate Without Color. The sentence beside
+            // it stays, so colour is never the sole carrier.
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                let spec = ServingModel.indicator(isServing: model.isServing)
+                Image(systemName: spec.symbolName)
+                    .foregroundStyle(brand(spec.role))
+                    .accessibilityHidden(true)
+                Text(model.servingSummary)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .font(.caption)
 
             // Rendered verbatim from the model, with no text built here. This
             // view composed the sentence until now, and that is how it came to

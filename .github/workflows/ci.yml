@@ -62,11 +62,22 @@ jobs:
       - name: Test
         run: swift test
 
-  # A SEPARATE job, on ubuntu, deliberately. The policy bench is pure logic with
-  # no macOS dependency, and the comment above records that macOS runners bill at
-  # 10x. This runs at 1x and in parallel with the Swift build.
+  # A SEPARATE job, on ubuntu, deliberately. The policy bench and the art guards
+  # are pure logic with no macOS dependency, and the comment above records that
+  # macOS runners bill at 10x. This runs at 1x and in parallel with the Swift
+  # build.
+  #
+  # THE CHECK NAME OF THIS JOB CHANGED. GitHub Actions names a check run after
+  # the job's `name:` when one is set, and falls back to the job id only when it
+  # is absent. This job HAS a `name:`, so its check went from "Policy bench unit
+  # tests" to "Policy bench and art guards" — keeping the `bench-test` id did not
+  # hold the name still.
+  #
+  # No configured gate breaks, but for a different reason: the required check is
+  # `build-test`, which carries no `name:` and so is named by its id. A rule that
+  # ever names THIS job must be renamed with it.
   bench-test:
-    name: Policy bench unit tests
+    name: Policy bench and art guards
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -98,3 +109,46 @@ jobs:
       # this check while the job stays green.
       - name: Bench module tests
         run: node --test site/assets/bench.test.js
+
+      # Pillow comes from apt, not from pip. Two reasons, in this order:
+      #   1. `pip install` into the runner's system Python is refused on
+      #      ubuntu-24.04 — PEP 668 marks it externally-managed.
+      #   2. An unpinned PyPI name is a supply-chain surface in a workflow that
+      #      pins every `uses:` by commit SHA for exactly that reason. apt takes
+      #      the package from the runner image's own distribution.
+      # `python3-pil` provides `PIL.Image`, which is all three scripts import.
+      - name: Install Pillow
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-pil
+
+      # ASSERTED, not assumed, and the same shape as the Node version check
+      # above. If `python3` on PATH is ever not the interpreter apt installed
+      # into, this fails HERE naming the interpreter, instead of failing inside
+      # census.py with an ImportError that reads like a broken guard.
+      #
+      # `PIL.Image`, never bare `PIL`. `PIL/__init__.py` defines `__version__`
+      # WITHOUT importing `Image`, so `import PIL` succeeds on a namespace
+      # package or a half-unpacked install — exactly the partial install this
+      # step exists to catch. All four scripts do `from PIL import Image`, so
+      # the probe has to reach the same depth they do.
+      - name: Confirm Pillow is importable
+        run: python3 -c 'import sys, PIL.Image; print(PIL.__version__, sys.executable)'
+
+      # census.py globs `assets/art/**/*.png` RELATIVE to the working directory,
+      # which is the repository root here. It asserts the file COUNT as well as
+      # the pixels, so a path that stops resolving fails loudly rather than
+      # reporting a clean sweep of nothing.
+      - name: Art census
+        run: python3 assets/art/census.py
+
+      # Three separate steps, never one script and never a directory. Each names
+      # the file it runs, so a failure points at one guard. The two _test.py
+      # files build their own PNG trees under a temp directory and resolve their
+      # subject relative to their own __file__, so they need no working
+      # directory of their own.
+      - name: Census guard tests
+        run: python3 assets/art/census_test.py
+
+      - name: Remap guard tests
+        run: python3 assets/art/remap_test.py
