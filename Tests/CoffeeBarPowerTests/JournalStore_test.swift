@@ -391,19 +391,44 @@ private var packageRootForSyncCheck: URL {
         }
         .joined(separator: "\n")
 
-    let barrier = try #require(code.range(of: "F_FULLFSYNC"), """
-        JournalStore.swift no longer calls F_FULLFSYNC in code. The journal is \
-        then only as durable as the drive cache, and §8.2(1)'s fsync is gone.
-        """)
-
     let rename = try #require(code.range(of: "replaceItemAt"), """
         JournalStore.swift no longer renames the temp file into place, so this \
         check can no longer see the ordering it exists to assert.
         """)
 
-    #expect(barrier.lowerBound < rename.lowerBound, """
-        F_FULLFSYNC is called AFTER the rename. The name then becomes visible \
-        while the bytes behind it are still in the cache, which is the window \
-        the barrier exists to close.
+    // BOTH barriers, found separately. `range(of:)` returns only the FIRST
+    // match, so a guard built on one call sees the file barrier and is blind to
+    // the directory barrier entirely — measured: replacing the directory
+    // `F_FULLFSYNC` with a no-op left that shape green.
+    //
+    // They protect different things. The first makes the journal's BYTES
+    // durable; the second (JournalStore.swift:141-150) makes its NAME durable,
+    // because the rename is a directory metadata change and a power failure can
+    // otherwise leave the entry absent while the mutation it describes has
+    // already landed.
+    var barriers: [Range<String.Index>] = []
+    var cursor = code.startIndex
+    while let found = code.range(of: "F_FULLFSYNC", range: cursor ..< code.endIndex) {
+        barriers.append(found)
+        cursor = found.upperBound
+    }
+
+    #expect(barriers.count >= 2, """
+        JournalStore.swift calls F_FULLFSYNC \(barriers.count) time(s) in code. \
+        The write needs two: one for the file's bytes and one for the parent \
+        directory, so the journal's name is durable and not just its contents.
+        """)
+
+    #expect(barriers.contains { $0.lowerBound < rename.lowerBound }, """
+        no F_FULLFSYNC precedes the rename. The name becomes visible while the \
+        bytes behind it are still in the drive cache, which is the window the \
+        barrier exists to close.
+        """)
+
+    #expect(barriers.contains { $0.lowerBound > rename.upperBound }, """
+        no F_FULLFSYNC follows the rename, so the parent directory is never \
+        barriered. After a power failure the journal entry can be absent while \
+        the system mutation it describes has already landed — which is the \
+        state §8.2 exists to make impossible.
         """)
 }

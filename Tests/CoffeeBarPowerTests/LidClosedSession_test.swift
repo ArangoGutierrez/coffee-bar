@@ -253,6 +253,8 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
     let url = root.appending(path: "state/probe-journal.json")
     let service = ArmService(
         journal: RecordingJournal(log: log, inner: FileJournalStore(url: url)),
+        reader: GuardedJournalReader(url: url, requiredOwner: getuid(),
+                                     quarantineOnRefusal: false),
         power: RecordingPower(log: log, state: .init(false)),
         supervisor: RecordingSupervisor(log: log),
         display: RecordingDisplay(log: log, awakeAfterForcing: false),
@@ -285,6 +287,8 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
     let url = root.appending(path: "state/probe-journal.json")
     let service = ArmService(
         journal: RecordingJournal(log: log, inner: FileJournalStore(url: url)),
+        reader: GuardedJournalReader(url: url, requiredOwner: getuid(),
+                                     quarantineOnRefusal: false),
         power: RecordingPower(log: log, state: .init(false)),
         supervisor: RecordingSupervisor(log: log),
         display: RecordingDisplay(log: log, awakeAfterForcing: false),
@@ -314,6 +318,8 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
     let store = FileJournalStore(url: url)
     let service = ArmService(
         journal: RecordingJournal(log: log, inner: store),
+        reader: GuardedJournalReader(url: url, requiredOwner: getuid(),
+                                     quarantineOnRefusal: false),
         power: RecordingPower(log: log, state: .init(true)),   // already set
         supervisor: RecordingSupervisor(log: log),
         display: RecordingDisplay(log: log, awakeAfterForcing: false),
@@ -339,6 +345,8 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
     let store = FileJournalStore(url: url)
     let service = ArmService(
         journal: RecordingJournal(log: log, inner: store),
+        reader: GuardedJournalReader(url: url, requiredOwner: getuid(),
+                                     quarantineOnRefusal: false),
         power: RecordingPower(log: log, state: .init(false)),
         supervisor: RecordingSupervisor(log: log),
         display: RecordingDisplay(log: log, awakeAfterForcing: false),
@@ -378,6 +386,8 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
     let power = RecordingPower(log: log, state: .init(false))
     let service = ArmService(
         journal: RecordingJournal(log: log, inner: store),
+        reader: GuardedJournalReader(url: url, requiredOwner: getuid(),
+                                     quarantineOnRefusal: false),
         power: power,
         supervisor: RecordingSupervisor(log: log),
         display: RecordingDisplay(log: log, awakeAfterForcing: false, failOnForce: true),
@@ -413,6 +423,8 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
     let power = RecordingPower(log: log, state: .init(false))
     let service = ArmService(
         journal: RecordingJournal(log: log, inner: store),
+        reader: GuardedJournalReader(url: url, requiredOwner: getuid(),
+                                     quarantineOnRefusal: false),
         power: power,
         supervisor: RecordingSupervisor(log: log, failOnInstall: true),
         display: RecordingDisplay(log: log, awakeAfterForcing: false),
@@ -444,6 +456,8 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
     let url = root.appending(path: "state/probe-journal.json")
     let service = ArmService(
         journal: RecordingJournal(log: log, inner: FileJournalStore(url: url)),
+        reader: GuardedJournalReader(url: url, requiredOwner: getuid(),
+                                     quarantineOnRefusal: false),
         power: RecordingPower(log: log, state: .init(false)),
         supervisor: RecordingSupervisor(log: log),
         display: RecordingDisplay(log: log, awakeAfterForcing: false),
@@ -474,6 +488,8 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
     let power = RecordingPower(log: log, state: .init(false))
     let service = ArmService(
         journal: RecordingJournal(log: log, inner: store),
+        reader: GuardedJournalReader(url: url, requiredOwner: getuid(),
+                                     quarantineOnRefusal: false),
         power: power,
         supervisor: RecordingSupervisor(log: log),
         display: RecordingDisplay(log: log, awakeAfterForcing: true),  // stayed lit
@@ -504,6 +520,8 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
     let power = RecordingPower(log: log, state: .init(false))
     let service = ArmService(
         journal: RecordingJournal(log: log, inner: FileJournalStore(url: url)),
+        reader: GuardedJournalReader(url: url, requiredOwner: getuid(),
+                                     quarantineOnRefusal: false),
         power: power,
         supervisor: RecordingSupervisor(log: log),
         display: RecordingDisplay(log: log, awakeAfterForcing: nil),
@@ -558,6 +576,8 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
 
     let service = ArmService(
         journal: RecordingJournal(log: log, inner: store),
+        reader: GuardedJournalReader(url: url, requiredOwner: getuid(),
+                                     quarantineOnRefusal: false),
         power: power,
         supervisor: supervisor,
         display: RecordingDisplay(log: log, awakeAfterForcing: false),
@@ -580,6 +600,167 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
         the daemon booted itself out during arm, so nothing supervises the \
         setting that is still held. order: \(log.calls)
         """)
+}
+
+// MARK: - The invariant: arm never succeeds while holding an unexplained setting
+
+@Test func armFailsRatherThanHoldASettingTheJournalCannotExplain() throws {
+    // THE INVARIANT, driven on its own: `arm` must never return success while
+    // the system holds a setting the journal cannot explain.
+    //
+    // Deriving the boot time removed the daemon's REASON to revert on the first
+    // tick. It did not remove its ABILITY. Anything that clears the journal
+    // between `install()` and the end of `arm` — a revert this code has not
+    // thought of, a future policy, an operator running `revert` in another
+    // terminal — leaves sleep held with nothing on disk to undo it, and `arm`
+    // cheerfully printing "armed".
+    //
+    // So this test does not model a daemon at all. It removes the journal
+    // directly, which is the general shape every such race collapses to, and
+    // requires `arm` to FAIL and roll back rather than report success.
+    let root = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let log = CallLog()
+    let url = root.appending(path: "state/probe-journal.json")
+    let store = FileJournalStore(url: url)
+    let power = RecordingPower(log: log, state: .init(false))
+    let supervisor = LaunchdModel(log: log)
+
+    // Whatever launchd started, it took the journal with it.
+    supervisor.runAtLoad = { try? store.clear() }
+
+    let service = ArmService(
+        journal: RecordingJournal(log: log, inner: store),
+        reader: GuardedJournalReader(url: url, requiredOwner: getuid(),
+                                     quarantineOnRefusal: false),
+        power: power,
+        supervisor: supervisor,
+        display: RecordingDisplay(log: log, awakeAfterForcing: false),
+        clock: { fixedNow },
+        displayVerifyDelay: 0)
+
+    #expect(throws: ArmError.journalVanished) { try service.arm(ttlSeconds: 3600) }
+
+    // The premise: without this the assertions below could pass because the
+    // setting was never held in the first place.
+    #expect(log.calls.contains("power.set(true)"),
+            "arm never held the setting, so it had nothing to detect: \(log.calls)")
+
+    #expect(power.state.current == false, """
+        arm left sleep disabled with no journal to explain it. That is §8.2's \
+        named failure, produced by a successful arm. order: \(log.calls)
+        """)
+    #expect(supervisor.isLoaded == false,
+            "the failed arm left the root daemon installed: \(log.calls)")
+}
+
+@Test func armRefusesBeforeHoldingAnythingWhenTheJournalPathWouldBeRefused() throws {
+    // The regression the 0700 tightening introduced, and the reason a "refuse
+    // safely" rule needs a partner on the WRITE side.
+    //
+    // A pre-existing 0755 state directory is exactly what SECURITY.md:187-190
+    // describes. The reader refuses it — correctly — and the watchdog's
+    // fail-safe then restores sleep, clears and uninstalls. But `arm` went on
+    // to set the flag anyway, so "refuse safely" became "hold forever": the
+    // measured end state was `arm=SUCCESS sleepDisabled=true journalLoads=false
+    // daemonLoaded=false`.
+    //
+    // The fix is to ask the READER'S OWN RULE before writing anything. Nothing
+    // is held, and the refusal names the directory the operator has to fix.
+    let root = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let log = CallLog()
+    let url = root.appending(path: "state/probe-journal.json")
+    let stateDir = url.deletingLastPathComponent()
+    // A directory an earlier build left behind, which the store cannot repair.
+    try FileManager.default.createDirectory(
+        at: stateDir, withIntermediateDirectories: true,
+        attributes: [.posixPermissions: 0o755])
+
+    let store = FileJournalStore(url: url)
+    let power = RecordingPower(log: log, state: .init(false))
+    let supervisor = LaunchdModel(log: log)
+    let watchdog = WatchdogService(
+        reader: GuardedJournalReader(url: url, store: store, requiredOwner: getuid()),
+        power: power, supervisor: supervisor, notifier: RecordingNotifier(),
+        bootTime: { fixedBoot })
+    supervisor.runAtLoad = { _ = try? watchdog.evaluate(now: fixedNow) }
+
+    let service = ArmService(
+        journal: RecordingJournal(log: log, inner: store),
+        reader: GuardedJournalReader(url: url, requiredOwner: getuid(),
+                                     quarantineOnRefusal: false),
+        power: power,
+        supervisor: supervisor,
+        display: RecordingDisplay(log: log, awakeAfterForcing: false),
+        clock: { fixedNow },
+        displayVerifyDelay: 0)
+
+    #expect(throws: (any Error).self) { try service.arm(ttlSeconds: 3600) }
+
+    #expect(power.state.current == false,
+            "the refused arm still held the setting: \(log.calls)")
+    #expect(supervisor.isLoaded == false,
+            "the refused arm left a root daemon installed: \(log.calls)")
+    // Nothing was held, so nothing had to be rolled back: the refusal lands
+    // before the first side effect.
+    #expect(log.calls.contains("power.set(true)") == false, """
+        arm reached the power setting on a path it had already judged \
+        untrustworthy. order: \(log.calls)
+        """)
+    #expect(log.calls.contains("journal.write") == false, """
+        arm wrote a journal into a directory it refuses to read back. \
+        order: \(log.calls)
+        """)
+}
+
+@Test func armFailsWhenItsOwnDaemonRevertsInsideTheBootSecond() throws {
+    // The second reachable case, and the one that survives fix (a).
+    //
+    // `HostInfo.now()` truncates `setAt` DOWN to the whole second, so an `arm`
+    // landing inside the boot second records a `setAt` fractionally BELOW
+    // `kern.boottime`. The journal then reads as older than the boot, §8.2(4)
+    // reverts it unconditionally, and the daemon undoes the arm that installed
+    // it. Bounded under one second and vanishingly unlikely for a human's
+    // `sudo` — and the consequence is unbounded, so it gets a guard.
+    //
+    // Reverting is the RIGHT call here: the boot comparison is deliberately
+    // biased toward reverting. What must not happen is `arm` reporting success
+    // afterwards.
+    let root = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let log = CallLog()
+    let url = root.appending(path: "state/probe-journal.json")
+    let store = FileJournalStore(url: url)
+    let power = RecordingPower(log: log, state: .init(false))
+    let supervisor = LaunchdModel(log: log)
+    let watchdog = WatchdogService(
+        reader: GuardedJournalReader(url: url, store: store, requiredOwner: getuid()),
+        power: power, supervisor: supervisor, notifier: RecordingNotifier(),
+        // The machine booted a second AFTER this arm's truncated `setAt`.
+        bootTime: { fixedNow.addingTimeInterval(1) })
+    supervisor.runAtLoad = { _ = try? watchdog.evaluate(now: fixedNow) }
+
+    let service = ArmService(
+        journal: RecordingJournal(log: log, inner: store),
+        reader: GuardedJournalReader(url: url, requiredOwner: getuid(),
+                                     quarantineOnRefusal: false),
+        power: power,
+        supervisor: supervisor,
+        display: RecordingDisplay(log: log, awakeAfterForcing: false),
+        clock: { fixedNow },
+        displayVerifyDelay: 0)
+
+    #expect(throws: ArmError.journalVanished) { try service.arm(ttlSeconds: 3600) }
+
+    #expect(power.state.current == false, """
+        the daemon reverted inside the boot second and arm still reported \
+        success, so the machine holds sleep with no journal. order: \(log.calls)
+        """)
+    #expect(supervisor.isLoaded == false)
 }
 
 // MARK: - §8.2(2,3) — the watchdog reverts
