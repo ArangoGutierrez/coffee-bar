@@ -82,7 +82,7 @@ private let hookBlockSurface = "docs/QUICKSTART.md"
 ///
 /// `CHANGELOG.md` joined them on 2026-08-04. Nothing read it before that, so a
 /// future entry could have claimed token accounting and stayed green.
-private let markdownSurfaces = ["CHANGELOG.md", "README.md",
+private let markdownSurfaces = ["CHANGELOG.md", "README.md", "SECURITY.md",
                                 "docs/BUILDING.md", "docs/QUICKSTART.md"]
 
 /// Every `.html` file under `site/`, found on disk.
