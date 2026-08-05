@@ -82,6 +82,15 @@ func orangeIsSpentOnlyOnTheAdvisories() throws {
     // element appeared or an advisory silently lost its colour. This panel has
     // already shipped one undocumented control; the count is what catches the
     // next one.
+    //
+    // COUPLED TO `ColorRole.warning`, and this note is one half of a pair.
+    // The three advisories render `.orange` as a LITERAL, never through
+    // `brand(.warning)`, so `.warning` has no production caller and this count
+    // is what pins the literal down. Routing the advisories through the role —
+    // which is what fixing issue #30 will want — takes this count to 0 and
+    // turns this test red. That is the guard working, not a regression: move
+    // the count in the same change. `BrandPalette.swift` carries the other
+    // half of this note, on the `ColorRole` declaration.
     #expect(occurrences == 3,
             "expected 3 orange advisory lines, found \(occurrences)")
 }

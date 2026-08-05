@@ -18,6 +18,21 @@ import SwiftUI
 /// semantic colour is the one macOS users already read that way. Omitting the
 /// case removes the ROLE from the vocabulary, not the pigment from the screen.
 ///
+/// `.warning` HAS NO PRODUCTION CALLER. This comment says so outright, because
+/// the case reads as though the app routed warnings through it, and it does
+/// not. The case earns its place by keeping the role vocabulary complete and
+/// testable: `rgb` answers `nil` for it, and `CaseIterable` then carries it
+/// through the contrast walk described below.
+///
+/// The app renders that pigment WITHOUT the role. `PanelView` writes the
+/// literal `.foregroundStyle(.orange)` on its three advisory lines — the ones
+/// driven by `suppressionAdvisory`, `hookAdvisory` and `ingestAdvisory` — and
+/// `orangeIsSpentOnlyOnTheAdvisories` in `PanelPaletteWiring_test.swift`
+/// asserts that literal appears exactly THREE times. So wiring those lines
+/// through `brand(.warning)` later means moving that count guard in the same
+/// change; doing one without the other turns the guard red. The advisories'
+/// light-appearance contrast is tracked as issue #30 and is not fixed here.
+///
 /// `CaseIterable` is load-bearing. `fixedRolesClearNonTextContrast` walks
 /// `allCases` and skips a role only because `rgb` answered `nil`. A role added
 /// here with a fixed value therefore cannot escape the 3:1 floor by being

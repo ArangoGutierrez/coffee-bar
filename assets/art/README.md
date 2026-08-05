@@ -134,6 +134,25 @@ Never tint these yourself, never ship a coloured menu-bar variant.
   layers carry alpha. This is what Icon Composer wants.
 - `AppIcon.icon/` — Icon Composer bundle (`icon.json` + `Assets/`). Open it once in
   Icon Composer to confirm layer order and re-save before shipping.
+
+  **Read this before a dark re-save.** `icon.json` binds ONE liquid layer,
+  `Assets/liquid.svg`, and that file carries the LIGHT `state` token `#A2571E`.
+  A single accent served both appearances before the recolour, so one file was
+  right; it no longer is. The dark token `#B8682A` now sits beside it in
+  `Assets/liquid-dark.svg`, which is byte-identical to `layers/dark-3-liquid.svg`
+  — as `Assets/liquid.svg` is to `layers/default-3-liquid.svg`.
+
+  `icon.json` does NOT reference that new file, and that is deliberate: the
+  bundle holds no per-appearance key to copy. `vessel-dark.svg` and
+  `vessel-mono.svg` sit in `Assets/` unreferenced in the same way, so there is
+  no example here to follow. Bind the dark liquid inside Icon Composer and let
+  the app write its own key. Do not hand-write a key into `icon.json`.
+
+  Nothing in the build path reads this bundle, so no shipped artifact carries
+  the wrong token. `scripts/build-app.sh` builds the `.icns` from
+  `AppIcon.iconset/`. `recut.sh` renders every raster from
+  `appicon/svg/AppIcon-default.svg`, `appicon/svg/AppIcon-dark.svg` and
+  `site/appicon-web.svg`.
 - `svg/`, `pdf/` — flattened 1024 vector, one per appearance.
 - `png/{default,dark,mono}/` — 16…1024 rasters.
 - `AppIcon.iconset/` + `make-icns.sh` → `AppIcon.icns` via `iconutil`. Run
