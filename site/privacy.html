@@ -96,8 +96,9 @@ reads on your Mac and what leaves it.</p>
 
 <h2 class="eyebrow">What it reads</h2>
 <p>It reads agent session metadata, delivered by hooks you install yourself over
-a local socket. It reads one local configuration file, ~/.claude/settings.json,
-to check your hooks are wired correctly. It reads nothing else.</p>
+a local socket. It reads up to three local configuration files —
+~/.claude/settings.json, ~/.codex/hooks.json and ~/.cursor/hooks.json — to check
+your hooks are wired correctly. It reads nothing else.</p>
 
 <h2 class="eyebrow">What it never reads</h2>
 <p>It never reads the contents of your agent conversations. The fields that
