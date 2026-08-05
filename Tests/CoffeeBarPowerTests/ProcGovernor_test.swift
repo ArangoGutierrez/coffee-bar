@@ -156,6 +156,39 @@ private func codeWithoutComments(_ text: String) -> String {
     return out
 }
 
+/// Doc-comment continuations joined, with a space OUTSIDE a `code span` and
+/// with nothing INSIDE one.
+///
+/// The parity matters, and neither rule works alone. The citation this guard was
+/// written for is wrapped mid-identifier across two `///` lines, so joining
+/// every continuation with a space rebuilds it as two words and the shape filter
+/// drops it — the guard would pass over its own reason for existing. Joining
+/// every continuation with nothing instead fuses `launchctl bootstrap system`
+/// into one token and reports a shell command as a missing symbol. Measured:
+/// that false positive appeared on the first run.
+///
+/// A code span cannot cross out of a comment block, so a non-comment line closes
+/// any span that is open.
+private func docCommentsJoined(_ text: String) -> String {
+    var out = ""
+    var insideSpan = false
+
+    for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+        let trimmed = line.drop { $0 == " " || $0 == "\t" }
+        guard trimmed.hasPrefix("///") else {
+            out += "\n"
+            insideSpan = false
+            continue
+        }
+        var body = String(trimmed.dropFirst(3))
+        if body.hasPrefix(" ") { body.removeFirst() }
+
+        out += insideSpan ? body : " " + body
+        if body.count(where: { $0 == "`" }) % 2 == 1 { insideSpan.toggle() }
+    }
+    return out
+}
+
 private func packageRoot() -> URL {
     URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()      // …/Tests/CoffeeBarPowerTests
@@ -642,6 +675,104 @@ private let targetsThatDoNotShipTheFeature = ["/CoffeeBarPower/", "/CoffeeBarGov
                 "the scan found no call in the governor itself; it is looking in the wrong place")
         #expect(callers == allowed,
                 "setpriority is called outside the governor: \(callers.subtracting(allowed))")
+    }
+
+    // MARK: - A comment may not cite something that does not exist
+
+    @Test func everyLongIdentifierACommentCitesExistsSomewhereInTheTree() throws {
+        // `DemotionPolicy.swift` cited
+        // `nothingOutsideTheGovernorEverCallsSetpriorityOnAForeignPid` as the
+        // guard that keeps the second door shut. No such test has ever existed;
+        // the real one is
+        // `nothingOutsideTheGovernorPutsAForeignProcessIntoBackground`. A reader
+        // who goes looking finds nothing and concludes the guard was deleted.
+        //
+        // A citation is the only part of a comment a machine CAN check, and
+        // checking it is what makes naming the guard worth doing. This does not
+        // check that the named test checks what the sentence claims — nothing
+        // can — only that it is there to read.
+        //
+        // Comments are stripped from the RESOLUTION side, so a name that exists
+        // in prose alone does not resolve itself. That is exactly the defect.
+        let root = packageRoot()
+
+        func swiftFiles(under directory: String) throws -> [URL] {
+            let base = root.appendingPathComponent(directory)
+            let walker = try #require(FileManager.default.enumerator(
+                at: base, includingPropertiesForKeys: nil),
+                                      "cannot walk \(directory); this guard cannot run")
+            var found: [URL] = []
+            for case let file as URL in walker where file.pathExtension == "swift" {
+                found.append(file)
+            }
+            return found
+        }
+
+        let sources = try swiftFiles(under: "Sources")
+        let tests = try swiftFiles(under: "Tests")
+        #expect(sources.count >= 10 && tests.count >= 10,
+                "found \(sources.count) source and \(tests.count) test files; the walk is looking in the wrong place")
+
+        // Everything DECLARED, with comments removed. A declaration is code.
+        var declarations = ""
+        for file in sources + tests {
+            declarations += codeWithoutComments(try String(contentsOf: file, encoding: .utf8))
+        }
+        #expect(declarations.count > 100_000,
+                "the comment stripper returned \(declarations.count) bytes of code; every name below would look undeclared")
+
+        // Every backticked identifier a comment in Sources cites.
+        //
+        // Doc-comment continuations are joined FIRST. The broken citation above
+        // is wrapped across two `///` lines, so a scan of the raw text would not
+        // see it at all and this guard would have passed over the one defect it
+        // was written for.
+        // The wrap handling, pinned on a literal rather than trusted from the
+        // sweep. Nothing in the tree is guaranteed to stay wrapped, so once the
+        // one wrapped citation is repaired this is the only thing that keeps the
+        // rejoining honest. Both directions are asserted, because each rule on
+        // its own produces a defect and the second one is silent.
+        let probe = """
+        /// prose naming `someVeryLongIdentifier
+        /// ThatWrapsAcrossTwoLines` and then a shell command
+        /// `launchctl bootstrap system` written on one line
+        """
+        let joinedProbe = docCommentsJoined(probe)
+        #expect(joinedProbe.contains("someVeryLongIdentifierThatWrapsAcrossTwoLines"),
+                "a citation wrapped across two /// lines is not rejoined, so this guard cannot see the defect it exists for")
+        #expect(joinedProbe.contains("launchctl bootstrap system"),
+                "a shell command on one line was fused into a single token, which this guard would report as a missing symbol")
+
+        var cited: [String: Set<String>] = [:]
+        let spans = try NSRegularExpression(pattern: "`([^`\\n]{1,140})`")
+        for file in sources {
+            let joined = docCommentsJoined(try String(contentsOf: file, encoding: .utf8))
+            let ns = joined as NSString
+            for m in spans.matches(in: joined, range: NSRange(location: 0, length: ns.length)) {
+                let name = ns.substring(with: m.range(at: 1))
+                // A lowerCamelCase run of at least 20 characters. Long enough
+                // that a word from an English sentence cannot reach it, and
+                // narrow enough that a path, a flag, an expression, a shell
+                // command or a type name is not mistaken for one.
+                guard name.count >= 20,
+                      let first = name.first, first.isLowercase, first.isLetter,
+                      name.allSatisfy({ $0.isLetter || $0.isNumber }) else { continue }
+                cited[name, default: []].insert(file.lastPathComponent)
+            }
+        }
+
+        // Anti-vacuity. A normaliser that stopped matching would report zero
+        // unresolved names and pass, for ever, over any citation at all.
+        #expect(cited.count >= 20,
+                "only \(cited.count) citations matched; the scanner has stopped reading comments: \(cited.keys.sorted())")
+
+        let unresolved = cited
+            .filter { !declarations.contains($0.key) }
+            .map { "\($0.key) (cited in \($0.value.sorted().joined(separator: ", ")))" }
+            .sorted()
+
+        #expect(unresolved.isEmpty,
+                "a comment cites something that is declared nowhere in Sources or Tests:\n\(unresolved.joined(separator: "\n"))")
     }
 
     // MARK: - The documents must match what the product does

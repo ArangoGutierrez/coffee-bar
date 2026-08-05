@@ -94,7 +94,8 @@ public struct RecoveryReport: Equatable, Sendable {
 /// browser stays demoted until coffee-bar next starts. It is bounded by
 /// construction, because darwin background state is a process attribute and so
 /// dies with the process and never survives a reboot. "Bounded" can still mean
-/// days. This is not solved; it is accepted, and `docs/ROADMAP.md` says so.
+/// days. This is not solved; it is accepted, and `docs/ACCEPTED-RISKS.md` says
+/// so. Nothing calls this type yet, so nothing carries that exposure today.
 ///
 /// **One door.** `demote(_:)` is the only method that puts a foreign process
 /// into background state, and it is the only caller of `DemotionPolicy`.

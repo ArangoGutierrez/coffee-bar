@@ -275,7 +275,7 @@ private func inputs(sessions: [AgentSession] = [],
     // session list on one call. Every case in the section above passes `.auto`
     // and every case below passes an empty list, so the two inputs are
     // otherwise only ever exercised apart.
-    // `displaySleepAssertionIsNeverRequested` does combine them, but it reads
+    // `noUserIntentAloneRequestsTheDisplayAssertion` does combine them, but it reads
     // `displaySleepAssertion` and never the hold.
 
     // 1. `.stop` VETOES an active session. This is the M2 decision, and the

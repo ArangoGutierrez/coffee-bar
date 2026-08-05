@@ -51,9 +51,9 @@ public enum DemotionVerdict: Equatable, Sendable {
 /// **One door.** This is the only place the rule is written, and
 /// `ProcGovernor.demote(_:)` is the only caller. Issue #11 shipped the opposite
 /// shape — a value bounded on the decision path and not on the display path —
-/// and traded a stale-floor defect for an unbounded-floor one. `nothingOutside
-/// TheGovernorEverCallsSetpriorityOnAForeignPid` keeps the second door from
-/// being opened.
+/// and traded a stale-floor defect for an unbounded-floor one.
+/// `nothingOutsideTheGovernorPutsAForeignProcessIntoBackground` keeps the
+/// second door from being opened.
 ///
 /// **Pure, and that is deliberate.** Every input is a value the caller measured.
 /// Discovering them — the ancestor walk, the frontmost application, the tracked
