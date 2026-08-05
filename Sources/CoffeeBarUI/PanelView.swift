@@ -30,6 +30,15 @@ public struct MenuBarLabel: View {
 public struct PanelView: View {
     @Bindable var model: ServingModel
 
+    // Read here rather than inside BrandPalette so the palette stays a pure
+    // value type that a test can call without an Environment.
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+
+    private func brand(_ role: ColorRole) -> Color {
+        BrandPalette.color(role, scheme: colorScheme, contrast: colorSchemeContrast)
+    }
+
     public init(model: ServingModel) {
         self.model = model
     }
@@ -175,10 +184,21 @@ public struct PanelView: View {
             // claim no check could reach, because M1 design §5.4 rules out
             // asserting on this view. The wording now lives on
             // `ServingModel.servingSummary` and is asserted there.
-            Text(model.servingSummary)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            // The indicator is the only place brand colour touches the panel
+            // body, and it is a GRAPHIC, not text — 3:1, not 4.5:1. The symbol
+            // changes shape as well as colour (filled versus outline), so the
+            // state survives Differentiate Without Color. The sentence beside
+            // it stays, so colour is never the sole carrier.
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                let spec = ServingModel.indicator(isServing: model.isServing)
+                Image(systemName: spec.symbolName)
+                    .foregroundStyle(brand(spec.role))
+                    .accessibilityHidden(true)
+                Text(model.servingSummary)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .font(.caption)
 
             // Rendered verbatim from the model, with no text built here. This
             // view composed the sentence until now, and that is how it came to
@@ -278,6 +298,10 @@ public struct PanelView: View {
         }
         .padding(14)
         .frame(width: 260)
+        // `state` colours the held segments, which is exactly what a selected
+        // segment is (assets/art/README.md lines 18-20). `action` is the web's
+        // colour and never appears in the app.
+        .tint(brand(.state))
         // The panel refreshes on open so what the user sees is current. The
         // 30-second ticker is not here: `MenuBarExtra(.window)` builds this
         // view only while the panel is open, so a ticker owned by the view
