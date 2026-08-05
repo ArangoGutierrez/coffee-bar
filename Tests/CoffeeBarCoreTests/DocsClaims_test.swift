@@ -470,3 +470,108 @@ private func sourcesContain(_ phrase: String) -> Bool {
     }
     return false
 }
+
+// MARK: - Claim 4: the documented shim command works as documented
+
+/// Every `command` string anywhere inside `object`.
+///
+/// Recursive, so it does not depend on the nesting a page happens to print.
+private func commandStrings(in object: Any) -> [String] {
+    if let dictionary = object as? [String: Any] {
+        var found: [String] = []
+        for (key, value) in dictionary {
+            if key == "command", let text = value as? String { found.append(text) }
+            found += commandStrings(in: value)
+        }
+        return found
+    }
+    if let array = object as? [Any] { return array.flatMap { commandStrings(in: $0) } }
+    return []
+}
+
+/// The `coffeebar-hook` commands the quick start prints.
+///
+/// Read out of the page rather than written here, so the guards below test what
+/// a user would actually paste.
+///
+/// Parsed as JSON rather than matched with a regex. The command carries escaped
+/// quotes around the socket path — `\"$HOME/…\"` — and a `[^"]*` capture stops
+/// dead at the first of them, which silently truncates the very argument these
+/// guards are about. Measured: the capture ended at `--socket=\` and the health
+/// check guard failed against a string no reader would ever paste.
+///
+/// The shim snippet is a FRAGMENT, printed to be merged into an existing
+/// `hooks` object, so it is wrapped before parsing. That is what the page tells
+/// the reader to do with it.
+private func documentedShimCommands() throws -> [String] {
+    let text = try surfaceText(hookBlockSurface)
+    let blocks = try matches("```json\\n([\\s\\S]*?)\\n```", in: text).map { $0[1] }
+
+    var found: [String] = []
+    for block in blocks where block.contains("coffeebar-hook") {
+        let candidates = [block, "{\(block)}"]
+        guard let parsed = candidates.lazy
+            .compactMap({ try? JSONSerialization.jsonObject(with: Data($0.utf8)) })
+            .first
+        else {
+            Issue.record("a coffeebar-hook block in \(hookBlockSurface) parses as JSON neither whole nor wrapped; a reader merging it would get a broken settings file")
+            continue
+        }
+        found += commandStrings(in: parsed).filter { $0.contains("coffeebar-hook") }
+    }
+    return found
+}
+
+@Test func theDocumentedShimCommandIsOneTheHealthCheckCanSee() throws {
+    // The quick start tells the reader to keep `--socket` even though it names
+    // the default, and gives the reason: the health check finds its own hooks
+    // by matching `HookHealth.commandMarker` in the command. That instruction
+    // is only worth following if it is TRUE of the command printed beside it.
+    //
+    // Named bug: somebody shortens the documented command to
+    // `coffeebar-hook --tool=claude-code`, which posts perfectly well. The
+    // panel then reports the install as incomplete for every reader who
+    // followed the page, and nothing else in this suite would notice.
+    let commands = try documentedShimCommands()
+    #expect(!commands.isEmpty,
+            "\(hookBlockSurface) prints no coffeebar-hook command; this guard cannot run")
+
+    for command in commands {
+        #expect(command.contains(HookHealth.commandMarker),
+                """
+                \(hookBlockSurface) prints "\(command)", which does not contain \
+                HookHealth.commandMarker ("\(HookHealth.commandMarker)"). A hook \
+                wired from this page would post correctly and still be reported \
+                as missing.
+                """)
+    }
+}
+
+@Test func theDocumentedShimCommandNamesARealToolAndTheRealBinary() throws {
+    // The two literals in that command that no compiler checks: the product
+    // name, and the `--tool` value.
+    //
+    // The product name is `Package.swift`'s, and renaming the product while
+    // this page kept the old name would print a path that does not exist. The
+    // tool value is `AgentTool.shimName`, and the shim REFUSES a name it does
+    // not recognise — so a drifted page would tell the reader to paste a
+    // command that posts nothing at all, in silence, for ever.
+    let commands = try documentedShimCommands()
+    #expect(!commands.isEmpty,
+            "\(hookBlockSurface) prints no coffeebar-hook command; this guard cannot run")
+
+    let names = Set(AgentTool.allCases.map(\.shimName))
+    for command in commands {
+        let declared = try matches("--tool=([^\\s\"]+)", in: command).map { $0[1] }
+        #expect(!declared.isEmpty,
+                "\(hookBlockSurface) prints a shim command with no --tool: \(command)")
+        for value in declared {
+            #expect(names.contains(value),
+                    """
+                    \(hookBlockSurface) prints --tool=\(value), which \
+                    AgentTool.declared(byShimName:) refuses. That command posts \
+                    nothing. Known values: \(names.sorted()).
+                    """)
+        }
+    }
+}

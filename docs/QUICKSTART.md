@@ -8,8 +8,9 @@ writes your settings file for you. Until you add them, the app runs but no
 session event reaches it.
 
 This page wires Claude Code, which is the agent v0.1 supports. Codex and Cursor
-have adapters in the code and no documented wiring yet; they arrive with the
-`coffeebar-hook` shim in v0.2.
+have adapters in the code and no documented wiring yet. The `coffeebar-hook`
+shim below posts to their endpoints, but their own configuration files are a
+different shape from Claude Code's and this page documents neither.
 
 ## 1. Install
 
@@ -133,6 +134,69 @@ is `Stop`, which leaves the session waiting on you, and a waiting session takes
 That session does not hold the assertion while it waits. A session that waits on
 you holds nothing. So the cost is a stale row in the list, not a Mac that will
 not sleep.
+
+### Alternative: wire it with `coffeebar-hook`
+
+Every command above is the same long line, and it hardcodes both the socket path
+and the endpoint. Codex and Cursor post to a different endpoint, so wiring all
+three agents by hand means keeping three long lines apart and getting none of
+them wrong. `coffeebar-hook` is one binary that reads the payload on standard
+input and posts it for you.
+
+Nothing installs it on your `PATH` yet. Build it with the rest of the project —
+see [Building](BUILDING.md) — and use the absolute path to the binary that
+`swift build` produced:
+
+```json
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/ABSOLUTE/PATH/TO/coffeebar-hook --tool=claude-code --socket=\"$HOME/Library/Application Support/coffee-bar/ingest.sock\""
+          }
+        ]
+      }
+    ]
+```
+
+Use that same command for every event you wire, changing only the event name it
+sits under.
+
+**Keep the `--socket` argument even though it names the default.** The health
+check recognises a hook as its own by finding any of `HookHealth.commandMarkers`
+in the command you wired: the socket path, or the shim's own binary name. The
+command above carries both, so the panel still recognises it if you drop the
+argument. Keeping it costs nothing and leaves the command recognisable by either
+marker rather than by one.
+
+`--tool` takes `claude-code`, `codex` or `cursor`, and it decides which endpoint
+the payload goes to. That is the whole reason the shim exists: a payload cannot
+say which agent produced it, so the sender declares it by choosing the endpoint.
+An unrecognised name posts nothing rather than guessing.
+
+The shim exits 0 whatever happens, and writes nothing to standard output —
+an agent reads a hook's standard output as a decision. When coffee-bar is not
+running it drops the payload in silence, because that is the normal state and a
+complaint on every tool call would be worse than useless. A refusal is reported
+on standard error by its status code and never by its content. Run
+`coffeebar-hook --help` for the rest.
+
+**Measured on the machine that wrote this page**, as the best of 5 runs of 100
+posts each against a running coffee-bar. The shim took 1.16 s, so about 12 ms a
+post. The `curl` line above took 1.66 s over the same work. About 5 ms of either
+is the cost of starting any process at all: 100 runs of `/usr/bin/true` took
+0.54 s. Your machine will differ, and a loaded machine differs a lot — measure
+it rather than trusting these.
+
+**What has been exercised, and what has not.** All three `--tool` values were
+run end to end against a real ingest socket, each with its own recorded payload,
+and each arrived under its own origin. Only the Claude Code wiring on this page
+was exercised as an agent CONFIGURATION. Codex keeps its hooks in
+`~/.codex/hooks.json`, and Cursor keeps its own in `~/.cursor/hooks.json` under a
+flatter nesting. Neither has been wired and run here, so no recipe for either is
+printed.
 
 ## 3. Check it is listening
 

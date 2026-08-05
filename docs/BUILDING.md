@@ -29,6 +29,20 @@ The probe binary also advertises privileged verbs — `arm`, `report`, `revert`,
 task that would add it. Nothing in the shipped app reaches the privileged code
 path.
 
+## The hook shim
+
+    swift build
+    .build/debug/coffeebar-hook --help
+
+`coffeebar-hook` is the command you wire into an agent's hooks instead of a
+`curl` line. It reads one hook payload on standard input and posts it to a
+running coffee-bar. `--tool` selects the agent, and therefore the ingest
+endpoint the payload is attributed to.
+
+Nothing installs it on your `PATH`. The Homebrew formula builds the app bundle
+and does not place this binary anywhere, so a wired hook names the built
+binary by its absolute path. See [Quick start](QUICKSTART.md).
+
 ## Running the tests
 
     swift test

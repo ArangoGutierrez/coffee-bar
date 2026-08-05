@@ -192,7 +192,7 @@ not in it is not available.
                               ┌────────────────────────────────────┐
                               │ coffeebar-hook (CLI shim)          │
                               │  stdin JSON / argv → UNIX socket   │
-                              │  always exit 0, ≤50 ms             │
+                              │  always exit 0; fast, and bounded  │
                               └────────────────────────────────────┘
 ```
 
@@ -620,7 +620,7 @@ awake 5 s after lid close, abort the mode and notify. Do not silently cook the b
 | **M1** | Menu-bar app, assertion only | Holds/releases `PreventUserIdleSystemSleep`; display sleeps normally; `pmset -g assertions` shows coffee-bar as holder; parity with KeepingYouAwake. |
 | **M2** | Claude Code adapter + SessionHub | HTTP ingest live; sessions appear/transition/disappear correctly across a 20-turn session incl. a permission prompt and a `StopFailure`; assertion auto-releases within 5 s of last `Stop`; killing coffee-bar mid-turn does not stall the agent. |
 | **M3** | Helper + lid-closed mode | `SleepDisabled` set/reverted via XPC; display forced off; `kill -9` of the app reverts within 45 s; reboot with dirty journal reverts at load; all §8.1 aborts fire. |
-| **M4** | Codex + Cursor adapters, shim | Shim exits 0 in < 50 ms under all failure modes incl. app not running; config diffs shown before write; both tools drive state transitions. |
+| **M4** | Codex + Cursor adapters, shim | Shim exits 0 under **every** failure mode, incl. app not running. Two separate bounds, because one number cannot cover both. **Under 50 ms** on the normal path and on every failure that answers at once — no socket, connection refused, unknown `--tool`, empty stdin — measured 9–11 ms each. **About 1 s** when a listener accepts the connection and then never answers, which is the only case that can block at all: `HookShim.totalTimeout` caps the exchange at 1 s and process start-up adds the rest, measured 1.01 s. That ceiling is a tenth of the listener's own 10 s idle timeout, so a wedged listener cannot hold the agent for its timeout on every tool call. Config diffs shown before write; both tools drive state transitions. |
 | **M5** | Power triage + telemetry | Protected/demotable sets enforced; restore-on-exit verified; measured battery delta reported for `Espresso` vs baseline. |
 | **M6** | Token Tap (§15) | OTLP receiver ingests `claude_code.token.usage` and `codex.*` token metrics; per-session and per-repo totals reconcile with `/cost` and `/status` within 2%; zero content bytes persisted; receiver refuses non-loopback binds. |
 
