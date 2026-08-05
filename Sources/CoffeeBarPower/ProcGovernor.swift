@@ -183,10 +183,28 @@ public struct ProcGovernor: Sendable {
     /// 4. **This app set the bit.** A process that already carried
     ///    `EXT_DARWINBG` was put there by some other tool.
     ///
-    /// The journal is cleared afterwards, so a later run does not act on it
-    /// twice. Cleared even when some entries were refused: those entries
-    /// describe processes this run has now decided never to touch, and keeping
-    /// them only ages the pids further.
+    /// **What survives the recovery, and what does not.** Every entry this run
+    /// acted on or REFUSED is dropped, so a later run does not act on it twice:
+    /// `restored` is done, and `gone`, `reused` and `leftAlone` describe
+    /// processes this run has now decided never to touch. Keeping those only
+    /// ages the pids further.
+    ///
+    /// An entry whose restore FAILED is kept. A failure is not a refusal — the
+    /// process is alive, it is still the same process, this app set the bit, and
+    /// the call did not take. Dropping it would leave that process on the
+    /// E-cores AND delete the only record naming it, which is the state the
+    /// journal-first ordering exists to prevent, reached from the other end. One
+    /// transient `EPERM` is enough. `aRestoreThatFailedKeepsItsEntryAndTheOther
+    /// BucketsAreCleared` pins it and
+    /// `aLaterRunRetriesTheEntryWhoseRestoreFailed` pins the retry.
+    ///
+    /// **Retention is bounded by the three guards above the restore.** An entry
+    /// is kept only while its process is alive, is still the same process, and
+    /// carries a bit this app set. Once the process exits, the next recovery
+    /// classifies it `gone` before any restore is attempted and drops it. So a
+    /// kept entry cannot outlive its process and the journal cannot grow a
+    /// permanent tail of pids nobody can act on —
+    /// `aKeptEntryDisappearsOnceItsProcessDoes`.
     @discardableResult
     public func recover() throws -> RecoveryReport {
         guard let record = try journal.load() else { return RecoveryReport() }
@@ -196,6 +214,10 @@ public struct ProcGovernor: Sendable {
         var reused: [pid_t] = []
         var leftAlone: [pid_t] = []
         var failed: [pid_t] = []
+        // The entries themselves rather than their pids: a pid can appear twice
+        // in one journal with two different start times, and filtering by pid
+        // afterwards would keep the wrong one.
+        var keep: [DemotionEntry] = []
 
         for entry in record.entries {
             let pid = entry.identity.pid
@@ -221,10 +243,11 @@ public struct ProcGovernor: Sendable {
                 restored.append(pid)
             } else {
                 failed.append(pid)
+                keep.append(entry)
             }
         }
 
-        try journal.clear()
+        try journal.replace(with: keep)
         return RecoveryReport(restored: restored, gone: gone, reused: reused,
                               leftAlone: leftAlone, failed: failed)
     }

@@ -82,7 +82,27 @@ private struct FailingJournal: DemotionJournalStoring {
     func append(_ entry: DemotionEntry) throws {
         throw DemotionJournalError.writeFailed("the disk said no")
     }
+    func replace(with entries: [DemotionEntry]) throws {}
     func clear() throws {}
+}
+
+/// A setter whose answer depends on the pid.
+///
+/// One recovery can then hold a restore that worked AND a restore that failed,
+/// which is what tells "keep the failures" apart from "keep everything".
+private final class PerPIDSetter: DarwinBackgroundSetting, @unchecked Sendable {
+    private let results: [pid_t: Int32]
+    private let lock = NSLock()
+    private var _calls: [(on: Bool, pid: pid_t)] = []
+
+    init(results: [pid_t: Int32]) { self.results = results }
+
+    var calls: [(on: Bool, pid: pid_t)] { lock.withLock { _calls } }
+
+    func setBackground(_ on: Bool, for pid: pid_t) -> Int32 {
+        lock.withLock { _calls.append((on, pid)) }
+        return results[pid] ?? 0
+    }
 }
 
 private func snapshot(pid: pid_t, name: String, flags: UInt32 = 0x1404010,
@@ -427,6 +447,130 @@ private func codeWithoutComments(_ text: String) -> String {
 
         #expect(report == RecoveryReport())
         #expect(setter.calls.isEmpty)
+    }
+
+    // MARK: - A restore that FAILED is not a refusal
+
+    @Test func aRestoreThatFailedKeepsItsEntryAndTheOtherBucketsAreCleared() throws {
+        // The bug: `recover()` clearing the WHOLE journal, including entries
+        // whose restore FAILED. One transient EPERM then leaves a process on the
+        // E-cores AND deletes the only record naming it, so no later run can
+        // find it. That is the exact state the journal-first ordering exists to
+        // prevent, reached from the other end.
+        //
+        // A failed restore is not a refusal. The three refusal buckets describe
+        // processes this run has decided never to touch; `failed` describes a
+        // process this run still means to restore and could not.
+        //
+        // Three entries, one per outcome, so "keep the failures" cannot pass by
+        // keeping everything: the gone entry must go and the restored one too.
+        let url = journalPath()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = FileDemotionJournalStore(url: url)
+
+        try store.append(DemotionEntry(identity: identity(5000), name: "cb-stubborn",
+                                       priorFlags: 0x1404010, demotedAt: Date()))
+        try store.append(DemotionEntry(identity: identity(5001), name: "cb-obliging",
+                                       priorFlags: 0x1404010, demotedAt: Date()))
+        try store.append(DemotionEntry(identity: identity(5002), name: "cb-departed",
+                                       priorFlags: 0x1404010, demotedAt: Date()))
+
+        let setter = PerPIDSetter(results: [5000: EPERM, 5001: 0])
+        let governor = ProcGovernor(
+            policy: openPolicy([]), journal: store,
+            inspector: StubInspector(
+                table: [5000: snapshot(pid: 5000, name: "cb-stubborn", flags: 0x1014010),
+                        5001: snapshot(pid: 5001, name: "cb-obliging", flags: 0x1014010)],
+                identities: [5000: identity(5000), 5001: identity(5001)]),
+            setter: setter)
+
+        let report = try governor.recover()
+
+        #expect(report.failed == [5000])
+        #expect(report.restored == [5001])
+        #expect(report.gone == [5002])
+
+        let kept = try #require(
+            try store.load(),
+            "the journal was deleted although a restore failed; nothing on disk names the stranded process any more")
+        #expect(kept.entries.map(\.identity.pid) == [5000],
+                "recovery kept \(kept.entries.map(\.identity.pid)); only the failed entry may survive")
+    }
+
+    @Test func aLaterRunRetriesTheEntryWhoseRestoreFailed() throws {
+        // Keeping the entry is worth nothing unless a later run acts on it, and
+        // acting on it is the whole reason not to delete it: the transient EPERM
+        // clears, the next launch reads the journal back, and the process comes
+        // off the E-cores.
+        //
+        // The bug this catches is a fix that keeps the entry but marks it spent,
+        // or one that keeps it and then skips it for ever.
+        let url = journalPath()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = FileDemotionJournalStore(url: url)
+        try store.append(DemotionEntry(identity: identity(5000), name: "cb-stubborn",
+                                       priorFlags: 0x1404010, demotedAt: Date()))
+
+        let live = StubInspector(
+            table: [5000: snapshot(pid: 5000, name: "cb-stubborn", flags: 0x1014010)],
+            identities: [5000: identity(5000)])
+
+        let firstRun = ProcGovernor(policy: openPolicy([]), journal: store,
+                                    inspector: live,
+                                    setter: PerPIDSetter(results: [5000: EPERM]))
+        #expect(try firstRun.recover().failed == [5000])
+
+        // A SECOND store over the same path, because this is what a later launch
+        // has: the file and nothing else.
+        let laterStore = FileDemotionJournalStore(url: url)
+        let retrySetter = PerPIDSetter(results: [5000: 0])
+        let secondRun = ProcGovernor(policy: openPolicy([]), journal: laterStore,
+                                     inspector: live, setter: retrySetter)
+
+        let report = try secondRun.recover()
+
+        #expect(report.restored == [5000], "the later run never retried the failed entry")
+        #expect(retrySetter.calls.map(\.on) == [false], "the retry demoted instead of restoring")
+        #expect(try laterStore.load() == nil, "the entry outlived the restore that succeeded")
+    }
+
+    @Test func aKeptEntryDisappearsOnceItsProcessDoes() throws {
+        // The BOUND on retention, and the answer to "what stops a dead pid
+        // sitting in the journal for ever".
+        //
+        // An entry is kept only when its process is alive, still the same
+        // process, and carries a bit this app set — the three guards that run
+        // BEFORE the restore is attempted. When that process exits, the next
+        // recovery classifies it `gone` and drops it. So a retained entry cannot
+        // outlive its process, and the journal cannot grow a permanent tail of
+        // pids nobody can act on.
+        //
+        // The bug: "keep whatever was not restored", which retains the `gone`,
+        // `reused` and `leftAlone` buckets as well and never releases them.
+        let url = journalPath()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = FileDemotionJournalStore(url: url)
+        try store.append(DemotionEntry(identity: identity(5000), name: "cb-stubborn",
+                                       priorFlags: 0x1404010, demotedAt: Date()))
+
+        let whileAlive = ProcGovernor(
+            policy: openPolicy([]), journal: store,
+            inspector: StubInspector(
+                table: [5000: snapshot(pid: 5000, name: "cb-stubborn", flags: 0x1014010)],
+                identities: [5000: identity(5000)]),
+            setter: PerPIDSetter(results: [5000: EPERM]))
+        #expect(try whileAlive.recover().failed == [5000])
+        #expect(try store.load() != nil, "the failed entry was not kept, so this check proves nothing")
+
+        // The process exits. Nothing answers for that pid any more.
+        let afterItExits = ProcGovernor(policy: openPolicy([]), journal: store,
+                                        inspector: StubInspector(table: [:]),
+                                        setter: PerPIDSetter(results: [:]))
+        let report = try afterItExits.recover()
+
+        #expect(report.gone == [5000])
+        #expect(try store.load() == nil,
+                "a pid whose process is gone stayed in the journal; nothing will ever clear it")
     }
 
     // MARK: - One door

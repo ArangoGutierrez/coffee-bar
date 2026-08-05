@@ -83,6 +83,13 @@ public protocol DemotionJournalStoring: Sendable {
     func load() throws -> DemotionJournalRecord?
     /// Adds one entry and forces it to stable storage before returning.
     func append(_ entry: DemotionEntry) throws
+    /// Replaces the whole record with `entries`, in ONE durable step.
+    ///
+    /// Never a `clear` followed by appends. A crash between the two loses every
+    /// entry, which is the state this journal exists to prevent, and the caller
+    /// that needs this method is the recovery path — the one place where losing
+    /// an entry strands a process nothing else names.
+    func replace(with entries: [DemotionEntry]) throws
     func clear() throws
 }
 
@@ -161,6 +168,15 @@ public struct FileDemotionJournalStore: DemotionJournalStoring {
     public func append(_ entry: DemotionEntry) throws {
         let existing = (try? load())?.entries ?? []
         try write(DemotionJournalRecord(entries: existing + [entry]))
+    }
+
+    /// An empty list removes the file rather than writing an empty record, so
+    /// "nothing is demoted" has ONE representation on disk. Two of them — no
+    /// file, and a file holding no entries — would be two things every reader
+    /// has to handle and one thing a later author forgets.
+    public func replace(with entries: [DemotionEntry]) throws {
+        guard !entries.isEmpty else { return try clear() }
+        try write(DemotionJournalRecord(entries: entries))
     }
 
     public func clear() throws {
