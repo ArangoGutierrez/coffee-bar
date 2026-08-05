@@ -1181,6 +1181,43 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
         """)
 }
 
+@Test func thePanelRendersTheLegalLineItComposes() throws {
+    // The same tripwire as the check above, for the licence line. A critic
+    // measured the hole before this existed: delete the `Link` from `body` and
+    // the suite still passed with 580 tests, because `PanelLegalLine_test`
+    // pins the two static members and nothing pins the line the user sees.
+    //
+    // That matters more here than for a status line. The DMG reaches people who
+    // never saw the repository, so this is the ONLY route from the running
+    // product to its terms and its no-warranty statement. Losing it silently
+    // takes the legal surface off the product while every check stays green —
+    // which is exactly what commit 5116326 did to the hook advisory.
+    //
+    // Same LIMIT as above, stated rather than hidden: this proves the panel
+    // NAMES both members, not that it renders them, and not that a click opens
+    // anything. A mention inside a comment would satisfy it. M1 design §5.4
+    // forbids asserting on rendered AppKit text, so no check in this package
+    // can watch the panel draw. A human look is still the only proof of that.
+    let files = try appLayerSources()
+    #expect(files.count == expectedSourceCount,
+            "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
+
+    let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
+                             "the app layer no longer compiles a PanelView.swift")
+    let source = try String(contentsOf: panel, encoding: .utf8)
+
+    #expect(source.contains("PanelView.legalLine()"), """
+        PanelView.swift composes legalLine() but renders it nowhere, so the \
+        licence and the no-warranty statement reach the user nowhere. Render \
+        it, or delete the member and the checks that assert its text.
+        """)
+    #expect(source.contains("PanelView.legalURL()"), """
+        PanelView.swift composes legalURL() but renders it nowhere, so the \
+        panel offers no route to the terms page. Render it, or delete the \
+        member and the checks that assert it.
+        """)
+}
+
 @Test func thePanelReadsEverySessionValueTheModelPublishes() throws {
     // The same tripwire as the check above, for the three values the panel
     // gained with the attention list. Each one is computed in `refresh()`, has
