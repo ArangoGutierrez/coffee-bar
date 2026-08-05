@@ -226,26 +226,83 @@ public struct ArmService: Sendable {
 /// The decision itself lives in `CoffeeBarCore.decide`, which is pure and
 /// already tested. This type owns only the effects — read the journal under the
 /// SECURITY.md preconditions, apply the verdict, clean up, notify.
+/// What the machine is doing right now, for the aborts §8.1 requires.
+///
+/// A seam rather than direct calls, because the alternative is a daemon whose
+/// behaviour depends on the temperature of whatever machine runs the suite.
+public protocol WatchdogEnvironmentSensing: Sendable {
+    func thermalLevel() -> ThermalLevel
+    func power() -> PowerReading
+}
+
+/// The production sensor: `ProcessInfo` for heat, IOKit for the battery.
+public struct SystemWatchdogEnvironment: WatchdogEnvironmentSensing {
+    private let powerReader: any PowerReadingProviding
+
+    public init(powerReader: any PowerReadingProviding = SystemPowerReader()) {
+        self.powerReader = powerReader
+    }
+
+    /// `ProcessInfo.ThermalState` onto `CoffeeBarCore`'s mirror of it.
+    ///
+    /// Split from the instance method so the mapping is testable without
+    /// heating a laptop up. The mirror exists so `CoffeeBarCore` stays
+    /// Foundation-only, and two enums that mean the same thing are exactly
+    /// where a silent disagreement lives — a `.critical` read as `.nominal`
+    /// never aborts.
+    public static func level(from state: ProcessInfo.ThermalState) -> ThermalLevel {
+        switch state {
+        case .nominal: return .nominal
+        case .fair: return .fair
+        case .serious: return .serious
+        case .critical: return .critical
+        // A state this build has never heard of is treated as the WORST case.
+        // Every uncertain path in this component resolves toward reverting, and
+        // guessing `.nominal` for an unknown thermal state would do the
+        // opposite in the one place §8.1 calls the real risk.
+        @unknown default: return .critical
+        }
+    }
+
+    public func thermalLevel() -> ThermalLevel {
+        Self.level(from: ProcessInfo.processInfo.thermalState)
+    }
+
+    public func power() -> PowerReading {
+        powerReader.read()
+    }
+}
+
 public struct WatchdogService: Sendable {
     private let reader: GuardedJournalReader
     private let power: any SleepDisabledControlling
     private let supervisor: any WatchdogSupervising
     private let notifier: any Notifying
+    private let environment: any WatchdogEnvironmentSensing
     private let policy: WatchdogPolicy
     private let bootTime: @Sendable () -> Date
 
     /// `bootTime` is injectable so a test can drive both sides of §8.2(4)
     /// without rebooting. Production reads `kern.boottime`.
+    ///
+    /// `environment` has NO default, deliberately. A default of
+    /// `SystemWatchdogEnvironment()` would let a caller reach a decision
+    /// without ever deciding where the thermal and battery readings come from —
+    /// which is precisely how §8.1's two aborts shipped as dead code, with
+    /// `evaluate` defaulting them to `.nominal` and `nil`. Making the parameter
+    /// required means the omission cannot recur silently.
     public init(reader: GuardedJournalReader,
                 power: any SleepDisabledControlling,
                 supervisor: any WatchdogSupervising,
                 notifier: any Notifying,
+                environment: any WatchdogEnvironmentSensing,
                 policy: WatchdogPolicy = .default,
                 bootTime: @escaping @Sendable () -> Date = SystemBootTime.current) {
         self.reader = reader
         self.power = power
         self.supervisor = supervisor
         self.notifier = notifier
+        self.environment = environment
         self.policy = policy
         self.bootTime = bootTime
     }
@@ -259,18 +316,24 @@ public struct WatchdogService: Sendable {
     }
 
     /// One tick of the 5 s timer.
+    ///
+    /// The thermal and battery readings are NOT parameters. They were, with
+    /// safe-looking defaults of `.nominal` and `nil`, and the daemon called
+    /// `evaluate(now:)` — so §8.1's two aborts could not fire in production
+    /// however hot the machine got or however low the charge fell. Reading them
+    /// from the injected environment removes the caller's chance to forget.
     @discardableResult
     public func evaluate(now: Date,
-                         lastHeartbeat: Date? = nil,
-                         thermal: ThermalLevel = .nominal,
-                         batteryPercent: Int? = nil,
-                         onBattery: Bool = false) throws -> WatchdogDecision {
+                         lastHeartbeat: Date? = nil) throws -> WatchdogDecision {
         switch readJournal() {
         case .refused:
             return .revert(.journalRefused)
         case .nothingArmed:
             return .hold
         case .armed(let record):
+            // Sampled ONCE per tick, before the decision, so every branch of
+            // `decide()` sees one consistent view of the machine.
+            let reading = environment.power()
             let inputs = WatchdogInputs(
                 journal: record,
                 now: now,
@@ -299,9 +362,15 @@ public struct WatchdogService: Sendable {
                 // older than it. That errs toward reverting, which is the safe
                 // direction.
                 isBootEvaluation: record.setAt < bootTime(),
-                thermal: thermal,
-                batteryPercent: batteryPercent,
-                onBattery: onBattery)
+                // §8.1: thermal is the abort that matters most here — a MacBook
+                // vents through the hinge area, and a closed lid under
+                // sustained agent load is the worst case the handoff names.
+                thermal: environment.thermalLevel(),
+                batteryPercent: reading.percent,
+                // The SOURCE decides, not the charge. A plugged-in laptop at
+                // 15% is not draining, and reverting there would refuse to hold
+                // on a machine that is in no danger.
+                onBattery: reading.source == .battery)
 
             let decision = decide(inputs, policy: policy)
             guard case .revert(let reason) = decision else { return decision }

@@ -109,7 +109,12 @@ private func makeWatchdogService() -> WatchdogService {
         reader: GuardedJournalReader(),
         power: PmsetSleepDisabledController(runner: runner),
         supervisor: LaunchDaemonInstaller(runner: runner),
-        notifier: notifier)
+        notifier: notifier,
+        // §8.1's thermal and battery aborts read the real machine here. The
+        // battery FLOOR comes from `WatchdogPolicy.default`, whose initialiser
+        // calls `BatteryFloor.bounded` — the same single rule `PowerInputs.init`
+        // uses. No second, unbounded path to the floor is opened.
+        environment: SystemWatchdogEnvironment())
 }
 
 // No `default`. Every verb `ProbeVerb` declares has to be handled here or this
