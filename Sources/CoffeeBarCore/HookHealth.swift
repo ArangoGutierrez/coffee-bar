@@ -88,14 +88,14 @@ public enum HookHealth {
     /// Where `tool` keeps the hook file this check reads, relative to the user's
     /// home directory.
     ///
-    /// **All three are JSON, and that is measured rather than researched.** The
-    /// comment that used to sit below said Codex kept its hooks in
-    /// `~/.codex/config.toml`, "which is TOML and not JSON at all". That is
-    /// FALSE for codex-cli 0.146.0, and believing it is why no Codex reader was
-    /// ever written. The real file is `~/.codex/hooks.json`. `config.toml`
-    /// carries a `[features] hooks = true` gate and a `[hooks.state]` table of
-    /// trust hashes, and every one of those hash keys points AT
-    /// `~/.codex/hooks.json`.
+    /// **All three are JSON, and that is measured rather than researched.** An
+    /// earlier version of this comment named `~/.codex/config.toml` as Codex's
+    /// location and called it TOML rather than JSON. That is FALSE for
+    /// codex-cli 0.146.0, and believing it is why no Codex reader was ever
+    /// written. The real file is `~/.codex/hooks.json`, in Claude Code's exact
+    /// nesting. `config.toml` carries a `[features] hooks = true` gate and a
+    /// `[hooks.state]` table of trust hashes, and every one of those hash keys
+    /// points AT `~/.codex/hooks.json`.
     ///
     /// So this package parses no TOML and takes no dependency to do it.
     /// `noSourceOrDocumentStillPutsTheCodexHooksInConfigToml` goes red if the

@@ -135,12 +135,46 @@ private func scratchCopy(of fixture: String) throws -> URL {
     let absent = scratch.appending(path: "definitely-not-here.json")
     #expect(files.fileExists(atPath: absent.path) == false)
 
-    let reader = HookHealthReader(hookFiles: [.claudeCode: absent, .cursor: present])
+    let reader = HookHealthReader(hookFiles: [.codex: absent, .cursor: present])
 
-    #expect(reader.status(for: .claudeCode) == nil,
+    #expect(reader.status(for: .codex) == nil,
             "an absent file produced a verdict; the user is told to fix a file they do not have")
     #expect(reader.status(for: .cursor) == .wired,
             "the file that IS on disk was not read; this check would pass on nothing")
+}
+
+@Test func claudeCodeAloneIsExemptFromTheExistenceGate() throws {
+    // Named bug this catches, and it shipped: the gate applied to Claude Code
+    // as well, so a user who had never created `~/.claude/settings.json` got no
+    // advisory at all. README says coffee-bar does nothing until those hooks
+    // exist, so that user needs the advice most.
+    //
+    // An absent file means "not set up yet" for Claude Code, the primary
+    // integration and the first-run path. It means "does not use this tool" for
+    // the other two. The discriminating pair is asserted in ONE check, because
+    // the exemption is only correct if it is narrow.
+    let scratch = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appending(path: "coffee-bar-health-\(UUID().uuidString)")
+    let files = FileManager.default
+    try files.createDirectory(at: scratch, withIntermediateDirectories: true)
+    defer { try? files.removeItem(at: scratch) }
+
+    let absent = scratch.appending(path: "definitely-not-here.json")
+    #expect(files.fileExists(atPath: absent.path) == false)
+    #expect(try files.contentsOfDirectory(atPath: scratch.path) == [],
+            "the scratch directory is not empty; this check would read a real file")
+
+    let reader = HookHealthReader(hookFiles: [.claudeCode: absent,
+                                              .codex: absent,
+                                              .cursor: absent])
+
+    #expect(reader.status(for: .claudeCode) == .unreadable,
+            "an absent Claude Code file gives no verdict; a first-run user is told nothing")
+    #expect(reader.status(for: .codex) == nil, "an absent Codex file reached a verdict")
+    #expect(reader.status(for: .cursor) == nil, "an absent Cursor file reached a verdict")
+
+    #expect(reader.statuses() == [.claudeCode: .unreadable],
+            "statuses() reported \(reader.statuses())")
 }
 
 @Test func eachToolIsReadThroughItsOwnParserAndItsOwnFile() throws {

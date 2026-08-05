@@ -21,7 +21,7 @@ import CoffeeBarPower
 public final class ServingModel {
     private let holder: any AssertionHolding
     private let reader: any PowerReadingProviding
-    private let health: HookHealthReader
+    private let health: any HookHealthProviding
     private let listener: any IngestListening
     private let settings: any SettingsStoring
     private let policy: StalePolicy
@@ -181,9 +181,18 @@ public final class ServingModel {
 
     /// The one line the panel shows about that health, or `nil` for no line.
     ///
-    /// Derived, not stored, so it cannot disagree with `hookHealth`. Reading it
-    /// reads `hookHealth`, so `@Observable` tracks it and the panel updates on
-    /// the same 30-second refresh with no second timer.
+    /// Derived, not stored, so it cannot disagree with what was read. It reads
+    /// `hookHealths` — the COLLECTION, not the `hookHealth` convenience above —
+    /// so `@Observable` tracks it and the panel updates on the same 30-second
+    /// refresh with no second timer.
+    ///
+    /// Naming the source exactly matters here. `hookHealth` carries a
+    /// `?? .unreadable` fallback for the state before the first `refresh()`, and
+    /// that fallback must never reach the panel as advice: it would print
+    /// "cannot read" over a file nobody has tried to read yet. Reading the
+    /// collection means an untouched model yields an EMPTY advisory rather than
+    /// a false one. An earlier version of this comment claimed the property was
+    /// derived from `hookHealth`, which was wrong once the collection landed.
     ///
     /// **`.wired` says nothing, and that is the honest answer rather than a
     /// terse one.** This check reads the settings FILE. It cannot see whether a
@@ -490,7 +499,7 @@ public final class ServingModel {
     /// instead of waiting five real minutes.
     public init(holder: any AssertionHolding = AssertionHolder(),
                 reader: any PowerReadingProviding = SystemPowerReader(),
-                health: HookHealthReader = HookHealthReader(),
+                health: any HookHealthProviding = HookHealthReader(),
                 settings: any SettingsStoring = UserDefaultsSettingsStore(),
                 listener: any IngestListening = UnixSocketIngestListener(),
                 policy: StalePolicy = .standard,

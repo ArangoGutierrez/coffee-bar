@@ -40,7 +40,30 @@ import CoffeeBarCore
 /// move is a file move and a module change with no behaviour in it. It is
 /// DEFERRED rather than done: it buys no correctness, and both directories are
 /// scanned by `AppLayerBoundary_test.swift` either way.
-public struct HookHealthReader: Sendable {
+/// What `ServingModel` needs from a hook-health source.
+///
+/// A protocol so a check can inject a source whose two reads DISAGREE, which is
+/// the only way to prove `ServingModel.hookHealth` is DERIVED from the
+/// collection rather than read a second time. A guard driven by real files
+/// cannot see that bug: both reads land microseconds apart against one
+/// unchanging file, so they agree even when the model is wrong.
+///
+/// It also puts this type beside the four `ServingModel` seams that were
+/// already protocols — the assertion holder, the power reader, the ingest
+/// listener and the settings store. `HookHealthReader` was the one concrete
+/// dependency left. None of the four is named in code or in prose here, because
+/// a boundary check in `AppLayerBoundary_test.swift` reserves the holder's type
+/// names to `ServingModel.swift` and reads this file RAW, comments included.
+/// That check is right to, so this comment works around it rather than the
+/// other way about.
+public protocol HookHealthProviding: Sendable {
+    /// Claude Code's verdict, with no existence gate.
+    func status() -> HookHealthStatus
+    /// Every tool this source has something to say about.
+    func statuses() -> [AgentTool: HookHealthStatus]
+}
+
+public struct HookHealthReader: HookHealthProviding {
     /// The hook file this reader inspects for each tool it covers.
     ///
     /// A map and not three stored properties, because ABSENCE FROM IT is
@@ -107,22 +130,40 @@ public struct HookHealthReader: Sendable {
 
     /// What `tool`'s hook file says, or `nil` when there is nothing to say.
     ///
-    /// `nil` means one of two things, and neither is a fault the user can act
-    /// on: this reader does not cover the tool, or the tool's file is not on
-    /// disk. **An absent file means the user does not run that tool**, so a
-    /// Claude-Code-only user is never told to wire Cursor.
+    /// `nil` means this reader does not cover the tool, or the tool's file is
+    /// not on disk. **An absent file means the user does not run that tool**, so
+    /// a Claude-Code-only user is never told to wire Cursor.
     ///
     /// The gate is FILE EXISTENCE and never "has this tool ever posted an
     /// event". That second rule is circular: a tool with no hooks wired never
     /// posts, so it would never be advised, and the advisory exists for exactly
     /// that user.
     ///
-    /// `.unreadable` stays reserved for a file that EXISTS and will not parse.
-    /// Folding an absent file into it would send a user to fix a file that is
-    /// not theirs to fix — which is how a shared settings file gets clobbered.
+    /// **`.claudeCode` is EXEMPT from the gate, and the exemption is narrow on
+    /// purpose.** An absent file carries a DIFFERENT meaning for each cohort:
+    ///
+    /// - Claude Code is the primary integration and the first-run path. No file
+    ///   there means "not set up yet". The README tells the reader coffee-bar
+    ///   does nothing until those hooks exist, so this is the user who most
+    ///   needs the advisory — and the first round of issue #10c gated them into
+    ///   silence.
+    /// - Codex and Cursor are opt-in. No file there means "does not run this
+    ///   tool", and advising that user is the noise this task exists to remove.
+    ///
+    /// What the exemption COSTS, stated rather than hidden: a Codex-only user
+    /// who has never run Claude Code still reads one line about
+    /// `~/.claude/settings.json`. That line is true — coffee-bar genuinely
+    /// cannot confirm those hooks — but it is not the most useful thing to tell
+    /// them. Silence for a first-run user is the worse failure of the two,
+    /// because it hides the one action that makes the product work at all.
+    ///
+    /// `.unreadable` stays reserved for a file this app could not parse, whether
+    /// it is absent or malformed. It never tells the user to paste entries that
+    /// may already be there, which is how a shared settings file gets clobbered.
     public func status(for tool: AgentTool) -> HookHealthStatus? {
-        guard let url = hookFiles[tool],
-              FileManager.default.fileExists(atPath: url.path)
+        guard let url = hookFiles[tool] else { return nil }
+        guard tool == .claudeCode
+                || FileManager.default.fileExists(atPath: url.path)
         else { return nil }
         return HookHealth.status(of: try? Data(contentsOf: url), for: tool)
     }

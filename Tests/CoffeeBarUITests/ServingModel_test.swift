@@ -842,12 +842,24 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // already be there is how a shared settings file gets clobbered, which is
     // the exact six-occurrence pattern design §6 exists to avoid.
     //
-    // The fixture is `malformed.json` and NOT an absent path, and the change is
-    // deliberate. Issue #10c made an absent hook file mean "the user does not
-    // run this tool", so an absent file now produces NO line at all — see
-    // `aToolWithNoConfigurationFileGetsNoAdvisoryAboutIt`. A file that EXISTS
-    // and will not parse is what `.unreadable` is for, and it still drives this
-    // wording, so the named bug above stays guarded.
+    // BOTH sources of `.unreadable` drive this wording, and both are checked:
+    // a Claude Code file that is ABSENT, and one that EXISTS and will not
+    // parse. The absent case is the first-run user — see
+    // `aFirstRunUserWithNoSettingsFileIsStillToldToWireTheHooks` — and Claude
+    // Code is exempt from the existence gate for exactly that reason.
+    for fixture in ["definitely-not-here.json", "malformed.json"] {
+        let unreadable = ServingModel(holder: SpyHolder(),
+                                      reader: FakeReader(source: .ac, percent: 80),
+                                      health: fixtureHealth(fixture),
+                                      settings: FakeSettings())
+        unreadable.refresh()
+        #expect(unreadable.hookHealth == .unreadable, "\(fixture) is not unreadable")
+        #expect(unreadable.hookAdvisory == """
+            Cannot read ~/.claude/settings.json, so coffee-bar cannot confirm its \
+            hooks are installed. Agent sessions may not arrive.
+            """, "\(fixture) reached the wrong advisory")
+    }
+
     let model = ServingModel(holder: SpyHolder(),
                              reader: FakeReader(source: .ac, percent: 80),
                              health: fixtureHealth("malformed.json"),
@@ -998,6 +1010,42 @@ private func fixtureHealth(_ files: [AgentTool: String]) -> HookHealthReader {
 }
 
 @MainActor
+@Test func aFirstRunUserWithNoSettingsFileIsStillToldToWireTheHooks() {
+    // **Claude Code is EXEMPT from the existence gate, and this is why.**
+    //
+    // Named bug this catches, and it shipped in the first round of #10c: the
+    // gate was applied to all three tools, so a user who had never created
+    // `~/.claude/settings.json` got NO line at all. README says coffee-bar does
+    // nothing until those hooks exist, so that user is the one who most needs
+    // the advice, and the panel said nothing to them.
+    //
+    // An absent file means "not set up yet" for Claude Code, which is the
+    // primary integration and the first-run path. It means "does not use this
+    // tool" for Codex and for Cursor. The two readings are different claims
+    // about different cohorts, so the two are treated differently.
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth([.claudeCode: "definitely-not-here.json",
+                                                    .codex: "definitely-not-here.json",
+                                                    .cursor: "definitely-not-here.json"]),
+                             settings: FakeSettings())
+    model.refresh()
+
+    // Claude Code reaches a verdict even with no file; the other two do not.
+    #expect(model.hookHealths[.claudeCode] == .unreadable,
+            "a first-run user gets no Claude Code verdict at all")
+    #expect(model.hookHealths[.codex] == nil, "an absent Codex file reached a verdict")
+    #expect(model.hookHealths[.cursor] == nil, "an absent Cursor file reached a verdict")
+
+    // Exactly ONE line, and it is Claude Code's. A gate applied to all three
+    // returns nil here; a gate applied to none returns three lines.
+    #expect(model.hookAdvisory == """
+        Cannot read ~/.claude/settings.json, so coffee-bar cannot confirm its \
+        hooks are installed. Agent sessions may not arrive.
+        """)
+}
+
+@MainActor
 @Test func aToolWithNoConfigurationFileGetsNoAdvisoryAboutIt() {
     // Design decision this pins, and the reason the check above can exist: an
     // ABSENT hook file means the user does not run that tool.
@@ -1075,23 +1123,52 @@ private func fixtureHealth(_ files: [AgentTool: String]) -> HookHealthReader {
         """)
 }
 
+/// A reader whose two read methods deliberately DISAGREE.
+///
+/// This is the only way to catch the bug below, and the reason is worth stating.
+/// A guard driven by real fixture files cannot see it: `refresh()` would make
+/// both reads microseconds apart against one unchanging file, so a SECOND read
+/// returns exactly what the first did and the two agree even when the model is
+/// wrong. Only a source whose reads differ can tell a DERIVED value from a
+/// separately-read one.
+private struct DisagreeingHealth: HookHealthProviding {
+    /// What the collection says. `hookHealth` must be THIS.
+    func statuses() -> [AgentTool: HookHealthStatus] { [.claudeCode: .wired] }
+    /// What a second, independent read would say. `hookHealth` must NOT be this.
+    func status() -> HookHealthStatus { .missing(["Stop"]) }
+}
+
 @MainActor
 @Test func theClaudeCodeHealthTheModelPublishesIsTheOneInTheCollection() {
     // `hookHealth` and `hookHealths[.claudeCode]` are ONE value, not two.
     //
-    // Named bug this catches: `hookHealth` kept as a second stored property fed
-    // by a second read. The two would agree until they did not, the panel would
-    // render one while every existing check drove the other, and nothing could
-    // see the disagreement.
-    for fixture in ["wired.json", "missing-stop.json", "malformed.json"] {
-        let model = ServingModel(holder: SpyHolder(),
-                                 reader: FakeReader(source: .ac, percent: 80),
-                                 health: fixtureHealth(fixture),
-                                 settings: FakeSettings())
-        model.refresh()
-        #expect(model.hookHealth == model.hookHealths[.claudeCode],
-                "\(fixture) reaches two different Claude Code verdicts")
-    }
+    // Named bug this catches: `hookHealth` kept as a stored property fed by its
+    // own `health.status()` call in `refresh()`. The panel would render one
+    // value while every other check drove the other, and nothing could see the
+    // disagreement.
+    //
+    // **The earlier version of this check was THEATER and is deleted.** It
+    // looped over three fixtures that all EXIST, so `hookHealths[.claudeCode]`
+    // was never nil and the assertion reduced to `X ?? .unreadable == X` with X
+    // non-nil — true whatever the model did. The stored-property bug it names
+    // was planted and the whole suite stayed green at 610.
+    //
+    // Adding an ABSENT fixture to that loop does NOT fix it: `hookHealth` falls
+    // back to `.unreadable` by design while the collection has no key, so the
+    // check would go red against CORRECT code. Measured before it was rejected.
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: DisagreeingHealth(),
+                             settings: FakeSettings())
+    model.refresh()
+
+    // The collection's value, not the second read's. Both are literals, so
+    // neither side restates the model's own logic.
+    #expect(model.hookHealth == .wired,
+            "hookHealth is a SECOND read of the health source, not the collection's value")
+    #expect(model.hookHealth != .missing(["Stop"]),
+            "hookHealth carries what a separate status() call returned")
+    #expect(model.hookHealth == model.hookHealths[.claudeCode])
 }
 
 // MARK: - A refused On click says so, and says where the control landed

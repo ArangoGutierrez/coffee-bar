@@ -404,29 +404,65 @@ func theClaudeCodeVerdictIsTheSameThroughBothEntryPoints(_ name: String) throws 
 ///     comment carried neither token above, so without this the worst of the
 ///     three claims could come back unnoticed.
 ///
-/// **LIMIT, stated rather than hidden: the third pattern reads ONE LINE at a
-/// time.** A future claim split so that "keeps its hooks" and `config.toml`
-/// land on different lines walks past it. That is a deliberate trade and not an
-/// oversight: widening the window to two lines turns this red on the correction
-/// in `HookHealth.settingsPath(for:)`, which quotes the old sentence in order to
-/// refute it. A guard that is red on correct code gets deleted rather than
-/// obeyed, so the narrower check is the one that survives to catch anything.
+/// **It normalises whitespace over the WHOLE file before matching**, so a claim
+/// that wraps across two lines is caught. That is not hypothetical: this file
+/// wraps prose at about 95 characters, so a returning claim splits across lines
+/// BY DEFAULT, and a line-by-line reader was weakest exactly where the claim is
+/// most likely to come back. An earlier version of this guard read one line at
+/// a time and a planted two-line claim walked straight past it.
 ///
-/// The shipped claim DID sit on one line, and `M8` in the mutation record proves
-/// this goes red when that exact sentence is restored.
+/// Normalising needs no exemption for the corrections, because the corrections
+/// were REWORDED not to state the claim. `HookHealth.settingsPath(for:)` now
+/// says an earlier comment "named `~/.codex/config.toml` as the location"
+/// rather than quoting "keeps its hooks in" it, and the handoff says the file
+/// "holds no hook definitions". Rewording the refutation is what keeps a
+/// stronger matcher from being red on correct code — and a guard that is red on
+/// correct code gets deleted rather than obeyed.
+///
+/// The window is 160 characters either side of each `config.toml`, which is
+/// wider than the paragraph the claim ever occupied.
 @Test func noSourceOrDocumentStillPutsTheCodexHooksInConfigToml() throws {
     let root = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()    // …/Tests/CoffeeBarCoreTests
         .deletingLastPathComponent()    // …/Tests
         .deletingLastPathComponent()    // repo root
 
-    /// True when one line asserts that Codex's hooks LIVE in `config.toml`.
-    func placesTheHooksInTheTomlFile(_ line: String) -> Bool {
-        let lowered = line.lowercased()
-        guard lowered.contains("config.toml") else { return false }
-        return ["hooks in", "hooks live in", "hooks are in", "hooks are configured in",
-                "keeps its hooks", "hook file", "hooks file"]
-            .contains { lowered.contains($0) }
+    /// Every phrase that PLACES a tool's hooks in whatever file is named beside
+    /// it. None of them appears in a correction, because the corrections were
+    /// reworded not to state the claim.
+    let placementPhrases = ["hooks in", "hooks live in", "hooks are in",
+                            "hooks are configured in", "keeps its hooks",
+                            "keeps them in", "hook file", "hooks file",
+                            "configures hooks", "hooks as"]
+
+    /// The whole file with every run of whitespace collapsed to one space.
+    ///
+    /// This is what defeats a wrapped claim. Reading line by line let a claim
+    /// split across two lines pass, and this document wraps at about 95
+    /// characters, so a returning claim wraps by default.
+    func normalised(_ text: String) -> String {
+        text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ").lowercased()
+    }
+
+    /// Every window around a `config.toml` mention that also places hooks there.
+    func placementsNear(_ text: String) -> [String] {
+        let flat = normalised(text)
+        let needle = "config.toml"
+        var found: [String] = []
+        var search = flat.startIndex
+
+        while let hit = flat.range(of: needle, range: search ..< flat.endIndex) {
+            let start = flat.index(hit.lowerBound, offsetBy: -160,
+                                   limitedBy: flat.startIndex) ?? flat.startIndex
+            let end = flat.index(hit.upperBound, offsetBy: 160,
+                                 limitedBy: flat.endIndex) ?? flat.endIndex
+            let window = String(flat[start ..< end])
+            if placementPhrases.contains(where: { window.contains($0) }) {
+                found.append(window)
+            }
+            search = hit.upperBound
+        }
+        return found
     }
 
     // `docs/superpowers/` is deliberately out of scope: those are the dated
@@ -449,12 +485,15 @@ func theClaudeCodeVerdictIsTheSameThroughBothEntryPoints(_ name: String) throws 
             for (number, line) in text.split(separator: "\n", omittingEmptySubsequences: false)
                                       .enumerated() {
                 let body = String(line)
-                guard body.contains("[[hooks]]")
-                        || body.contains("codex_hooks")
-                        || placesTheHooksInTheTomlFile(body)
+                guard body.contains("[[hooks]]") || body.contains("codex_hooks")
                 else { continue }
                 offenders.append("\(directory)/\(relative):\(number + 1): "
                                  + body.trimmingCharacters(in: .whitespaces))
+            }
+
+            // The wrap-proof half: whole-file, whitespace-normalised.
+            for window in placementsNear(text) {
+                offenders.append("\(directory)/\(relative) (normalised): …\(window)…")
             }
         }
     }
