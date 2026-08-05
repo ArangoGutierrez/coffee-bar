@@ -1,17 +1,28 @@
 // Copyright 2026 Carlos Eduardo Arango Gutierrez
 // SPDX-License-Identifier: Apache-2.0
 
-// `import Foundation` is explicit for `Scanner`. Do not rely on SwiftUI
+// `import Foundation` is explicit for `pow`. Do not rely on SwiftUI
 // re-exporting it — the rest of this module states its imports the same way.
 import Foundation
 import SwiftUI
 
 /// What a colour MEANS here, never which colour it is.
 ///
-/// The brand doc (assets/art/README.md lines 18-20) forbids mixing `state` and
-/// `action`: `action` is systemOrange and belongs to the web. The app therefore
-/// carries no `action` case at all — the type makes the brand rule unstatable.
-public enum ColorRole: Sendable, Equatable {
+/// The brand doc (assets/art/README.md lines 18-20) restricts `action` — Apple
+/// systemOrange — to the web, and forbids mixing it with `state`. This type
+/// carries no `action` case, so no caller can name that role directly.
+///
+/// That is a narrowing, NOT a proof. `.warning` resolves to SwiftUI `.orange`,
+/// which IS systemOrange, so the app does put the `action` pigment on screen.
+/// The exception is deliberate: `warning` means attention, and the system
+/// semantic colour is the one macOS users already read that way. Omitting the
+/// case removes the ROLE from the vocabulary, not the pigment from the screen.
+///
+/// `CaseIterable` is load-bearing. `fixedRolesClearNonTextContrast` walks
+/// `allCases` and skips a role only because `rgb` answered `nil`. A role added
+/// here with a fixed value therefore cannot escape the 3:1 floor by being
+/// missing from a hand-written list in a test.
+public enum ColorRole: Sendable, Equatable, CaseIterable {
     /// The liquid, and the held segments. Roast.
     case state
     /// Released. Neutral grey.
@@ -56,12 +67,18 @@ public enum BrandPalette {
         /// Accepts `#RRGGBB`. Traps on anything else: every call site in this
         /// module passes a literal from the brand doc, so a malformed string is
         /// a programming error, not a runtime condition to recover from.
+        ///
+        /// `UInt64(_:radix:)` rather than `Scanner.scanHexInt64`. The scanner
+        /// answers `true` after a PARTIAL scan, so it accepted "ABCXYZ" as
+        /// 0xABC and "12 345" as 0x12 — the trap this comment promises never
+        /// fired, and a wrong colour would have shipped looking deliberate.
+        /// `UInt64(_:radix:)` answers `nil` unless the WHOLE string parses.
         public init(hex: String) {
             let s = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
             precondition(s.count == 6, "BrandPalette.RGB(hex:) needs #RRGGBB, got \(hex)")
-            var value: UInt64 = 0
-            precondition(Scanner(string: s).scanHexInt64(&value),
-                         "BrandPalette.RGB(hex:) could not parse \(hex)")
+            guard let value = UInt64(s, radix: 16) else {
+                preconditionFailure("BrandPalette.RGB(hex:) could not parse \(hex)")
+            }
             self.r = Double((value & 0xFF0000) >> 16) / 255
             self.g = Double((value & 0x00FF00) >> 8) / 255
             self.b = Double(value & 0x0000FF) / 255
@@ -85,9 +102,21 @@ public enum BrandPalette {
     /// has to achieve instead.
     private static let increasedContrastBlend = 0.30
 
-    /// `nil` for `.warning`, which is SwiftUI's semantic `.orange`. That colour
-    /// already adapts to appearance and to Increase Contrast at no cost, so
-    /// pinning a hex here would make it WORSE.
+    /// `nil` for `.warning`, which resolves to SwiftUI's semantic `.orange`.
+    /// The system colour tracks the appearance and the Increase Contrast
+    /// setting on its own, and a hex pinned here would freeze it.
+    ///
+    /// It does NOT clear text contrast in the light appearance. Measured as
+    /// TEXT, systemOrange reaches 1.75:1 to 2.31:1 on plausible light
+    /// backdrops, where 4.5:1 is required; on dark backdrops it reaches 7.02:1
+    /// to 8.11:1. That light-appearance gap is a KNOWN one. It is pre-existing
+    /// on `main` and tracked as separate work, not fixed here, because any
+    /// orange that clears 4.5:1 on a light backdrop has darkened to about
+    /// `#8C5200` — which is no longer distinguishable from the roast `state`
+    /// colour, so the fix would delete the distinction it exists to draw.
+    ///
+    /// Until then: `.warning` marks an icon or a rule, never body text in the
+    /// light appearance.
     public static func rgb(_ role: ColorRole,
                            scheme: ColorScheme,
                            contrast: ColorSchemeContrast) -> RGB? {
