@@ -256,10 +256,13 @@ private func snapshot(pid: pid_t, uid: uid_t, ppid: pid_t, pgid: pid_t,
         let inspector = SystemProcessInspector()
         let subject = try #require(inspector.snapshot(of: child.pid))
 
-        // The child is in this test runner's process group, so the deny rule
-        // for our own group must be told which group is ours. A real run reads
-        // its own; here the child is deliberately placed outside it.
-        let ourGroup: pid_t = -1
+        // The real group of this test runner, not a stand-in. The helper leaves
+        // our process group on the way up, so the own-group rule is exercised
+        // rather than dodged — a check that passed a fake group would prove
+        // nothing about the rule a real run applies.
+        let ourGroup = pid_t(getpgrp())
+        try #require(subject.pgid != ourGroup,
+                     "the child stayed in our process group; the allow below would be unreachable")
 
         let closed = DemotionPolicy(demotableNames: [], selfPID: getpid(),
                                     selfUID: getuid(), selfPGID: ourGroup)

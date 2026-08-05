@@ -46,12 +46,19 @@ import Darwin
 /// untouched — the child had not reached its `setpriority` yet — and that
 /// reading looks identical to a real negative result. The machine these run on
 /// is under variable load, so nothing here waits on wall-clock time.
+/// It also leaves this test runner's process group first, and that is not
+/// incidental. `Process` gives a child the parent's process group, so without
+/// `setpgid` every child here would sit in coffee-bar's own group and the
+/// governor would refuse it under `ownProcessGroup` — a check that dodged the
+/// rule by passing a fake group would prove nothing about the real one. A
+/// foreign application really is in a group of its own.
 let idleChildSource = #"""
 #include <stdio.h>
 #include <unistd.h>
 
 int main(int argc, char **argv) {
     if (argc < 2) return 2;
+    if (setpgid(0, 0) != 0) return 4;
     FILE *f = fopen(argv[1], "w");
     if (!f) return 3;
     fprintf(f, "ready");
