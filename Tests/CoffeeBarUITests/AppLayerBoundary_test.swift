@@ -508,6 +508,63 @@ private func swiftCodeWithoutComments(_ source: String) -> String {
     return String(kept)
 }
 
+/// The argument list of every `call` in `code`, one string per call site.
+///
+/// Balanced-paren, so a nested call inside an argument does not end the span
+/// early — `ancestorPIDs: inspector.ancestors(of: selfPID)` is one argument and
+/// not the end of the list.
+///
+/// LIMIT, stated rather than hidden: `swiftCodeWithoutComments` KEEPS string
+/// literals, so a `(` or `)` inside one would misbalance the count. No
+/// construction this reads carries a literal today. It is a structural reader,
+/// not the Swift grammar.
+private func argumentSpans(of call: String, in code: String) -> [String] {
+    let characters = Array(code)
+    let needle = Array(call)
+    var spans: [String] = []
+    var index = 0
+
+    while index + needle.count <= characters.count {
+        guard Array(characters[index ..< index + needle.count]) == needle else {
+            index += 1
+            continue
+        }
+        var cursor = index + needle.count
+        let start = cursor
+        var depth = 1
+        while cursor < characters.count && depth > 0 {
+            if characters[cursor] == "(" { depth += 1 }
+            if characters[cursor] == ")" { depth -= 1 }
+            cursor += 1
+        }
+        // `cursor - 1` drops the closing paren the loop consumed. An unbalanced
+        // span runs to the end of the file, which fails the checks below rather
+        // than passing them.
+        spans.append(String(characters[start ..< max(start, cursor - 1)]))
+        index = cursor
+    }
+    return spans
+}
+
+/// The four `DemotionPolicy` arguments that DEFAULT to empty.
+///
+/// Each names a deny rule that is OFF unless a caller fills it, and the
+/// composition root is the only place that can know any of them:
+///
+///   - `agentPIDs` — the agent tools coffee-bar tracks;
+///   - `frontmostPID` — the application the user is looking at;
+///   - `ancestorPIDs` — coffee-bar's own parent chain;
+///   - `extraProtectedNames` — coffee-bar's own executables.
+///
+/// Written WITH the colon, so the check reads an argument LABEL and not a
+/// mention of the same word somewhere in an expression.
+private let optionalProtections = [
+    "agentPIDs:",
+    "frontmostPID:",
+    "ancestorPIDs:",
+    "extraProtectedNames:",
+]
+
 /// Every file the app layer's targets compile, package-root relative and
 /// sorted.
 private func appLayerEntries() throws -> [String] {
@@ -781,6 +838,120 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
         for name in forbidden {
             #expect(!source.contains(name),
                     "\(file.lastPathComponent) names \(name); the app layer holds no assertion of its own")
+        }
+    }
+}
+
+// MARK: - What the app layer must SAY when it builds a demotion policy
+
+@Test func theAppLayerSuppliesEveryOptionalProtectionToDemotionPolicy() throws {
+    // STRUCTURAL. Named bug this catches, and it is the single most
+    // user-visible way issue #14 can go wrong: a `DemotionPolicy` built in the
+    // app layer that leaves `frontmostPID` at its `nil` default. The rule in
+    // `verdict(for:)` refuses `.frontmostApplication` ONLY when the value is
+    // non-nil, so the omission makes the application the user is looking at
+    // demotable the moment they name it — and every behavioural check in this
+    // package still passes, because none of them can see an argument that was
+    // never written.
+    //
+    // `agentPIDs`, `ancestorPIDs` and `extraProtectedNames` default to empty
+    // for the same reason and carry the same hazard. FOUR of the nine deny
+    // rules are off by default, and only the composition root can fill any of
+    // them, so all four are held here rather than the one that prompted this.
+    //
+    // COMMENT-STRIPPED, and that is load bearing rather than tidy.
+    // `ProcessGovernance.swift`'s doc comment names all four labels while
+    // explaining why they matter, so a raw read would be satisfied by the
+    // prose alone and would pass over a construction that supplied none of
+    // them — the exact defect, certified sound by its own documentation.
+    //
+    // The HARNESS is deliberately out of scope. `CoffeeBarGovernorHarness`
+    // passes `frontmostPID: nil` on purpose, to measure that the rule does
+    // nothing when it is not told; it ships in no product and this scan does
+    // not reach it.
+    let files = try appLayerSources()
+    #expect(files.count == expectedSourceCount,
+            "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
+
+    var sites: [(file: String, arguments: String)] = []
+    for file in files {
+        let code = swiftCodeWithoutComments(try String(contentsOf: file, encoding: .utf8))
+        for span in argumentSpans(of: "DemotionPolicy(", in: code) {
+            sites.append((file.lastPathComponent, span))
+        }
+    }
+
+    // Anti-vacuity, and this one is not a formality. The app layer built no
+    // policy at all until issue #14 wired the governor, so a scan that found
+    // nothing is indistinguishable from the state this check was written to
+    // leave behind — and every assertion below it would pass over an empty
+    // list for ever.
+    #expect(sites.isEmpty == false, """
+        no app-layer file constructs a DemotionPolicy. Either the governor lost \
+        its production caller, or this scan is reading the wrong files.
+        """)
+
+    for site in sites {
+        for label in optionalProtections {
+            #expect(site.arguments.contains(label), """
+                \(site.file) builds a DemotionPolicy without naming \(label). \
+                That argument defaults to empty, which switches its deny rule \
+                OFF — the frontmost application, a tracked agent, coffee-bar's \
+                own parent shell or coffee-bar's own hook then becomes demotable \
+                the moment a user names it. Only this layer can measure any of \
+                them, so a default here is a protection removed and not a \
+                feature missing.
+                """)
+        }
+    }
+}
+
+@Test func theAppLayerNeverMatchesTheDemotableSetAgainstADisplayName() throws {
+    // DENYLIST, and the rule is "must not DO", so comments are stripped.
+    //
+    // The demotable set is matched against the name the KERNEL reports —
+    // `ProcSnapshot.name`, read through `proc_pidinfo`. AppKit's own names for
+    // the same process are different strings: a user who writes
+    // "Visual Studio Code" is naming what `localizedName` answers, while the
+    // kernel calls that process "Code".
+    //
+    // Named bug this catches: an enumeration that carries the display name
+    // forward and matches on it. `DemotionPolicy` matches EXACTLY, so the miss
+    // is silent and total — nothing is demoted, nothing is logged, and the
+    // user sees a setting they configured doing nothing whatever. A feature
+    // that appears configured and does nothing is worse than one that fails
+    // loudly, because there is no thread to pull.
+    //
+    // Comment stripping is proven LIVE here rather than argued:
+    // `ProcessGovernance.swift`'s own doc comment names `localizedName` while
+    // explaining this trap, so this check reads red on correct code the moment
+    // it stops stripping.
+    let files = try appLayerSources()
+    #expect(files.count == expectedSourceCount,
+            "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
+
+    // Anchor on the file the rule is about. A mis-resolved root scans nothing
+    // and passes every `contains` below.
+    #expect(files.contains { $0.lastPathComponent == "ProcessGovernance.swift" }, """
+        the app-layer scan never reached ProcessGovernance.swift, the one file \
+        that enumerates running applications; it read \(files.count) files
+        """)
+
+    // Every AppKit route to a name that is not the kernel's.
+    // `NSRunningApplication` is the type itself: holding one is what makes the
+    // other two reachable, so the provider hands back pids and stops there.
+    let forbidden = ["localizedName", "bundleIdentifier", "NSRunningApplication"]
+
+    for file in files {
+        let code = swiftCodeWithoutComments(try String(contentsOf: file, encoding: .utf8))
+        for name in forbidden {
+            #expect(!code.contains(name), """
+                \(file.lastPathComponent) names \(name) in CODE. The demotable \
+                set is matched against the name the kernel reports, never a \
+                display name: the two differ ("Code" against "Visual Studio \
+                Code"), the match is exact, and a miss demotes nothing and says \
+                nothing.
+                """)
         }
     }
 }
