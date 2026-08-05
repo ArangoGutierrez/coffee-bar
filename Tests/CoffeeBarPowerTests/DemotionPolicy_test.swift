@@ -30,9 +30,30 @@ import Darwin
 /// half of what it claims to.
 private func snapshot(pid: pid_t, uid: uid_t, ppid: pid_t, pgid: pid_t,
                       name: String, flags: UInt32 = 0x1404010) -> ProcSnapshot {
-    ProcSnapshot(pid: pid, uid: uid, ppid: ppid, pgid: pgid, name: name, flags: flags,
-                 identity: ProcIdentity(pid: pid, startedAtSeconds: 1_785_911_481,
-                                        startedAtMicroseconds: 335_072))
+    ProcSnapshot(pid: pid, uid: uid, ppid: ppid, pgid: pgid, name: name, flags: flags)
+}
+
+/// The first process on this machine, at `pid` 100 or above, that belongs to
+/// another user.
+///
+/// Found rather than named: which uid runs which daemon is not this project's to
+/// pin, and a hard-coded `WindowServer` would make the check depend on a window
+/// server being up. `proc_listallpids` is the unprivileged enumeration and needs
+/// no entitlement.
+private func firstForeignUIDProcess(_ inspector: SystemProcessInspector) -> ProcSnapshot? {
+    let capacity = Int(proc_listallpids(nil, 0))
+    guard capacity > 0 else { return nil }
+    var pids = [pid_t](repeating: 0, count: capacity)
+    let bytes = proc_listallpids(&pids, Int32(capacity * MemoryLayout<pid_t>.size))
+    guard bytes > 0 else { return nil }
+    let count = Int(bytes) / MemoryLayout<pid_t>.size
+
+    return pids.prefix(count)
+        .filter { $0 >= DemotionPolicy.lowestDemotablePID }
+        .sorted()
+        .lazy
+        .compactMap { inspector.snapshot(of: $0) }
+        .first { $0.uid != getuid() }
 }
 
 @Suite struct DemotionPolicyTests {
@@ -239,12 +260,27 @@ private func snapshot(pid: pid_t, uid: uid_t, ppid: pid_t, pgid: pid_t,
 
         #expect(policy.verdict(for: me) == .refused(.coffeeBarItself))
 
-        if let launchd = inspector.snapshot(of: 1) {
-            let openPolicy = DemotionPolicy(
-                demotableNames: [launchd.name],
-                selfPID: getpid(), selfUID: getuid(), selfPGID: pid_t(getpgrp()))
-            #expect(openPolicy.verdict(for: launchd) != .allowed)
-        }
+        // `launchd`. Readable because the inspector reads the UNPRIVILEGED
+        // record; an earlier version of this task read the privileged one, saw
+        // `nil`, and the rule below was unreachable.
+        let launchd = try #require(inspector.snapshot(of: 1),
+                                   "the protected set cannot refuse a process it cannot see")
+        let openForLaunchd = DemotionPolicy(
+            demotableNames: [launchd.name],
+            selfPID: getpid(), selfUID: getuid(), selfPGID: pid_t(getpgrp()))
+        #expect(openForLaunchd.verdict(for: launchd) == .refused(.systemProcess))
+
+        // A real process belonging to a real other user — `WindowServer` runs as
+        // uid 88 on this machine. The uid rule is the one that matters most in
+        // practice, because most of what a protected set refuses belongs to
+        // somebody else, and it can only fire on a process the inspector sees.
+        let foreign = try #require(
+            firstForeignUIDProcess(inspector),
+            "no process of another uid was visible; the uid rule below is untested here")
+        let openForForeign = DemotionPolicy(
+            demotableNames: [foreign.name],
+            selfPID: getpid(), selfUID: getuid(), selfPGID: pid_t(getpgrp()))
+        #expect(openForForeign.verdict(for: foreign) == .refused(.foreignUID))
     }
 
     @Test func aChildThisSuiteStartedIsAllowedOnlyOnceItIsOptedIn() throws {

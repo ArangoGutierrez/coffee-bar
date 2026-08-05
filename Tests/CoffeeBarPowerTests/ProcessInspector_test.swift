@@ -269,14 +269,56 @@ func waitForFlags(of pid: pid_t, within seconds: TimeInterval,
 
         let a = try #require(inspector.snapshot(of: first.pid))
         let b = try #require(inspector.snapshot(of: second.pid))
-
         try #require(a.name == b.name, "the two children were not named alike; this proves nothing")
-        #expect(a.identity != b.identity)
+
+        let idA = try #require(inspector.identity(of: first.pid))
+        let idB = try #require(inspector.identity(of: second.pid))
+        #expect(idA != idB)
 
         // And identity is STABLE for one process, or it would reject every
         // legitimate restore instead of only the reused pids.
-        let againA = try #require(inspector.snapshot(of: first.pid))
-        #expect(againA.identity == a.identity)
+        #expect(inspector.identity(of: first.pid) == idA)
+    }
+
+    @Test func theProtectedSetCanSeeProcessesTheIdentityReadCannot() throws {
+        // A measured limit, and the reason this type makes two readings.
+        //
+        // `PROC_PIDTBSDINFO` is PRIVILEGED: on macOS 26.5.2 (25F84) it answers
+        // `EPERM` for `pid` 1 (uid 0) and for `WindowServer` (uid 88).
+        // `PROC_PIDT_SHORTBSDINFO` answers for every process on the machine.
+        //
+        // The bug this catches, and this task shipped it for one commit: an
+        // inspector built on the privileged flavour alone reads `nil` for every
+        // process another user owns. `nil` means "no such process", so the
+        // protected set never gets to refuse `launchd` or `WindowServer` — it
+        // never sees them. The refusal is still fail-closed, but the rule that
+        // was supposed to hold was unreachable and untestable.
+        let inspector = SystemProcessInspector()
+
+        let launchd = try #require(inspector.snapshot(of: 1),
+                                   "the protected set cannot refuse a process it cannot see")
+        #expect(launchd.uid == 0)
+        #expect(launchd.uid != getuid())
+        #expect(inspector.identity(of: 1) == nil,
+                "the privileged flavour stopped being privileged; the two-reading design needs rewriting")
+
+        // Our own process answers both, which is what a demotable process looks
+        // like. Without this the check above would pass for an inspector that
+        // simply never returns an identity.
+        #expect(inspector.snapshot(of: getpid()) != nil)
+        #expect(inspector.identity(of: getpid()) != nil)
+    }
+
+    @Test func everyAlwaysProtectedNameFitsTheShortField() {
+        // The trap the two readings leave behind, pinned so it cannot be walked
+        // into. A process another user owns reports only `pbsi_comm`, which
+        // holds 15 characters. A protected name longer than that would never
+        // match such a process — and `WindowServer` and `coreaudiod` are exactly
+        // the foreign-uid processes the list exists to protect.
+        for name in DemotionPolicy.alwaysProtectedNames {
+            #expect(name.count <= SystemProcessInspector.shortNameLimit,
+                    "\(name) is \(name.count) characters and cannot match another user's process")
+        }
     }
 
     @Test func theNameSurvivesTheKernelsShortCommandField() throws {
