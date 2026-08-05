@@ -166,6 +166,64 @@ private func entry(pid: pid_t, seconds: UInt64 = 1_785_911_481,
         #expect(throws: DemotionJournalError.self) { try journal.store.load() }
     }
 
+    @Test func appendRefusesToWriteOverAJournalItCouldNotDecode() throws {
+        // The rule `DemotionJournalStoring.load` states, broken by one `try?`:
+        // "`nil` and a throw must never be confused: 'nothing was demoted' and
+        // 'something was demoted and we cannot read what' call for opposite
+        // responses." A corrupt journal read through `try?` becomes "nothing was
+        // demoted", and the write that follows REPLACES the record.
+        //
+        // The failure is silent and total. `recover()` throws at launch — the
+        // loud signal, working as designed. The app then demotes one process,
+        // the corrupt file is replaced by a clean one naming only that new pid,
+        // and every process the unreadable record named is stranded for ever.
+        // The next launch reports a clean start. Refusing the demotion costs one
+        // process not demoted; performing it costs the error AND the evidence.
+        let journal = try throwawayJournal()
+        defer { try? FileManager.default.removeItem(at: journal.root) }
+        try FileManager.default.createDirectory(
+            at: journal.url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let corrupt = Data("this is not the journal you are looking for".utf8)
+        try corrupt.write(to: journal.url)
+
+        #expect(throws: DemotionJournalError.self) {
+            try journal.store.append(entry(pid: 5001, name: "cb-second"))
+        }
+
+        // Read the BYTES back, not `load()`. The point is that the record on
+        // disk is untouched, so the error a later run reads is still there.
+        #expect(try Data(contentsOf: journal.url) == corrupt,
+                "append replaced a journal it could not decode; the record and the error are both gone")
+        #expect(throws: DemotionJournalError.self) { try journal.store.load() }
+    }
+
+    @Test func appendRefusesOverAJournalItIsNotAllowedToRead() throws {
+        // The neighbouring case, pinned rather than assumed.
+        //
+        // It already refused before the `try?` above was removed, but only by
+        // accident: `try?` swallowed the read error, the write went ahead, and
+        // `replaceItemAt` happened to fail with `EACCES`. That is a property of
+        // the filesystem, not a decision this type made. The refusal is now
+        // deliberate, and this holds it there.
+        //
+        // Mode bits mean nothing to root, so this cannot run as root.
+        try #require(getuid() != 0, "this check needs an unprivileged uid")
+
+        let journal = try throwawayJournal()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600],
+                                                   ofItemAtPath: journal.url.path)
+            try? FileManager.default.removeItem(at: journal.root)
+        }
+        try journal.store.append(entry(pid: 5000, name: "cb-first"))
+        try FileManager.default.setAttributes([.posixPermissions: 0],
+                                              ofItemAtPath: journal.url.path)
+
+        #expect(throws: (any Error).self) {
+            try journal.store.append(entry(pid: 5001, name: "cb-second"))
+        }
+    }
+
     @Test func clearRemovesTheJournalAndToleratesAMissingOne() throws {
         // The bug: a `clear` that throws when there is nothing to clear. It runs
         // at the end of every recovery, including the ordinary case where no

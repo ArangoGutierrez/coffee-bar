@@ -165,8 +165,22 @@ public struct FileDemotionJournalStore: DemotionJournalStoring {
         }
     }
 
+    /// `try load()` and never `try? load()`.
+    ///
+    /// A `try?` here confuses exactly the two answers `load()` exists to keep
+    /// apart. A record that will not decode reads as "nothing was demoted", and
+    /// the write that follows REPLACES it: every process the unreadable record
+    /// named is stranded silently, and the error that would have said so is
+    /// gone with it. Refusing costs one demotion that does not happen.
+    /// `appendRefusesToWriteOverAJournalItCouldNotDecode` pins it.
+    ///
+    /// The same refusal now covers a record this process may not read.
+    /// `replaceItemAt` already failed there with `EACCES`, so the behaviour a
+    /// caller sees does not change — but it was a property of the filesystem
+    /// rather than a decision this type made, and
+    /// `appendRefusesOverAJournalItIsNotAllowedToRead` holds it either way.
     public func append(_ entry: DemotionEntry) throws {
-        let existing = (try? load())?.entries ?? []
+        let existing = try load()?.entries ?? []
         try write(DemotionJournalRecord(entries: existing + [entry]))
     }
 
