@@ -192,7 +192,7 @@ not in it is not available.
                               ┌────────────────────────────────────┐
                               │ coffeebar-hook (CLI shim)          │
                               │  stdin JSON / argv → UNIX socket   │
-                              │  always exit 0, ≤50 ms             │
+                              │  always exit 0; fast, and bounded  │
                               └────────────────────────────────────┘
 ```
 
