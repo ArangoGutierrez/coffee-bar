@@ -842,6 +842,87 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     }
 }
 
+@Test func thePanelOffersTheQuietOthersControl() throws {
+    // PRESENCE, the same tripwire shape as `thePanelOffersTheDisplayHoldControl`
+    // and for the same reason: `ServingModel` can store the switch,
+    // `ProcessGovernance` can weigh it and `ProcGovernor` can act on it with
+    // every check green while the panel offers no way to turn it on.
+    //
+    // That is not hypothetical on this branch. `ProcGovernor` landed with 2853
+    // lines of tested code and ZERO production callers, and issue #13 exists
+    // partly to complain that `LaunchDaemonInstaller` shipped the same way.
+    //
+    // Same LIMIT as the checks above, stated rather than hidden: this proves
+    // the panel NAMES the binding, not that it draws a usable control. Design
+    // §5.4 rules out asserting on rendered AppKit text.
+    let files = try appLayerSources()
+    #expect(files.count == expectedSourceCount,
+            "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
+
+    let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
+                             "the app layer no longer compiles a PanelView.swift")
+    let source = try String(contentsOf: panel, encoding: .utf8)
+
+    // The BINDING, not the property. `model.quietEverythingElse` would be
+    // satisfied by a line that merely displays the value, and a switch the user
+    // can read and not flip is not a switch.
+    #expect(source.contains("$model.quietEverythingElse"), """
+        PanelView.swift binds no control to model.quietEverythingElse, so the \
+        governor can be wired, stored and honoured and the user can never turn \
+        it on.
+        """)
+
+    // The label comes from the model, where a check can read it. The wording is
+    // constrained — macOS cannot promote a process — so a literal composed in
+    // this view is a claim nothing in this package could ever check.
+    #expect(source.contains("ServingModel.quietOthersLabel"), """
+        PanelView.swift names its own label for the quiet-others control. It \
+        belongs on ServingModel beside the other control labels, where \
+        theQuietOthersLabelNamesWhatIsQuietedAndClaimsNoSpeedUp reads it.
+        """)
+}
+
+@Test func theAppComposesTheProcessGovernanceAndRecoversAtLaunch() throws {
+    // PRESENCE. `ServingModel.governance` is the ONE seam on that type whose
+    // default is null rather than the real implementation, so this is what
+    // stops the missing wire shipping silently — the exact objection the
+    // listener's real-by-default comment raises.
+    //
+    // Three separate things are held, because each can be deleted on its own
+    // and the other two still read as a working feature:
+    //
+    //   1. the app CONSTRUCTS a ProcessGovernance;
+    //   2. it HANDS it to the model, rather than building one and dropping it;
+    //   3. it RECOVERS at launch, so a demotion an earlier run was killed
+    //      before undoing does not outlive that run.
+    //
+    // COMMENT-STRIPPED, because `main.swift` explains all three in prose. A raw
+    // read would be satisfied by the explanation of the thing it deleted.
+    //
+    // Same LIMIT as the panel tripwires: this proves `main.swift` names each
+    // call, not that the composition is correct. `ProcessGovernance_test.swift`
+    // holds the behaviour; `main.swift` is top-level code that no test target
+    // can import, which is why a source read is the only route here at all.
+    let files = try appLayerSources()
+    let main = try #require(files.first { $0.lastPathComponent == "main.swift" },
+                            "the app layer no longer compiles a main.swift")
+    let code = swiftCodeWithoutComments(try String(contentsOf: main, encoding: .utf8))
+
+    #expect(code.contains("ProcessGovernance("), """
+        main.swift builds no ProcessGovernance, so ProcGovernor has no \
+        production caller and the app demotes nothing whatever the user sets.
+        """)
+    #expect(code.contains("governance:"), """
+        main.swift builds a ProcessGovernance and never hands it to the model. \
+        ServingModel defaults that seam to nil, so refresh() reconciles nothing.
+        """)
+    #expect(code.contains("restoreDemotedProcesses()"), """
+        main.swift never restores at launch. A run that was killed while \
+        holding processes down leaves them there, and the journal it wrote is \
+        the only record naming them.
+        """)
+}
+
 // MARK: - What the app layer must SAY when it builds a demotion policy
 
 @Test func theAppLayerSuppliesEveryOptionalProtectionToDemotionPolicy() throws {

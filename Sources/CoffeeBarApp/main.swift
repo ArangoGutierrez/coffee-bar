@@ -2,7 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import SwiftUI
+import AppKit
+import Foundation
 import CoffeeBarUI
+
+// `import AppKit` is explicit for `NSApplication.willTerminateNotification`,
+// and `import Foundation` for `NotificationCenter` and `NSLog`. Do not rely on
+// SwiftUI re-exporting either — `PanelView.swift` states the same rule.
 
 /// The menu-bar app.
 ///
@@ -13,7 +19,60 @@ struct CoffeeBarMenuBarApp: App {
     @State private var model: ServingModel
 
     init() {
-        let model = ServingModel()
+        // THE composition root for process demotion, and the reason
+        // `ProcGovernor` now has a production caller at all. Everything it
+        // needs — the running applications, the frontmost application, this
+        // process's own identity and its ancestor chain — is live state only a
+        // running app can measure, which is why `DemotionPolicy` takes values
+        // and decides nothing for itself.
+        //
+        // Built HERE and handed down. `ServingModel` defaults this seam to
+        // `nil`, deliberately: a null governance demotes nothing, which is the
+        // product's documented default, and a real default would point every
+        // check in the package at the user's own demotion journal.
+        // `theAppComposesTheProcessGovernanceAndRecoversAtLaunch` reads this
+        // file for all three lines below, because SwiftPM treats `main.swift`
+        // as top-level code that no test target can import.
+        let model = ServingModel(governance: ProcessGovernance())
+
+        // Undo whatever an EARLIER run left demoted, before this one can demote
+        // anything.
+        //
+        // Here rather than in the view, for the reason `startMonitoring` is
+        // here: `MenuBarExtra` with `.menuBarExtraStyle(.window)` builds its
+        // content only while the panel is open, so a recovery driven from
+        // `PanelView` would not run until the user opened the panel — and a
+        // user whose Slack is still on the E-cores has no reason to open it.
+        //
+        // Here rather than in `ServingModel.init`, because this is a statement
+        // about the PROCESS and not about a model. `App` may be built twice —
+        // the leak note in `ServingModel.swift` records that — and a second
+        // recovery costs nothing: the first one emptied the journal, so the
+        // second finds no entry and touches no process.
+        //
+        // Before `startMonitoring`, so the journal is clear before the first
+        // `refresh()` can append to it.
+        model.restoreDemotedProcesses()
+
+        // And again on the way out, so a clean quit does not leave a process on
+        // the E-cores until the next launch. The Quit button calls
+        // `NSApplication.shared.terminate`, which posts this.
+        //
+        // `queue: .main` puts the block on the main thread, which is what makes
+        // `assumeIsolated` sound here — the same reasoning the ingest callback
+        // uses. `model` is captured STRONGLY on purpose: this block needs the
+        // object alive to do the restore, and the process is ending anyway.
+        //
+        // LIMIT, stated rather than hidden: a `SIGKILL` posts nothing, so this
+        // covers the clean exit only. The crash case is what the journal and
+        // the launch recovery above exist for, and `docs/ACCEPTED-RISKS.md`
+        // records the window between them.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { model.restoreDemotedProcesses() }
+        }
+
         // Started here, exactly once, rather than from the panel.
         // `MenuBarExtra` with `.menuBarExtraStyle(.window)` builds its content
         // only while the panel is open, so a ticker owned by the view stops the

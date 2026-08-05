@@ -203,6 +203,33 @@ public struct PanelView: View {
             .labelsHidden()
             .tint(brand(.state))
 
+            // The fourth control, and a fourth separate question: what happens
+            // to everything that is NOT the agent. Issue #14 built the governor
+            // and shipped it with no caller at all, which is the shape issue
+            // #13 complains about one milestone earlier — so the user needs
+            // somewhere to turn it on, or it is a feature that does not exist.
+            //
+            // A TOGGLE and not a segmented picker, unlike the three controls
+            // above. Those choose between states of one thing: the screen
+            // sleeps or stays on, the floor is one of several percentages.
+            // This asks whether to do an extra thing at all, which is a binary
+            // opt-in, and the label carries the whole meaning.
+            //
+            // The label comes from the model, for the reason the others do:
+            // design §5.4 rules out asserting on rendered AppKit text, so a
+            // literal here is a literal no check reads — and the wording is
+            // constrained. macOS cannot promote a process, so any label
+            // implying a speed-up is a false claim (handoff §2.2).
+            //
+            // The SECOND of two opt-ins. It does nothing on its own: the
+            // demotable set is empty by default, and a user who has named
+            // nothing sees this switch change nothing whatever.
+            Text("Other apps").font(.headline)
+
+            Toggle(ServingModel.quietOthersLabel, isOn: $model.quietEverythingElse)
+                .toggleStyle(.switch)
+                .controlSize(.small)
+
             // What is ACTUALLY held, beside the two controls that asked for it.
             // The user has to be able to see that Auto is holding right now, or
             // is not — the controls say what was asked for and this line says

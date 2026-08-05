@@ -4,6 +4,8 @@
 import Foundation
 import Testing
 import Darwin
+import CoffeeBarCore
+import CoffeeBarIngest
 import CoffeeBarPower
 @testable import CoffeeBarUI
 
@@ -482,5 +484,269 @@ private func slackRunning(frontmost: pid_t? = nil) -> Fixture {
 
         #expect(fixture.kernel.calls.isEmpty,
                 "a restore touched a process no journal entry named")
+    }
+}
+
+// MARK: - The model that drives it
+
+/// Holds nothing and counts nothing. These checks are about demotion.
+private struct NoHold: AssertionHolding, @unchecked Sendable {
+    @discardableResult func acquire(displaySleep: Bool) -> Bool { true }
+    func release() {}
+}
+
+private struct FixedPower: PowerReadingProviding {
+    let reading: PowerReading
+    func read() -> PowerReading { reading }
+}
+
+/// Reports every tool wired, and reads NO file.
+///
+/// The shipping default is `HookHealthReader()` over the real
+/// `~/.claude/settings.json`, so a model built without this would report a
+/// different health on every developer's machine — and would read a file these
+/// checks have no business opening.
+private struct WiredHooks: HookHealthProviding {
+    func status() -> HookHealthStatus { .wired }
+    func statuses() -> [AgentTool: HookHealthStatus] { [.claudeCode: .wired] }
+}
+
+/// Binds nothing. The shipping default is the REAL listener, which would take
+/// `~/Library/Application Support/coffee-bar/ingest.sock` off a live app.
+private struct NoIngest: IngestListening {
+    func start(onEvent: @escaping @Sendable (AgentTool, HookEvent) -> Void) throws {}
+    func stop() {}
+    var isReady: Bool { false }
+}
+
+/// A settings store held in memory, so no check edits the preferences of
+/// whoever runs the suite.
+private final class FakeSettings: SettingsStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String: Any]
+
+    init(_ initial: [String: Any] = [:]) { values = initial }
+
+    func bool(forKey key: String) -> Bool? { lock.withLock { values[key] as? Bool } }
+    func setBool(_ value: Bool, forKey key: String) { lock.withLock { values[key] = value } }
+    func integer(forKey key: String) -> Int? { lock.withLock { values[key] as? Int } }
+    func setInteger(_ value: Int, forKey key: String) { lock.withLock { values[key] = value } }
+    func stringArray(forKey key: String) -> [String]? {
+        lock.withLock { values[key] as? [String] }
+    }
+    func setStringArray(_ value: [String], forKey key: String) {
+        lock.withLock { values[key] = value }
+    }
+}
+
+@MainActor
+private func makeModel(fixture: Fixture, settings: FakeSettings,
+                       source: PowerSource = .battery) -> ServingModel {
+    ServingModel(holder: NoHold(),
+                 reader: FixedPower(reading: PowerReading(source: source, percent: 80)),
+                 health: WiredHooks(),
+                 settings: settings,
+                 listener: NoIngest(),
+                 governance: fixture.governance)
+}
+
+/// One tool call from an agent, which `SessionHub` turns into a WORKING
+/// session. It carries no pid, because no hook payload does.
+private func aToolCall(session: String = "s1") -> HookEvent {
+    HookEvent(hookEventName: "PreToolUse", sessionID: session,
+              cwd: "/Users/example/src/coffee-bar", toolName: "Bash")
+}
+
+@Suite struct ServingModelGovernanceTests {
+
+    @MainActor
+    @Test func theQuietOthersSwitchStartsOffAndIsWrittenWhenTheUserChangesIt() {
+        // The second opt-in, held to the shape `holdDisplayAwake` set. The
+        // write half is what makes the choice survive a relaunch; without it
+        // the panel remembers it for exactly as long as the app runs and every
+        // other check here stays green.
+        let fixture = slackRunning()
+        defer { fixture.removeJournal() }
+        let store = FakeSettings()
+        let model = makeModel(fixture: fixture, settings: store)
+
+        #expect(model.quietEverythingElse == false, "the switch did not ship off")
+        #expect(store.bool(forKey: SettingsKey.quietEverythingElse) == nil,
+                "precondition: nothing was stored before the user touched anything")
+
+        model.quietEverythingElse = true
+        #expect(store.bool(forKey: SettingsKey.quietEverythingElse) == true)
+
+        model.quietEverythingElse = false
+        // `false`, not absent. A store that deleted the key on an opt-out would
+        // read as "never asked", which is the difference `SettingsStoring`
+        // exists to keep.
+        #expect(store.bool(forKey: SettingsKey.quietEverythingElse) == false)
+    }
+
+    // `@MainActor` because `ServingModel` is, so its labels are too. The three
+    // labels beside this one are held the same way rather than made
+    // `nonisolated`: `PanelView.versionLine(from:)` records that the 6.1.2 CI
+    // toolchain and a 6.3 developer machine disagree about isolation
+    // inference, and this repository pins no toolchain.
+    @MainActor
+    @Test func theQuietOthersLabelNamesWhatIsQuietedAndClaimsNoSpeedUp() {
+        // The wording is CONSTRAINED, and the constraint is a measurement
+        // rather than a preference. macOS has no mechanism to promote a
+        // process: the handoff cites Oakley twice, that `taskpolicy` "functions
+        // as a brake, but not as an accelerator", and this package demotes
+        // through `setpriority(PRIO_DARWIN_PROCESS, pid, PRIO_DARWIN_BG)` and
+        // has no opposite call. So a label reading "Boost agents" would tell
+        // the user something the product cannot do, in the one place this
+        // product promises to tell the truth.
+        //
+        // The banned list is not decoration. A rename to "Boost agents" fails
+        // the literal above AND names which rule it broke, which is the
+        // difference between a check that says "changed" and one that says
+        // "changed, and here is why you may not".
+        //
+        // `%` covers the other half: no battery saving, no percentage and no
+        // duration. A 2026-08-01 audit spent a day removing unverifiable claims
+        // of exactly that shape.
+        #expect(ServingModel.quietOthersLabel == "Quiet everything else")
+
+        for banned in ["Boost", "boost", "Speed", "speed", "Faster", "faster",
+                       "Accelerat", "accelerat", "%", "battery", "minutes", "hours"] {
+            #expect(ServingModel.quietOthersLabel.contains(banned) == false, """
+                the quiet-others label says "\(banned)". macOS cannot promote a \
+                process and this build measures no battery saving, so the label \
+                names what is QUIETED and claims nothing else.
+                """)
+        }
+    }
+
+    @MainActor
+    @Test func aStoredQuietOthersSwitchIsReadBackAtTheNextLaunch() {
+        // The read half. Named bug this catches: an `init` that ignores the
+        // store, so every launch starts opted out. Every check that sets the
+        // value itself before reading it stays green.
+        let fixture = slackRunning()
+        defer { fixture.removeJournal() }
+        let model = makeModel(fixture: fixture,
+                              settings: FakeSettings([SettingsKey.quietEverythingElse: true]))
+
+        #expect(model.quietEverythingElse == true)
+    }
+
+    @MainActor
+    @Test func aWorkingSessionOnBatteryQuietsTheProcessTheUserNamed() {
+        // THE end-to-end claim, and the one no check on `ProcessGovernance`
+        // alone can make: that `refresh()` measures the four conditions off the
+        // model's own state and hands them down. Named bug this catches: a
+        // model that stores the switch, renders it, and calls nothing — which
+        // is `LaunchDaemonInstaller` shipping unreachable, one milestone later.
+        //
+        // The session here carries NO pid, because no hook payload does. That
+        // is what makes this a check on the shipped path rather than on a
+        // fixture nothing produces.
+        let fixture = slackRunning()
+        defer { fixture.removeJournal() }
+        let model = makeModel(
+            fixture: fixture,
+            settings: FakeSettings([SettingsKey.quietEverythingElse: true,
+                                    SettingsKey.demotableProcessNames: ["Slack"]]))
+
+        // Precondition: nothing is demoted before an agent starts working, so
+        // the demotion below is caused by the event.
+        model.refresh()
+        #expect(fixture.kernel.demoted.isEmpty, "something was demoted with no session running")
+
+        model.ingest(from: .claudeCode, aToolCall())
+
+        #expect(fixture.kernel.demoted == [slackPID],
+                "a working agent on battery quieted nothing the user named")
+    }
+
+    @MainActor
+    @Test func theModelQuietsNothingWhileTheSwitchIsOff() {
+        // The switch is the only one of the four conditions the panel can move,
+        // so this is the check a user's own hand exercises. Everything else is
+        // held true.
+        let fixture = slackRunning()
+        defer { fixture.removeJournal() }
+        let model = makeModel(
+            fixture: fixture,
+            settings: FakeSettings([SettingsKey.demotableProcessNames: ["Slack"]]))
+
+        model.ingest(from: .claudeCode, aToolCall())
+
+        #expect(fixture.kernel.demoted.isEmpty, "the switch was off and a process was demoted")
+    }
+
+    @MainActor
+    @Test func turningTheSwitchOffRestoresImmediatelyRatherThanAtTheNextTick() {
+        // A user who turns this off is asking for their applications back NOW,
+        // not within 30 seconds. `batteryFloorPercent` sets the same rule for
+        // the same reason — `changingTheFloorReconcilesImmediatelyRatherThan
+        // AtTheNextTick`.
+        let fixture = slackRunning()
+        defer { fixture.removeJournal() }
+        let model = makeModel(
+            fixture: fixture,
+            settings: FakeSettings([SettingsKey.quietEverythingElse: true,
+                                    SettingsKey.demotableProcessNames: ["Slack"]]))
+
+        model.ingest(from: .claudeCode, aToolCall())
+        #expect(fixture.kernel.demoted == [slackPID], "nothing was quieted, so nothing can restore")
+
+        model.quietEverythingElse = false
+
+        #expect(fixture.kernel.restored == [slackPID],
+                "turning the switch off left the process demoted")
+    }
+
+    @MainActor
+    @Test func theModelRestoresWhatAnEarlierRunLeftDemoted() {
+        // The launch and clean-exit path, through the one method `main.swift`
+        // calls. An earlier run was killed before it could restore, so the
+        // journal is the only record naming the process it left behind.
+        let fixture = Fixture(
+            running: [], table: [snapshot(slackPID, "Slack",
+                                          flags: untouchedFlags | ProcSnapshot.externalDarwinBackground)])
+        defer { fixture.removeJournal() }
+        try? fixture.journal.append(
+            DemotionEntry(identity: identity(slackPID), name: "Slack",
+                          priorFlags: untouchedFlags,
+                          demotedAt: Date(timeIntervalSince1970: 1_785_911_481)))
+
+        let model = makeModel(fixture: fixture, settings: FakeSettings())
+        model.restoreDemotedProcesses()
+
+        #expect(fixture.kernel.restored == [slackPID],
+                "a demotion an earlier run recorded survived this launch")
+    }
+
+    @MainActor
+    @Test func aModelWithNoGovernanceDemotesNothingAndDoesNotFail() {
+        // The default. `governance` is the ONE seam on this type whose default
+        // is null rather than real, and the direction is why: a null listener
+        // ships an app with no ingest and nothing to notice, while a null
+        // governance ships an app that demotes nothing — which is this
+        // product's documented default and the safe answer. A real default
+        // would also point every check in this package at the user's own
+        // journal file and their own running applications.
+        //
+        // The missing wire cannot ship silently:
+        // `theAppComposesTheProcessGovernanceAndRecoversAtLaunch` reads
+        // `main.swift` for it.
+        let model = ServingModel(holder: NoHold(),
+                                 reader: FixedPower(reading: PowerReading(source: .battery,
+                                                                          percent: 80)),
+                                 health: WiredHooks(),
+                                 settings: FakeSettings([
+                                    SettingsKey.quietEverythingElse: true,
+                                    SettingsKey.demotableProcessNames: ["Slack"]]),
+                                 listener: NoIngest())
+
+        model.ingest(from: .claudeCode, aToolCall())
+        model.restoreDemotedProcesses()
+
+        #expect(model.quietEverythingElse == true,
+                "the model without a governance stopped reading its own settings")
     }
 }
