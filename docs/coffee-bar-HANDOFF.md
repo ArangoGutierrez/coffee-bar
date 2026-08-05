@@ -528,6 +528,43 @@ the kernel reports, never as a prefix or a substring: this list decides what MAY
 demoted, so a loose match widens the blast radius. An absent key reads as EMPTY and not as
 "no restriction" — §2.3 makes the set opt-in only.
 
+**How to set it.** There is no panel control. The preference domain is the app bundle
+identifier that `scripts/build-app.sh` assigns, so the whole setting is one command:
+
+```
+defaults write com.coffeebar.app demotableProcessNames -array "Slack" "Spotify"
+defaults read com.coffeebar.app demotableProcessNames
+```
+
+Measured on 2026-08-05, uid 502, macOS 26.5.2 (25F84). The read prints:
+
+```
+(
+    Slack,
+    Spotify
+)
+```
+
+`defaults read-type com.coffeebar.app demotableProcessNames` answers `Type is array`, which
+is the type `UserDefaultsSettingsStore.stringArray(forKey:)` casts to. A value of any other
+type reads back as an empty set and demotes nothing, which is the safe direction.
+
+Remove the setting with
+`defaults delete com.coffeebar.app demotableProcessNames`. Deleting the key is not the same
+as writing an empty array to the app, but it is the same to the demotable set: both read as
+empty.
+
+**This command has no effect on the running app today**, because nothing calls the
+governor. It is the interface the wiring work will consume, and it is documented now
+because the acceptance criterion for issue #14 asks for a demotable set that is
+configurable AND documented — and until this paragraph existed no user could set it at all.
+`theDocumentedDefaultsCommandNamesTheRealDomainAndTheRealKey` reads the domain back out of
+`scripts/build-app.sh` and the key out of `SettingsKey`, so neither half of the command can
+drift from the code.
+
+A name longer than `SystemProcessInspector.nameLimit` (31) can never match any process,
+because that is the longest name the kernel keeps.
+
 **Protected — a deny list nothing can override.** Nine rules, each reported under its own
 `DemotionRefusal` case:
 

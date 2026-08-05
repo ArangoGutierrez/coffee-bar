@@ -236,4 +236,62 @@ struct SettingsStoreTests {
 
         #expect(store.demotableProcessNames() == ["node", "Xcode"])
     }
+
+    // MARK: - The documented way to set it
+
+    @Test func theDocumentedDefaultsCommandNamesTheRealDomainAndTheRealKey() throws {
+        // Acceptance line 1 of issue #14 says the demotable set is
+        // "configurable and documented". The type was configurable and nothing
+        // could configure it: no panel control writes the key, and until this
+        // check no document gave a command that does.
+        //
+        // Both halves of that command are literals no compiler sees. The DOMAIN
+        // is the app's bundle identifier, and a `defaults write` against the
+        // wrong domain succeeds, prints nothing and is read by nobody. The KEY
+        // is `SettingsKey.demotableProcessNames`, and a key is a STORED FORMAT —
+        // the file header says so — so a document that drifts from it tells the
+        // user to write a preference the app never reads.
+        //
+        // Both are therefore read back out of the tree rather than written here.
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()      // …/Tests/CoffeeBarPowerTests
+            .deletingLastPathComponent()      // …/Tests
+            .deletingLastPathComponent()      // package root
+
+        // The bundle identifier as `scripts/build-app.sh` sets it. That script
+        // assembles the bundle, so it is the only place that decides which
+        // preference domain the shipped app reads.
+        let buildScript = try String(
+            contentsOf: root.appendingPathComponent("scripts/build-app.sh"), encoding: .utf8)
+        let bundleIDLine = try #require(
+            buildScript.split(separator: "\n").first { $0.hasPrefix("BUNDLE_ID=") },
+            "scripts/build-app.sh no longer sets BUNDLE_ID; this guard cannot run")
+        let bundleID = bundleIDLine
+            .replacingOccurrences(of: "BUNDLE_ID=", with: "")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\" "))
+        #expect(bundleID.contains("."), "BUNDLE_ID read back as \"\(bundleID)\", which is not a domain")
+
+        let handoff = try String(
+            contentsOf: root.appendingPathComponent("docs/coffee-bar-HANDOFF.md"), encoding: .utf8)
+        let commands = handoff.split(separator: "\n")
+            .map(String.init)
+            .filter { $0.contains("defaults write") && $0.contains("demotable") }
+
+        #expect(!commands.isEmpty,
+                "docs/coffee-bar-HANDOFF.md gives no `defaults write` line for the demotable set, so no user can configure it")
+
+        for command in commands {
+            #expect(command.contains(bundleID),
+                    """
+                    the handoff writes to a domain that is not \(bundleID), which is \
+                    what scripts/build-app.sh gives the bundle. That command writes a \
+                    preference the app never reads: "\(command)"
+                    """)
+            #expect(command.contains(SettingsKey.demotableProcessNames),
+                    """
+                    the handoff writes a key that is not \
+                    "\(SettingsKey.demotableProcessNames)": "\(command)"
+                    """)
+        }
+    }
 }
