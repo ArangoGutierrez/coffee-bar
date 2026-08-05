@@ -82,7 +82,7 @@ private let hookBlockSurface = "docs/QUICKSTART.md"
 ///
 /// `CHANGELOG.md` joined them on 2026-08-04. Nothing read it before that, so a
 /// future entry could have claimed token accounting and stayed green.
-private let markdownSurfaces = ["CHANGELOG.md", "README.md",
+private let markdownSurfaces = ["CHANGELOG.md", "README.md", "SECURITY.md",
                                 "docs/BUILDING.md", "docs/QUICKSTART.md"]
 
 /// Every `.html` file under `site/`, found on disk.
@@ -206,10 +206,20 @@ func matches(_ pattern: String, in text: String) throws -> [[String]] {
                 "\(named) is missing from the discovered surfaces \(documentedSurfaces)")
     }
 
-    // The three pages the redesign added, and the three that were unguarded
-    // when this check was written. Named one by one, so losing a page fails
-    // HERE, loudly, instead of quietly reducing coverage everywhere else.
-    for page in ["site/install.html", "site/docs.html", "site/changelog.html"] {
+    // Every page under `site/` except the home page, which the list above
+    // names. Three arrived with the redesign and were unguarded when this check
+    // was written; terms and privacy arrived with the legal surface. Named one
+    // by one, so losing a page fails HERE, loudly, instead of quietly reducing
+    // coverage everywhere else.
+    //
+    // The two legal pages earn their line the same way `site/docs.html` did.
+    // They carry the only prose that states the warranty position and what the
+    // app reads, and a reader takes both as promises. If discovery stopped
+    // reaching them, the six parameterised guards below would sweep them
+    // without a word and report success — which is exactly what happened to
+    // `site/docs.html` for a whole milestone.
+    for page in ["site/install.html", "site/docs.html", "site/changelog.html",
+                 "site/terms.html", "site/privacy.html"] {
         #expect(found.contains(page),
                 "\(page) is missing from the discovered surfaces \(documentedSurfaces)")
     }

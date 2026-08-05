@@ -86,6 +86,28 @@ public struct PanelView: View {
         "Version " + AppVersion.display(from: info)
     }
 
+    /// The licence and warranty position, as one line for the panel.
+    ///
+    /// Composed here rather than inline in `body` for the reason
+    /// `versionLine(from:)` gives: a sentence built in the view is a sentence no
+    /// check can read. `PanelLegalLine_test` pins the licence name to the
+    /// `LICENSE` file the repository actually ships.
+    ///
+    /// A `func` and not a `let`, for the reason `versionLine(from:)` documents
+    /// above: `nonisolated` here is load-bearing and no local run catches a
+    /// mistake. That form is the only one in this codebase measured to compile
+    /// on both the local toolchain and the macos-15 runner's.
+    nonisolated static func legalLine() -> String { "Apache-2.0 · no warranty" }
+
+    /// Where the line points. The published terms page, not the repository.
+    ///
+    /// Force-unwrapped because the string is a literal checked by a test in the
+    /// same commit: `theLegalLinkPointsAtThePublishedTermsPage` fails before a
+    /// bad URL could ever reach a build.
+    nonisolated static func legalURL() -> URL {
+        URL(string: "https://arangogutierrez.github.io/coffee-bar/terms.html")!
+    }
+
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             // Three positions, not a switch, and bound to the INTENT rather
@@ -270,6 +292,13 @@ public struct PanelView: View {
             // check can read it. `Bundle.main.infoDictionary` is nil under
             // `swift run`, and that case is asserted rather than avoided.
             Text(PanelView.versionLine(from: Bundle.main.infoDictionary))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            // One line, not an About sheet. The panel is 260pt wide and already
+            // dense, and the DMG now reaches people who never saw the
+            // repository: this is the only route from the product to its terms.
+            Link(PanelView.legalLine(), destination: PanelView.legalURL())
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

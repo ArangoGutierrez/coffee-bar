@@ -60,5 +60,18 @@ the menu bar.
 
 ## Licence
 
-Apache-2.0. "Claude Code" is a third-party mark used nominatively; coffee-bar is
-not affiliated with or endorsed by its owner.
+Apache-2.0. A copy ships inside the app bundle and lives in [LICENSE](LICENSE).
+
+coffee-bar comes with **no warranty**. It does not save or recover your work,
+and it cannot guarantee your Mac stays awake — macOS, another app, or an
+administrator policy can sleep the machine whatever coffee-bar asks.
+[What to expect](https://arangogutierrez.github.io/coffee-bar/terms.html) says
+this in full.
+
+coffee-bar is a personal project by Carlos Eduardo Arango Gutierrez. **It is not
+an NVIDIA product.** NVIDIA does not endorse, support, or warrant it.
+
+"Claude Code" is a third-party mark used nominatively; coffee-bar is not
+affiliated with or endorsed by its owner.
+
+Found a bug? [Open an issue](https://github.com/ArangoGutierrez/coffee-bar/issues/new).

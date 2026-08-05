@@ -106,8 +106,12 @@ grep is worse than no policy. The claim is now narrower and true.
 
 One deliberate future exception is on record: an update check through a Sparkle
 appcast. It is not implemented and no code for it exists today. When it lands it
-will be the only outbound request in the app, and this section will say so
-explicitly rather than quietly.
+will be the first outbound request in the app, and this section will describe
+what it sends. Any further outbound request is opt-in, off by default, and named
+here before the release that carries it.
+
+This paragraph grants no permission to add telemetry. It records that the
+question is open and states the process any answer must follow.
 
 `TelemetryRecon` is the one component whose name suggests otherwise. It reads
 three local files — the Claude Code managed settings, the user settings, and the

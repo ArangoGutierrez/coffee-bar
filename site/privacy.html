@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<!--
+  Copyright 2026 Carlos Eduardo Arango Gutierrez
+  SPDX-License-Identifier: Apache-2.0
+
+  HONESTY CONSTRAINTS — binding. Carried forward from the single-page site and
+  docs/ROADMAP.md. Read before editing a single claim on this page.
+
+  1. No novelty claim in usage monitoring. CodexBar already occupies that space.
+  2. Token accounting is M7 = v0.3. It does not exist. Do not imply it does.
+  3. Do not advertise the "coffee-bar moved your control" panel disclosure as
+     complete. The 2026-07-30 audit proved it is durable only when no agent is
+     running, which is the opposite of when it matters.
+  4. Every claim must be true of the SHIPPED build. If a claim stops being true,
+     the claim is the thing to fix.
+  5. The timeline is an ILLUSTRATION OF BEHAVIOUR, never a measurement. No
+     battery percentage, duration or saving may appear until M6's measurement
+     harness has produced one a user can reproduce.
+  6. The binary is arm64 ONLY. Never write "Intel" or "universal".
+  7. Homebrew currently installs 0.1.0; the DMG is 0.1.1. Do not blur that.
+
+  BRAND — assets/art/README.md is the source of truth.
+  - TWO colours, two jobs. --state (#A2571E / #B8682A dark) is the liquid and
+    means "held awake". --action (#FF9500 / #FF9F0A dark) is Apple systemOrange
+    and means "interactive". Never swap their jobs. Never add a third.
+  - Neither colour carries body text. Measured: --action on the light page
+    background is 1.93:1 and genuinely fails; --state is 4.71 light and 4.57
+    dark and would pass. Both stay out of body text anyway, so the rule is one
+    line and not four exceptions. Ink ON --action is the safe inverse: 8.51
+    light, 9.10 dark.
+  - Menu-bar glyphs stay monochrome. Never ship a coloured variant.
+  - The wordmark is always lowercase and always hyphenated. It is a command name.
+  - No external requests: no web fonts, no analytics, no CDN.
+  - Asset paths are RELATIVE. This is a project Pages site served from
+    /coffee-bar/, so a leading slash resolves to the user root and 404s.
+  - No Apple logo. Apple's guidelines forbid it for third-party promotion.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy — coffee-bar</title>
+<meta name="description" content="What coffee-bar reads on your Mac, what it never reads, and what leaves the machine. No account, no sign-in, no server, no telemetry.">
+<link rel="canonical" href="https://arangogutierrez.github.io/coffee-bar/privacy.html">
+<meta property="og:title" content="Privacy — coffee-bar">
+<meta property="og:description" content="What coffee-bar reads on your Mac, what it never reads, and what leaves the machine. No account, no sign-in, no server, no telemetry.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://arangogutierrez.github.io/coffee-bar/privacy.html">
+<meta property="og:image" content="https://arangogutierrez.github.io/coffee-bar/social-preview-1280x640.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon-32.png" sizes="32x32" type="image/png">
+<link rel="icon" href="favicon-16.png" sizes="16x16" type="image/png">
+<link rel="apple-touch-icon" href="apple-touch-icon-180.png">
+<link rel="manifest" href="site.webmanifest">
+<meta name="theme-color" content="#F2F0EB" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#101013" media="(prefers-color-scheme: dark)">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+<div class="shell">
+<!--
+  PAGE NOTES — this page and terms.html are the two legal pages.
+
+  A. NOT IN THE SIDEBAR, ON PURPOSE. The sidebar is the product journey and a
+     legal link there dilutes it. The footer is where a reader looks for this,
+     and the footer on all six pages carries both links.
+  B. THE SIDEBAR BLOCK STAYS ANYWAY. Guard 4a requires exactly one sidebar nav
+     block per page, byte-identical across pages, so the block below is a
+     verbatim copy of the one in index.html with ` aria-current="page"`
+     deleted. Neither legal page is a sidebar entry, so no entry is current.
+     Write no markup literal in this comment. Guard 4a reads the RAW page and
+     not the prose, so a tag spelled out here counts as a second block and
+     turns the guard red. That is measured, not feared: it happened once.
+  C. NO NUMBERS IN THE PROSE except the version stamp. Six parameterised guards
+     in DocsClaims_test.swift sweep every page under site/ and hold every number
+     to a real product constant. A number added for readability turns them red.
+-->
+<nav class="sidebar" aria-label="Site">
+  <a class="sidebar-mark" href="index.html">coffee-bar</a>
+  <ul>
+    <li><a href="index.html">Home</a></li>
+    <li><a href="install.html">Install</a></li>
+    <li><a href="docs.html">Docs</a></li>
+    <li><a href="changelog.html">Changelog</a></li>
+  </ul>
+  <p class="sidebar-version"><a href="changelog.html">v0.1.1</a></p>
+</nav>
+<div class="wrap">
+<!-- page content starts here -->
+
+<h1>Privacy</h1>
+
+<p>coffee-bar has no account, no sign-in, and no server. This page says what it
+reads on your Mac and what leaves it.</p>
+
+<h2 class="eyebrow">What it reads</h2>
+<p>It reads agent session metadata, delivered by hooks you install yourself over
+a local socket. It reads up to three local configuration files —
+~/.claude/settings.json, ~/.codex/hooks.json and ~/.cursor/hooks.json — to check
+your hooks are wired correctly. It reads nothing else.</p>
+
+<h2 class="eyebrow">What it never reads</h2>
+<p>It never reads the contents of your agent conversations. The fields that
+carry them are discarded where the event is decoded, before anything stores or
+displays it. A test in the suite fails if that ever changes.</p>
+
+<h2 class="eyebrow">What leaves your Mac</h2>
+<p>Nothing. There is no telemetry, no analytics, no crash reporting, and no
+update ping. The one socket coffee-bar opens is a unix domain socket, which
+lives in the filesystem and has no address, no port, and no route off this
+machine.</p>
+
+<h2 class="eyebrow">What may change, named in advance</h2>
+<p>A future release adds a check for updates. That check will be the first
+request coffee-bar makes that leaves your Mac. When it ships, this page will say
+what it sends before the release goes out. Any further outbound request will be
+opt-in, off by default, and named here first.</p>
+
+<h2 class="eyebrow">Downloading is a separate thing</h2>
+<p>Getting coffee-bar is a normal web request. GitHub serves the download and
+counts it, as it does for every file it hosts. That is GitHub's logging, under
+GitHub's privacy policy, and it happens before coffee-bar ever runs. The app
+itself sends nothing.</p>
+
+<p class="stamp">This page describes v0.1.1.</p>
+
+<footer>
+<p>Apache-2.0 · <a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a> · <a href="https://github.com/ArangoGutierrez/coffee-bar/issues/new">Report a bug</a><br>
+<a href="https://github.com/ArangoGutierrez/coffee-bar">Source on GitHub</a><br>
+Built by <a href="https://github.com/ArangoGutierrez">Carlos Eduardo Arango Gutierrez</a>.</p>
+<p class="tm">Apple, macOS and Apple silicon are trademarks of Apple Inc., registered in the U.S. and other countries. coffee-bar is not affiliated with, endorsed by, or sponsored by Apple Inc. or NVIDIA Corporation.</p>
+</footer>
+
+</div><!-- /.wrap -->
+</div><!-- /.shell -->
+</body>
+</html>
