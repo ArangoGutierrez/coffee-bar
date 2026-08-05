@@ -79,24 +79,41 @@ public enum BrandPalette {
             self.b = b
         }
 
+        /// Parses `#RRGGBB`, answering `nil` for anything else.
+        ///
+        /// Split out of `init(hex:)` so a test can observe a refusal WITHOUT a
+        /// subprocess. The exit-test form needs swift-testing from Swift 6.2,
+        /// and CI runs 6.1.2 — a guard that compiles only on the developer's
+        /// machine gates nothing.
+        ///
+        /// `UInt64(_:radix:)` rather than `Scanner.scanHexInt64`. The scanner
+        /// answers `true` after a PARTIAL scan, so it accepted "ABCXYZ" as
+        /// 0xABC and "12 345" as 0x12 — a wrong colour would have shipped
+        /// looking deliberate. `UInt64(_:radix:)` answers `nil` unless the
+        /// WHOLE string parses, but it ALSO accepts a leading sign, so
+        /// "+ABCDE" would parse as 0xABCDE. `allSatisfy(\.isHexDigit)` is what
+        /// refuses that.
+        static func parse(hex: String) -> RGB? {
+            let s = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
+            guard s.count == 6, s.allSatisfy(\.isHexDigit),
+                  let value = UInt64(s, radix: 16) else { return nil }
+            return RGB(r: Double((value & 0xFF0000) >> 16) / 255,
+                       g: Double((value & 0x00FF00) >> 8) / 255,
+                       b: Double(value & 0x0000FF) / 255)
+        }
+
         /// Accepts `#RRGGBB`. Traps on anything else: every call site in this
         /// module passes a literal from the brand doc, so a malformed string is
         /// a programming error, not a runtime condition to recover from.
         ///
-        /// `UInt64(_:radix:)` rather than `Scanner.scanHexInt64`. The scanner
-        /// answers `true` after a PARTIAL scan, so it accepted "ABCXYZ" as
-        /// 0xABC and "12 345" as 0x12 — the trap this comment promises never
-        /// fired, and a wrong colour would have shipped looking deliberate.
-        /// `UInt64(_:radix:)` answers `nil` unless the WHOLE string parses.
+        /// The parse itself lives in `parse(hex:)` so it stays observable
+        /// without killing a process; this initialiser only turns a refusal
+        /// into the trap those literal call sites want.
         public init(hex: String) {
-            let s = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
-            precondition(s.count == 6, "BrandPalette.RGB(hex:) needs #RRGGBB, got \(hex)")
-            guard let value = UInt64(s, radix: 16) else {
-                preconditionFailure("BrandPalette.RGB(hex:) could not parse \(hex)")
+            guard let parsed = RGB.parse(hex: hex) else {
+                preconditionFailure("BrandPalette.RGB(hex:) needs #RRGGBB, got \(hex)")
             }
-            self.r = Double((value & 0xFF0000) >> 16) / 255
-            self.g = Double((value & 0x00FF00) >> 8) / 255
-            self.b = Double(value & 0x0000FF) / 255
+            self = parsed
         }
 
         func blended(toward other: RGB, fraction f: Double) -> RGB {

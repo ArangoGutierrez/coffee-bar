@@ -158,20 +158,23 @@ func colorFallsBackToSystemOrangeForWarningOnly() {
     }
 }
 
-@Test("a hex string that is not six hex digits traps instead of parsing a prefix")
-func malformedHexTraps() async {
-    // `Scanner.scanHexInt64` answers `true` after a PARTIAL scan, so the
-    // earlier implementation accepted "ABCXYZ" as 0xABC and "12 345" as 0x12 —
-    // silently, while its own doc comment promised a trap. Every call site
-    // passes a brand-doc literal, so a wrong value here would ship as a
-    // plausible-looking colour that nobody measured.
-    await #expect(processExitsWith: .failure) {
-        _ = BrandPalette.RGB(hex: "ABCXYZ")
+@Test("a hex string that is not six hex digits is refused rather than part-parsed")
+func malformedHexIsRefused() {
+    // `Scanner.scanHexInt64` answered `true` after a PARTIAL scan, so an earlier
+    // implementation accepted "ABCXYZ" as 0xABC and "12 345" as 0x12 — silently,
+    // while its own doc comment promised a trap. Every call site passes a
+    // brand-doc literal, so a wrong value here would ship as a plausible-looking
+    // colour nobody measured.
+    //
+    // This reads the REFUSAL rather than the trap on purpose. The exit-test form
+    // it replaces needed swift-testing from Swift 6.2, and CI runs 6.1.2, where
+    // the whole target failed to compile — so the check ran only on the
+    // developer's machine and gated nothing.
+    for bad in ["ABCXYZ", "12 345", "0x1234", "+ABCDE", "12345", "1234567", ""] {
+        #expect(BrandPalette.RGB.parse(hex: bad) == nil, "\(bad) must be refused")
     }
-    await #expect(processExitsWith: .failure) {
-        _ = BrandPalette.RGB(hex: "12 345")
-    }
-    await #expect(processExitsWith: .failure) {
-        _ = BrandPalette.RGB(hex: "0x1234")
-    }
+
+    // The good path still works, with and without the leading '#'.
+    #expect(BrandPalette.RGB.parse(hex: "#A2571E") == BrandPalette.RGB(hex: "#A2571E"))
+    #expect(BrandPalette.RGB.parse(hex: "A2571E") == BrandPalette.RGB(hex: "#A2571E"))
 }
