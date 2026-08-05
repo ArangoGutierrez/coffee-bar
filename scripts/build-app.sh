@@ -184,6 +184,18 @@ for required in coffee-bar-idleTemplate coffee-bar-servingTemplate; do
 done
 echo "    ${glyph_count} glyph files copied"
 
+# --- licence -----------------------------------------------------------------
+#
+# Apache-2.0 section 4(a) requires giving every recipient of the Work a copy of
+# the Licence. The DMG is a distribution of the Work in Object form, so the
+# licence travels inside the bundle rather than only in the repository.
+#
+# `-s` and not `-f`: an empty file satisfies `-f` and complies with nothing.
+command cp -f "${REPO_ROOT}/LICENSE" "${CONTENTS}/Resources/LICENSE"
+[ -s "${CONTENTS}/Resources/LICENSE" ] \
+    || die "LICENSE did not land in the bundle"
+echo "    LICENSE copied ($(wc -c < "${CONTENTS}/Resources/LICENSE" | tr -d ' ') bytes)"
+
 # --- Info.plist --------------------------------------------------------------
 #
 # CFBundleVersion stays at 1: it is the build number, not the marketing version.
@@ -208,6 +220,8 @@ cat >"${CONTENTS}/Info.plist" <<PLIST
     <string>${VERSION}</string>
     <key>CFBundleVersion</key>
     <string>1</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright 2026 Carlos Eduardo Arango Gutierrez. Apache-2.0. A personal project, not an NVIDIA product.</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
