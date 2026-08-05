@@ -233,6 +233,80 @@ private func expectHookModeContract(_ run: ShimRun,
             sourceLocation: sourceLocation)
 }
 
+// MARK: - The harness must not leak what it opens
+
+/// Open descriptors of THIS process.
+///
+/// Listed from `/dev/fd` rather than by shelling out to `lsof`, which would
+/// spawn a process and open pipes of its own — perturbing the very number being
+/// measured. Same device, and the same reasoning, as
+/// `SleepDisabledController_test.swift`.
+private func openDescriptorCount() throws -> Int {
+    try FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count
+}
+
+/// The lowest of several samples taken a moment apart.
+///
+/// Tests run in parallel and each one holds descriptors while it works, so a
+/// single sample charges this measurement for whatever happened to be in flight
+/// at that instant. Those descriptors are TRANSIENT — they come and go. A leak
+/// does not. The minimum over a short window therefore tracks the steady state,
+/// which is the only thing this guard is about.
+private func settledDescriptorCount(samples: Int = 3) throws -> Int {
+    var lowest = Int.max
+    for index in 0..<samples {
+        lowest = min(lowest, try openDescriptorCount())
+        if index < samples - 1 { Thread.sleep(forTimeInterval: 0.05) }
+    }
+    return lowest
+}
+
+@Test func theShimHarnessClosesEveryDescriptorItOpens() throws {
+    // `runShim` gives every test in this file its child process, and it opens
+    // two `Pipe`s to do it. `Pipe` does NOT close its descriptors when it is
+    // deallocated, and `Process` takes ownership of only the two WRITE ends —
+    // it invalidates those during spawn. Nothing owns the read ends but this
+    // helper, so a helper that drops them strands two descriptors per call.
+    //
+    // That is the same defect `CommandRunner.swift:102-105` was fixed for, and
+    // it is not a private matter for this file. Descriptors are process-wide.
+    // `realRunnerDoesNotStrandPipeDescriptorsAcrossRepeatedCalls` samples the
+    // process total across 40 runs and allows 20 of headroom for tests running
+    // beside it; a leak here spends that headroom and turns a real guard on a
+    // real product bug into a coin toss. Measured on this branch before the
+    // fix: the full suite passed 8 of 10 runs, with deltas of 33 and 35 against
+    // a limit of 20.
+    //
+    // The threshold is generous against transient noise and tight against the
+    // defect: 20 calls strand 40 descriptors when the closes are gone, which is
+    // most of a factor of three above this limit.
+    let sandbox = ShimSocketSandbox()
+    defer { sandbox.remove() }
+    try sandbox.makeDirectory()
+    let payload = try fixture("stop.json")
+
+    // A warm-up outside the measurement, so lazily-created globals are already
+    // charged. Deliberately the same shape as the calls being measured.
+    _ = try runShim(["--socket=\(sandbox.path)"], stdin: payload)
+
+    let before = try settledDescriptorCount()
+    for _ in 0..<20 {
+        // No listener is bound at this path, so each run takes the silent
+        // not-running path and returns at once. The descriptors are opened
+        // either way — this guard is about the helper, not about delivery.
+        let run = try runShim(["--socket=\(sandbox.path)"], stdin: payload)
+        #expect(run.status == 0)
+    }
+    let after = try settledDescriptorCount()
+
+    #expect(after - before <= 15,
+            """
+            the harness stranded \(after - before) descriptors over 20 runs \
+            (\(before) -> \(after)). Every test in this file pays it, and so \
+            does every test in the suite that counts descriptors.
+            """)
+}
+
 // MARK: - Fixtures
 
 private var fixtureRoot: URL {
