@@ -133,12 +133,14 @@ Issue #14 added a SECOND journal type, for `ProcGovernor`:
 `~/Library/Application Support/coffee-bar/state/demotion-journal.json` with
 directory 0700 and file 0600.
 
-**The app does not create that file today.** `ProcGovernor` ships as a tested
-library and **no production code path calls it**, so nothing demotes a process
-and nothing writes the journal. Wiring the governor needs a trigger policy that
-issue #14 never specified, and it is a separate piece of work. The requirement
-below binds from the moment either journal is written by a shipped build, and it
-is recorded now because M5 must inherit it whichever lands first.
+**The app creates that file once it demotes something.**
+`Sources/CoffeeBarUI/ProcessGovernance.swift` is the production caller, reached
+from `ServingModel.refresh()`. It writes an entry only while all four trigger
+conditions hold — on battery, an agent working, a non-empty demotable set, and
+the "Quiet everything else" switch on — and the last two are opt-ins that
+default to empty and off. So the file appears for a user who has configured
+both, and never for anybody else. The requirement below binds from that moment,
+and M5 inherits it.
 
 It is a separate file for a security reason, not a tidiness one. Process demotion
 is unprivileged and same-uid, so its journal is written by the user's own app and

@@ -491,24 +491,53 @@ decision), never exit non-zero. A hook that hangs holds up the agent.
 
 ### 5.6 ProcGovernor
 
-**Built in issue #14, and NOT WIRED.** `Sources/CoffeeBarPower/ProcGovernor.swift` and the
+**Built and wired in issue #14.** `Sources/CoffeeBarPower/ProcGovernor.swift` and the
 three types around it. This section describes what exists; the sketch it replaces got the
 `setpriority` argument order wrong in three places.
 
-`ProcGovernor` ships as a tested library and **no production code path calls it**.
-`recover()` has no call site anywhere under `Sources/`, `demote(_:)` has one — in
-`CoffeeBarGovernorHarness`, a target with no `Package.swift` product entry that only this
-suite builds — and nothing reads `SettingsKey.demotableProcessNames`. So the app demotes no
-process and writes no demotion journal.
+**The composition root is `Sources/CoffeeBarUI/ProcessGovernance.swift`.**
+`ServingModel.refresh()` reconciles on every 30-second tick and on every hook event, and
+`Sources/CoffeeBarApp/main.swift` calls `restoreDemotedProcesses()` at launch and again on
+`NSApplication.willTerminateNotification`.
 
-**What is missing is not plumbing.** Issue #14 never specified the part that decides WHEN
-coffee-bar demotes anything. No source of the frontmost application exists anywhere in
-`Sources/`, and the tracked agent pids are on `AgentSession` but are not plumbed to a
-policy. Wiring is therefore a design task and is tracked as separate work; the trigger
-policy is the open question. Read every present-tense sentence below as a description of
-the library, not of the shipped app.
-`everyDocumentAboutTheGovernorSaysNothingCallsItYet` holds this paragraph against the
-source, and stops asking for it as soon as a production caller exists.
+**The trigger is an AND of four conditions**, settled by Carlos on 2026-08-05. coffee-bar
+demotes only while ALL of these hold, and restores when ANY of them stops:
+
+| # | Condition | Source |
+|---|---|---|
+| 1 | the machine is on battery | `PowerReading.source` |
+| 2 | at least one agent session is working | `AttentionList.working(from:)` |
+| 3 | the demotable set is non-empty | `SettingsKey.demotableProcessNames` |
+| 4 | the "Quiet everything else" switch is on | `SettingsKey.quietEverythingElse` |
+
+Conditions 3 and 4 are **two separate opt-ins**, and both default to off. §2.3 makes the
+set opt-in; the switch was added so a user who has named a process can stop the behaviour
+without emptying their list. The switch IS the profile — there is no `Aggressive` tier in
+this package and none is planned, per §2.2.
+
+**Enumeration is `NSWorkspace`, deliberately, and NOT `proc_listpids`.** The capability
+table in this document records that `proc_listpids` blocks sandboxing, which is a permanent
+constraint on the whole app bought for a feature that is off by default. It is not a
+capability question — `DemotionPolicy_test.swift` enumerates with `proc_listallpids` and it
+works unprivileged — it is a question of scope. The cost is stated plainly: **a headless
+process cannot be demoted by this build.** A compiler, a test runner or a container daemon
+appears in no `NSWorkspace` list. §2.3 warns that an app which silently demotes a compile
+job "will be uninstalled the same day", so that bound is a feature.
+
+**Matching is against the name the KERNEL reports** — `ProcSnapshot.name`, read through
+`proc_pidinfo` — and never a display name. `NSWorkspace` supplies pids only. The two
+differ: a user who writes "Visual Studio Code" is naming what `localizedName` answers,
+while the kernel calls that process "Code". The match is exact, so a display-name match
+would demote nothing and report nothing.
+
+**The tracked-agent deny rule is wired and carries no data yet.** `DemotionPolicy` is given
+`agentPIDs` at the composition root, and that set is empty in every shipped build:
+`HookEvent` has no pid field, so `SessionHub` builds every session with `pid: nil`. The
+rule bites the moment ingest learns a pid. The trigger's second condition is a COUNT of
+working sessions for exactly this reason — a condition that required a non-empty pid set
+would be false on every machine, for ever.
+`everyDocumentAboutTheGovernorSaysNothingCallsItYet` stopped requiring the unwired sentence
+here as soon as that production caller existed.
 
 `ProcGovernor` is the first thing in this repository that touches a pid it does not own.
 `DemotionProbe` moves `getpid()` and nothing else, which is what makes it safe under a

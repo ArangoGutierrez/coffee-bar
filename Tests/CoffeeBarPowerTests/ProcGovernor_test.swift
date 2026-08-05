@@ -826,7 +826,14 @@ private let targetsThatDoNotShipTheFeature = ["/CoffeeBarPower/", "/CoffeeBarGov
             // records.
             #expect(text.count > 1000,
                     "\(name) read back as \(text.count) bytes; this guard is scanning the wrong file")
-            #expect(text.contains(unwiredMarker),
+            // The boolean is HOISTED, and that is not a style choice.
+            // `#expect(text.contains(...))` expands `text` into the failure
+            // report, so a miss dumped the whole 130 KB handoff — 1012 log
+            // lines — and buried the message that says what to do. Expanding
+            // `carries` prints `false`, which carries no information and
+            // therefore leaves the message as the payload.
+            let carries = text.contains(unwiredMarker)
+            #expect(carries,
                     """
                     \(name) describes ProcGovernor but never says "\(unwiredMarker)", \
                     and no file outside \(targetsThatDoNotShipTheFeature) calls it. \

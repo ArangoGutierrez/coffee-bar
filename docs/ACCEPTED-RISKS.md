@@ -23,21 +23,30 @@ from "why the machine is not held right now".
 
 ## A crash would leave demoted processes demoted until the next start (issue #14)
 
-**Not live. Read this first.** `ProcGovernor` ships as a tested library and
-**no production code path calls it**. `recover()` has no call site anywhere under
-`Sources/`, and nothing reads the demotable set the user configures. The app demotes no
-process, writes no demotion journal and reads none back, so the exposure below is **not**
-something a user of this build is carrying today.
+**Live, and bounded by two opt-ins.** `Sources/CoffeeBarUI/ProcessGovernance.swift` is the
+production caller. `ServingModel.refresh()` reconciles on every 30-second tick, and
+`Sources/CoffeeBarApp/main.swift` calls `restoreDemotedProcesses()` at launch and again on
+`NSApplication.willTerminateNotification`.
 
-Wiring it is a separate piece of work and is not scheduled here. Issue #14 never specified
-the part that decides WHEN coffee-bar demotes anything, and no source of the frontmost
-application exists in this package yet. That trigger policy is a design question, not
-plumbing.
+**Nothing is demotable until the user names something.** coffee-bar demotes a process only
+while ALL FOUR of these hold: the machine is on battery, at least one agent session is
+working, the demotable set is non-empty, and the "Quiet everything else" switch is on. The
+set defaults to empty and the switch defaults to off, so a user who has changed neither
+carries none of the exposure below.
 
-This entry is recorded now because the design decision that creates the exposure — a
-journal rather than a supervisor — is already made and already built.
+**Applications only.** Enumeration is `NSWorkspace.shared.runningApplications`, not
+`proc_listpids`. A headless process — a compiler, a test runner, a container daemon —
+appears nowhere in that list and cannot be demoted by this build. That is a deliberate
+bound on the blast radius: an app that silently demoted a compile job would be uninstalled
+the same day.
 
-**Behaviour once it is wired.** `ProcGovernor` demotes processes coffee-bar does not own. A
+**The tracked-agent deny rule carries no data yet.** `DemotionPolicy` is given
+`agentPIDs`, and the set is empty in every shipped build, because no hook payload carries a
+pid and `SessionHub` constructs every session with `pid: nil`. A user who names an agent's
+own process in their demotable set is therefore not protected by that rule. The other eight
+rules still apply.
+
+**Behaviour.** `ProcGovernor` demotes processes coffee-bar does not own. A
 demotion applied to a foreign process is state on THAT process, so it outlives whatever
 applied it. If coffee-bar were `SIGKILL`ed, no cleanup of any kind would run, and every
 process it had demoted would stay demoted until coffee-bar next started and read its
@@ -60,10 +69,9 @@ victim, a real second process running the real governor, a real `SIGKILL`, `proc
 proving the victim is still demoted, then a later run clearing the bit.
 `Tests/CoffeeBarPowerTests/DemotionCrashPath_test.swift` records the underlying hazard.
 
-**Reopen when.** Anything in the shipped app calls `ProcGovernor` — at which point this
-stops being a recorded design consequence and becomes a live exposure — or coffee-bar
-demotes processes by default rather than by opt-in, or a user reports a process that stayed
-slow after a crash.
+**Reopen when.** coffee-bar demotes processes by default rather than by opt-in, or a user
+reports a process that stayed slow after a crash, or enumeration widens past
+`NSWorkspace` to reach headless processes.
 
 ## Staleness is measured on a wall clock (audit id20)
 
