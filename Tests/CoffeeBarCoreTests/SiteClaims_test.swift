@@ -662,3 +662,41 @@ private func newestReleaseSection(of text: String,
                 "the \(fact) row reads \"\(stated)\" in CHANGELOG.md and \"\(mirrored)\" on site/changelog.html")
     }
 }
+
+// MARK: - Guard 4c: the duplicated footer cannot drift
+
+/// The footer is byte-identical on every page.
+///
+/// Guard 4a makes this argument for the sidebar. The footer has the same shape
+/// and the same failure: no build step, no template, one copy per page edited by
+/// hand. It went unguarded until the terms and privacy pages took the count from
+/// four footers to six.
+///
+/// Unlike the sidebar, nothing is stripped before comparing. The footer carries
+/// no per-page attribute, so every byte must match.
+///
+/// **What this cannot do.** It proves the six footers agree. It does not prove
+/// they are right. Six identical footers all linking to a deleted page pass.
+@Test func everyPageCarriesTheSameFooter() throws {
+    let pages = discoveredSitePages()
+    #expect(pages.count >= 4,
+            "discovery found \(pages.count) page(s) under site/; comparing fewer than two footers proves nothing")
+
+    var footers: [(page: String, block: String)] = []
+    for page in pages {
+        let found = try matches("<footer[\\s\\S]*?</footer>", in: try surfaceText(page))
+        #expect(found.count == 1,
+                "\(page) has \(found.count) footer blocks; every page carries exactly one")
+        guard let block = found.first?[0] else { continue }
+        footers.append((page, block))
+    }
+
+    #expect(footers.count == pages.count,
+            "read a footer from \(footers.count) of \(pages.count) pages; a page with no footer is a page this guard skipped")
+
+    guard let reference = footers.first else { return }
+    for entry in footers.dropFirst() {
+        #expect(entry.block == reference.block,
+                "the footer on \(entry.page) differs from the one on \(reference.page). First difference, \(reference.page) then \(entry.page), \(firstDifference(reference.block, entry.block))")
+    }
+}
