@@ -42,6 +42,20 @@ public enum SettingsKey {
     /// prefix or a substring. This list decides what MAY be demoted, so a loose
     /// match widens the blast radius rather than narrowing it.
     public static let demotableProcessNames = "demotableProcessNames"
+
+    /// Whether the user asked coffee-bar to put the demotable set into darwin
+    /// background state while an agent works (issue #14).
+    ///
+    /// Absent by default, and the default is `false`. This is the SECOND opt-in
+    /// and both are required: `demotableProcessNames` says WHICH processes may
+    /// be touched, and this says whether to touch any of them. Handoff §2.3
+    /// makes the set opt-in; Carlos added this switch on 2026-08-05 so a user who
+    /// has named a process can stop the behaviour without emptying their list.
+    ///
+    /// It is the whole profile. There is no `Aggressive` tier in this package
+    /// and none is planned — handoff §2.2 ships "Quiet everything else" as one
+    /// switch. `theQuietOthersKeyStringNeverChanges` holds the string itself.
+    public static let quietEverythingElse = "quietEverythingElse"
 }
 
 /// Where a user preference is kept.

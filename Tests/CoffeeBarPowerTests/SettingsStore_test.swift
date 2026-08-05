@@ -180,6 +180,53 @@ struct SettingsStoreTests {
         #expect(SettingsKey.demotableProcessNames != SettingsKey.batteryFloorPercent)
     }
 
+    // MARK: - The second opt-in (issue #14)
+
+    @Test func theQuietOthersKeyStringNeverChanges() {
+        // Held for the reason the other three keys are: a rename discards the
+        // switch of every user who turned it on, silently, and the next launch
+        // falls back to the default with nothing to report.
+        //
+        // Collision with all three existing keys is asserted here rather than in
+        // a separate check, because one key serving two settings is the exact
+        // failure `SettingsKey`'s doc comment describes — and this key holds a
+        // `Bool` where `demotableProcessNames` holds a list, so a collision
+        // would make BOTH reads answer `nil` and disable the feature in a way no
+        // error reports.
+        #expect(SettingsKey.quietEverythingElse == "quietEverythingElse")
+        #expect(SettingsKey.quietEverythingElse != SettingsKey.holdDisplayAwake)
+        #expect(SettingsKey.quietEverythingElse != SettingsKey.batteryFloorPercent)
+        #expect(SettingsKey.quietEverythingElse != SettingsKey.demotableProcessNames)
+    }
+
+    @Test func anUnsetQuietOthersSwitchIsOffAndNotOn() throws {
+        // The bug this catches is `UserDefaults.bool(forKey:)` reaching this
+        // setting, which answers `false` for a key nobody wrote — the same
+        // answer as a deliberate opt-out. That happens to be harmless for THIS
+        // key and is asserted anyway, because the direction is what matters: a
+        // read that ever resolved an absent key to `true` would demote processes
+        // for a user who never asked, which is the failure both opt-ins exist to
+        // prevent.
+        let suite = try throwawaySuite()
+        defer { suite.defaults.removePersistentDomain(forName: suite.name) }
+        let store = UserDefaultsSettingsStore(defaults: suite.defaults)
+
+        #expect(store.bool(forKey: SettingsKey.quietEverythingElse) == nil)
+    }
+
+    @Test func theQuietOthersSwitchSurvivesARestart() throws {
+        // A STORED FORMAT: written on one launch and read on the next. A second
+        // store over the same storage is what a restart looks like, and an
+        // in-memory-only setting would pass a same-store read-back.
+        let suite = try throwawaySuite()
+        defer { suite.defaults.removePersistentDomain(forName: suite.name) }
+        UserDefaultsSettingsStore(defaults: suite.defaults)
+            .setBool(true, forKey: SettingsKey.quietEverythingElse)
+
+        let nextLaunch = UserDefaultsSettingsStore(defaults: suite.defaults)
+        #expect(nextLaunch.bool(forKey: SettingsKey.quietEverythingElse) == true)
+    }
+
     @Test func anUnsetDemotableSetIsEmptyAndNotEverything() throws {
         // Handoff §2.3: "Default `demotable` to empty. Opt-in only." THE bug
         // this catches is an unset list read as "no restriction", which is how
