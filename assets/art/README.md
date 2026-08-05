@@ -33,16 +33,32 @@ Holding both accents out of body text in both appearances keeps this one rule
 instead of four exceptions. Ink **on** `action` is the safe inverse — 8.51
 (light) and 9.10 (dark) — so a filled button carries body text.
 
+In the **app**, `state` tints the selected segment of all three pickers —
+Serving, Display and Battery floor — because a selected segment is a held
+segment. The indicator beside the serving summary takes `state` while a hold is
+active and `rest` when it is released; its symbol also changes shape, filled to
+outline, so the state survives Differentiate Without Color. Those four controls
+are the only places the app asks this palette for a colour.
+
+Warnings pin no hex. They take SwiftUI's semantic `.orange`, so the system keeps
+control of how that colour adapts to the appearance and to Increase Contrast.
+That is the same pigment as `action`, but the app's `ColorRole` has no `action`
+case, so no caller can name the role. As caption text on a light backdrop
+`.orange` falls below 4.5:1; that gap is open as issue #30.
+
 The accent moved off `#76B900` on 2026-08-04. That green is NVIDIA's brand
 colour and this is a personal Apache-2.0 product, so it can read as corporate
 endorsement — and coffee is not green.
 
-> **The recolour is not finished.** `site/**` carries the new accents. The app
-> icon sources under `assets/art/appicon/**`, the web set under
-> `assets/art/web/**`, and the GitHub art under `assets/art/github/**` all still
-> carry `#76B900`. Re-cutting them, and rebuilding `AppIcon.icns`, is a tracked
-> follow-up and is out of scope for the site redesign (design §8). Until it
-> lands, the installed app icon stays green while the site is roast.
+> **The recolour landed on 2026-08-05.** Of the 62 rasters under
+> `assets/art/**`, `recut.sh` re-cuts 34 from the vector sources: the `default`
+> and `dark` appicon renders, the iconset, all of `web/` and both repo avatars.
+> `remap.py` recolours the 6 that have no vector source — the four wordmarks
+> and the two composite `github/` images — by rotating the retired hue and
+> keeping each pixel's saturation, value and alpha. Authoring real vector
+> sources for those six is still open. The other 22 rasters carry no accent at
+> all — the 15 menu-bar templates and the 7 greyscale `mono` appicon renders.
+> `census.py` opens every raster and fails if the retired accent returns.
 
 The menu-bar glyph has no colour at all — it is alpha only.
 
