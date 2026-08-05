@@ -852,16 +852,22 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // lines of tested code and ZERO production callers, and issue #13 exists
     // partly to complain that `LaunchDaemonInstaller` shipped the same way.
     //
-    // Same LIMIT as the checks above, stated rather than hidden: this proves
-    // the panel NAMES the binding, not that it draws a usable control. Design
-    // §5.4 rules out asserting on rendered AppKit text.
+    // LIMIT, stated rather than hidden: this proves the panel NAMES the
+    // binding, not that it draws a usable control. Design §5.4 rules out
+    // asserting on rendered AppKit text.
+    //
+    // COMMENT-STRIPPED, unlike the three panel tripwires above it. Those state
+    // that a mention in a comment satisfies them; this one refuses that,
+    // because commenting the control out is the likeliest way it disappears and
+    // the surrounding prose would keep naming it. A presence guard that a
+    // comment satisfies passes over the deletion it exists to catch.
     let files = try appLayerSources()
     #expect(files.count == expectedSourceCount,
             "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
 
     let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
                              "the app layer no longer compiles a PanelView.swift")
-    let source = try String(contentsOf: panel, encoding: .utf8)
+    let source = swiftCodeWithoutComments(try String(contentsOf: panel, encoding: .utf8))
 
     // The BINDING, not the property. `model.quietEverythingElse` would be
     // satisfied by a line that merely displays the value, and a switch the user
