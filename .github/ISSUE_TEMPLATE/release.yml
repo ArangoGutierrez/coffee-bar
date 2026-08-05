@@ -145,10 +145,27 @@ body:
               codesign -dvv /tmp/cbverify-X.Y.Z/CoffeeBar.app
               spctl --assess --type execute -vv /tmp/cbverify-X.Y.Z/CoffeeBar.app
               xcrun stapler validate /tmp/cbverify-X.Y.Z/CoffeeBar.app
+              cmp LICENSE /tmp/cbverify-X.Y.Z/CoffeeBar.app/Contents/Resources/LICENSE && echo "licence matches"
+              /usr/libexec/PlistBuddy -c "Print :NSHumanReadableCopyright" /tmp/cbverify-X.Y.Z/CoffeeBar.app/Contents/Info.plist
               hdiutil detach /tmp/cbverify-X.Y.Z
               ```
-              Expect the stamp `X.Y.Z`, `Developer ID Application`, `accepted`
-              and `source=Notarized Developer ID`.
+              Expect the stamp `X.Y.Z`, `Developer ID Application`, `accepted`,
+              `source=Notarized Developer ID`, then `licence matches` and the
+              copyright string.
+
+              WARNING. The two licence lines must stay ABOVE `hdiutil detach`.
+              They read a path inside the mountpoint, so after the detach they
+              fail on a path that no longer exists. A first draft of this step
+              sat below the detach and would have failed every time.
+
+              Apache-2.0 section 4(a) requires giving every recipient a copy of
+              the Licence, and the artifact that must carry it is the one that
+              ships, not the one in `build/`. Until v0.1.1 the DMG carried no
+              licence at all. `build-app.sh` now copies it and aborts if the copy
+              fails, but nothing checked the SHIPPED artifact, so the fix could
+              regress here unnoticed. `cmp` and not `test -f`: a truncated or
+              wrong-licence file passes an existence check and complies with
+              nothing.
         - [ ] Record the digest for the notes:
               ```
               shasum -a 256 build/dist/coffee-bar-X.Y.Z.dmg
