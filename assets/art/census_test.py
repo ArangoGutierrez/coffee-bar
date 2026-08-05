@@ -199,8 +199,22 @@ def test_a_missing_file_fails_even_though_every_opened_file_is_clean() -> None:
         f"expected the count failure alone, got: {proc.stderr!r}")
 
 
+# How many checks a correct collection finds. Counted in this file on
+# 2026-08-05: six `test_` functions.
+#
+# Collection is by NAME, so it cannot tell "no tests" from "all tests passed" —
+# delete every function and the loop below prints "0/0 passed" and exits 0, and
+# CI stays green over a guard that checks nothing. A FLOOR, not an equality, so
+# a check added later raises the count instead of failing.
+EXPECTED_TESTS = 6
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    if len(tests) < EXPECTED_TESTS:
+        print(f"FAIL collection: found {len(tests)} tests, expected at least "
+              f"{EXPECTED_TESTS}; a check was deleted or renamed out of collection")
+        return 1
     failed = 0
     for t in tests:
         try:

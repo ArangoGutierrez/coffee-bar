@@ -67,8 +67,15 @@ jobs:
   # macOS runners bill at 10x. This runs at 1x and in parallel with the Swift
   # build.
   #
-  # The job id stays `bench-test`: it is the check name a branch-protection rule
-  # would already name. Only the display name widens.
+  # THE CHECK NAME OF THIS JOB CHANGED. GitHub Actions names a check run after
+  # the job's `name:` when one is set, and falls back to the job id only when it
+  # is absent. This job HAS a `name:`, so its check went from "Policy bench unit
+  # tests" to "Policy bench and art guards" — keeping the `bench-test` id did not
+  # hold the name still.
+  #
+  # No configured gate breaks, but for a different reason: the required check is
+  # `build-test`, which carries no `name:` and so is named by its id. A rule that
+  # ever names THIS job must be renamed with it.
   bench-test:
     name: Policy bench and art guards
     runs-on: ubuntu-latest
@@ -119,8 +126,14 @@ jobs:
       # above. If `python3` on PATH is ever not the interpreter apt installed
       # into, this fails HERE naming the interpreter, instead of failing inside
       # census.py with an ImportError that reads like a broken guard.
+      #
+      # `PIL.Image`, never bare `PIL`. `PIL/__init__.py` defines `__version__`
+      # WITHOUT importing `Image`, so `import PIL` succeeds on a namespace
+      # package or a half-unpacked install — exactly the partial install this
+      # step exists to catch. All four scripts do `from PIL import Image`, so
+      # the probe has to reach the same depth they do.
       - name: Confirm Pillow is importable
-        run: python3 -c 'import sys, PIL; print(PIL.__version__, sys.executable)'
+        run: python3 -c 'import sys, PIL.Image; print(PIL.__version__, sys.executable)'
 
       # census.py globs `assets/art/**/*.png` RELATIVE to the working directory,
       # which is the repository root here. It asserts the file COUNT as well as

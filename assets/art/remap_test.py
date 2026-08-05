@@ -242,8 +242,24 @@ def test_colours_that_were_never_green_are_left_alone() -> None:
             "green was recoloured")
 
 
+# How many checks a correct collection finds. Counted in this file on
+# 2026-08-05: six `test_` functions.
+#
+# Collection is by NAME, so it cannot tell "no tests" from "all tests passed" —
+# delete every function and the loop below prints "0/0 passed" and exits 0, and
+# CI stays green over a guard that checks nothing. That matters more here than
+# in census_test.py: remap.py rewrites shipped art in place and cannot be re-run,
+# so these checks are the only thing standing between a bad ratio and the
+# repository. A FLOOR, not an equality, so a check added later raises the count.
+EXPECTED_TESTS = 6
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    if len(tests) < EXPECTED_TESTS:
+        print(f"FAIL collection: found {len(tests)} tests, expected at least "
+              f"{EXPECTED_TESTS}; a check was deleted or renamed out of collection")
+        return 1
     failed = 0
     for t in tests:
         try:
