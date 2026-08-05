@@ -57,10 +57,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>coffee-bar — your Mac sleeps while the agent waits on you</title>
-<meta name="description" content="A macOS menu-bar app that keeps your Mac awake exactly while a coding agent is working, and lets it sleep the moment the agent is waiting on you. Screen off, no root, no password.">
+<meta name="description" content="A macOS menu-bar app that keeps your Mac awake exactly while a coding agent is working, and lets it sleep the moment the agent is waiting on you. Screen off. The app needs no root, no password.">
 <link rel="canonical" href="https://arangogutierrez.github.io/coffee-bar/">
 <meta property="og:title" content="coffee-bar — your Mac sleeps while the agent waits on you">
-<meta property="og:description" content="A macOS menu-bar app that keeps your Mac awake exactly while a coding agent is working, and lets it sleep the moment the agent is waiting on you. Screen off, no root, no password.">
+<meta property="og:description" content="A macOS menu-bar app that keeps your Mac awake exactly while a coding agent is working, and lets it sleep the moment the agent is waiting on you. Screen off. The app needs no root, no password.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://arangogutierrez.github.io/coffee-bar/">
 <meta property="og:image" content="https://arangogutierrez.github.io/coffee-bar/social-preview-1280x640.png">
@@ -311,9 +311,10 @@ wallpaper and in either appearance.
 </ul>
 
 <div class="note">
-No root. No password prompt. No kernel flags. No App Store. No network egress —
-it listens on a unix socket in a directory only your account can read, and posts
-nothing anywhere.
+The app needs no root. No password prompt. No kernel flags. No App Store. No
+network egress — it listens on a unix socket in a directory only your account can
+read, and posts nothing anywhere. coffee-bar never elevates its own privilege: it
+holds one unprivileged assertion and has no route to becoming root.
 </div>
 
 <h2 class="eyebrow">Next</h2>

@@ -34,8 +34,8 @@ is even viable on current macOS.
 **DECIDED 2026-07-28 — v0.1 is M1 + M2 + M4.** M3 moves to v0.2.
 
 A user can `brew install` it, launch it, and have their Mac stay awake exactly while an
-agent is working — with the screen off — and see which sessions need attention. No
-password prompt, no root, no kernel flags, no App Store.
+agent is working — with the screen off — and see which sessions need attention.
+v0.1 needs no password prompt, no root, no kernel flags, and no App Store.
 
 Concretely:
 

@@ -402,3 +402,178 @@ private func matchedGroups(_ pattern: String, in text: String) throws -> [String
     #expect(security.contains("`JournalRecord.maxTTLSeconds`"),
             "SECURITY.md no longer names JournalRecord.maxTTLSeconds, so the TTL cap is unchecked")
 }
+
+// MARK: - Guard: a "no root" promise cannot outlive the root path
+
+/// Every page a reader is shown, discovered rather than listed.
+///
+/// Discovery for `site/`, because that is the directory that grew: `docs.html`
+/// was invisible to `DocsClaims_test.swift` for a week behind a four-element
+/// literal, and two planted defects survived it. A new page inherits this guard
+/// on the day it is added.
+private func publishedSitePages() -> [String] {
+    let dir = policyRoot().appending(path: "site")
+    let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+    return names.filter { $0.hasSuffix(".html") }.map { "site/\($0)" }.sorted()
+}
+
+/// The Markdown a reader is pointed at, which is a LIST and not a glob.
+///
+/// A glob over `docs/` would sweep in `docs/probe-results.md` and
+/// `docs/coffee-bar-HANDOFF.md`, which ask "…without root?" as a research
+/// QUESTION, and `docs/HANDOFF-M0.md`, which records a superseded scope. Holding
+/// a research log to a product-promise rule is red on a document doing its job —
+/// the same reason note 3 above keeps the handoff out of `policyDocuments`.
+/// `docs/superpowers/` is excluded for the same reason: it is a design archive.
+private let publishedMarkdown = ["README.md", "CHANGELOG.md", "SECURITY.md",
+                                 "docs/ROADMAP.md", "docs/QUICKSTART.md"]
+
+private var rootPromiseSurfaces: [String] { publishedSitePages() + publishedMarkdown }
+
+/// One surface reduced to the words a reader actually meets.
+///
+/// The `<meta>` descriptions are pulled out FIRST and kept, which is the whole
+/// reason this cannot reuse a plain tag-stripper: a description lives in a tag
+/// ATTRIBUTE, so stripping `<[^>]+>` deletes the claim along with the tag. That
+/// text is the link preview — for most readers it is the first and only claim
+/// they see — and it carried "no root" on both `description` and
+/// `og:description`.
+///
+/// Comments go next, and that ordering is the lesson from `2247ae4`: a guard
+/// that reads a maintainer note matches its own explanation and proves nothing.
+private func readerFacingProse(_ name: String) throws -> String {
+    var s = try policyDocument(name)
+    guard name.hasSuffix(".html") else {
+        s = s.replacingOccurrences(of: "```[\\s\\S]*?```", with: " ",
+                                   options: .regularExpression)
+        s = s.replacingOccurrences(of: "<!--[\\s\\S]*?-->", with: " ",
+                                   options: .regularExpression)
+        return s.replacingOccurrences(of: "`[^`]*`", with: " ",
+                                      options: .regularExpression)
+    }
+
+    let metaPattern = "<meta[^>]*(?:name|property)=\"(?:og:)?description\""
+                    + "[^>]*content=\"([^\"]*)\""
+    let previews = (try? matchedGroups(metaPattern, in: s)) ?? []
+
+    s = s.replacingOccurrences(of: "<!--[\\s\\S]*?-->", with: " ",
+                               options: .regularExpression)
+    s = s.replacingOccurrences(of: "<pre>[\\s\\S]*?</pre>", with: " ",
+                               options: .regularExpression)
+    s = s.replacingOccurrences(of: "<style>[\\s\\S]*?</style>", with: " ",
+                               options: .regularExpression)
+    s = s.replacingOccurrences(of: "<code>[^<]*</code>", with: " ",
+                               options: .regularExpression)
+    s = s.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+    return (previews + [s]).joined(separator: " ")
+}
+
+/// Prose cut into sentences, without cutting a version number in half.
+///
+/// A period only ends a sentence when whitespace follows it. `v0.1 needed no
+/// root at all` is ONE sentence; splitting on every period makes it `v0` and
+/// `1 needed no root at all`, and the second fragment has lost the very
+/// qualifier that makes the claim true. The scope is a sentence and not a
+/// character window on purpose: note 2 above records a 90-character window
+/// clearing an entirely affirmative claim by reaching backwards into an
+/// unrelated line.
+private func sentences(of prose: String) -> [String] {
+    let flat = prose.replacingOccurrences(of: "\\s+", with: " ",
+                                          options: .regularExpression)
+    let characters = Array(flat)
+    var found: [String] = []
+    var current = ""
+    for (index, character) in characters.enumerated() {
+        current.append(character)
+        guard character == "." || character == "!" || character == "?" else { continue }
+        let next = index + 1 < characters.count ? characters[index + 1] : " "
+        if next == " " {
+            found.append(current)
+            current = ""
+        }
+    }
+    if !current.trimmingCharacters(in: .whitespaces).isEmpty { found.append(current) }
+    return found
+}
+
+/// The words that scope a root promise to something that stays true.
+///
+/// Deliberately short, for the reason `negators` above is short. Each one names
+/// either the SUBJECT the promise is true of — the menu-bar app — or the VERSION
+/// it was true of. A generous list stops discriminating: "simple", "local" and
+/// "private" all sound reassuring beside "no root" and scope nothing.
+private let rootPromiseQualifiers = ["the app", "menu-bar app", "v0.1", "v0.2",
+                                     "opt-in", "never elevates",
+                                     "sudo coffee-bar-probe"]
+
+/// A sentence promising that root is not needed.
+private let rootPromisePattern = "\\b(?:no|without)\\s+root\\b"
+
+/// No published surface promises "no root" without saying who or what that is
+/// true of, while `coffee-bar-probe` ships a verb that needs uid 0.
+///
+/// **Named bug this catches.** M5 added `sudo coffee-bar-probe arm` and the panel
+/// began printing that command, while six sentences across the site and the docs
+/// kept their v0.1 phrasing: "No root. No password prompt." A reader met an
+/// unqualified promise on the home page and a `sudo` command in the app. The
+/// promise was not a lie — the app really does hold one unprivileged assertion —
+/// it was INCOMPLETE, and nothing in the suite could see the gap because no guard
+/// read a claim about privilege at all.
+///
+/// **Why the root fact is derived and not typed.** `ProbeVerb.requiresRoot` is
+/// the source of truth for which verbs need uid 0, and this check imports it.
+/// Writing `let probeNeedsRoot = true` here would restate the defect rather than
+/// detect it, and would keep asserting it after the root path was removed.
+///
+/// **What this CANNOT do.**
+///
+/// 1. It proves a qualifier sits in the sentence, never that the sentence is
+///    true. "The app needs no root" passes whether or not the app is honest.
+/// 2. It reads the surfaces that EXIST in this repository. The same claim in a
+///    release note, a README badge or a Homebrew tap description is invisible.
+/// 3. `rootPromiseQualifiers` is a judgement call. A drafter who writes "the
+///    app" into a sentence that is really about the daemon passes this guard.
+@Test func noPublishedSurfacePromisesNoRootWhileTheProbeShipsARootVerb() throws {
+    let rootVerbs = ProbeVerb.allCases.filter(\.requiresRoot).map(\.rawValue)
+
+    // Derived, and stated as an assertion rather than an `if`: were the root
+    // path removed, this guard would silently switch off and leave every
+    // qualification below unexplained. That change should be loud.
+    #expect(!rootVerbs.isEmpty, """
+        no ProbeVerb requires root any more, so the qualifications this guard \
+        enforces are stale. Revisit them and this check together.
+        """)
+
+    var promisesSeen = 0
+    for name in rootPromiseSurfaces {
+        let prose = try readerFacingProse(name)
+        for sentence in sentences(of: prose) {
+            guard sentence.range(of: rootPromisePattern,
+                                 options: [.regularExpression, .caseInsensitive]) != nil
+            else { continue }
+            promisesSeen += 1
+
+            let qualified = rootPromiseQualifiers.contains {
+                sentence.range(of: $0, options: .caseInsensitive) != nil
+            }
+            #expect(qualified, """
+                \(name) promises "no root" without a qualifier, but \
+                coffee-bar-probe ships \(rootVerbs.sorted()) behind uid 0. Say \
+                who the promise is true of — the app, or a version. Sentence: \
+                \(sentence.trimmingCharacters(in: .whitespaces))
+                """)
+        }
+    }
+
+    // Anti-vacuity, and a second job: the promise is TRUE of the app and worth
+    // keeping, so deleting it rather than qualifying it is also a failure here.
+    #expect(promisesSeen >= 4,
+            "found \(promisesSeen) root promise(s) across \(rootPromiseSurfaces.count) surfaces; this guard swept air")
+    let home = try readerFacingProse("site/index.html")
+    #expect(home.range(of: rootPromisePattern,
+                       options: [.regularExpression, .caseInsensitive]) != nil, """
+        site/index.html no longer promises "no root". The app really does need \
+        none, so the fix for an incomplete promise is to qualify it, never to \
+        drop it.
+        """)
+}
