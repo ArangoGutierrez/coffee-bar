@@ -900,6 +900,60 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     }
 }
 
+@Test func theCoreLayerReadsNoFilesAtAll() throws {
+    // Design §8, the layering rule issue #10c leaned on: `CoffeeBarCore` decides
+    // what a session MEANS and performs no I/O. Every parse takes `Data`, and
+    // the file read lives in the app layer behind `HookHealthReader`.
+    //
+    // Named bug this catches, and #10c made it live rather than theoretical:
+    // `HookHealth.settingsPath(for:)` now names where each tool keeps its hook
+    // file, and the obvious next step is to resolve that path against the home
+    // directory and open it RIGHT THERE. That single line would put a filesystem
+    // read in the layer both other layers depend on, make the pure parse
+    // untestable without a real home directory, and give `HookHealthReader` a
+    // second reader to disagree with.
+    //
+    // `URL(fileURLWithPath:)` is deliberately ABSENT from the list.
+    // `SessionHub` builds a `URL` from a payload's `cwd` string, which is value
+    // construction and touches no disk; banning it would be red on correct code.
+    // Every name below either opens a file or resolves a real location on this
+    // machine.
+    //
+    // Comments are stripped for the reason the checks above strip them: this
+    // file's own doc comments must keep explaining what the layer may not do.
+    let files = try sources(ofTargets: coreLayerTargets)
+
+    // A scan that reached nothing satisfies every `contains` below. Anchor on
+    // the file the rule is now about.
+    #expect(files.contains { $0.lastPathComponent == "HookHealth.swift" }, """
+        the core scan never reached HookHealth.swift; it read \(files.count) \
+        files under \(packageRoot.path)
+        """)
+
+    let forbidden = [
+        "FileManager",
+        "Data(contentsOf",
+        "contentsOfFile",
+        "fileExists",
+        "homeDirectoryForCurrentUser",
+        "NSHomeDirectory",
+        "FileHandle",
+        "InputStream",
+    ]
+
+    for file in files {
+        let code = swiftCodeWithoutComments(try String(contentsOf: file, encoding: .utf8))
+        for name in forbidden {
+            #expect(!code.contains(name), """
+                \(file.lastPathComponent) names \(name) in CODE. CoffeeBarCore \
+                is the decision layer and reads no files: the parse takes Data, \
+                and the read lives in the app layer behind HookHealthReader \
+                (design §8).
+                """)
+        }
+    }
+}
+
 // MARK: - Network egress
 
 @Test func noLinkedTargetCanReachTheNetworkByAddress() throws {

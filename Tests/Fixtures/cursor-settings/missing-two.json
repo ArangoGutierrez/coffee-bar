@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [{"command": "~/.cursor/hooks/inject-context.sh", "timeout": 10}],
+    "beforeShellExecution": [{"command": "/usr/local/bin/coffeebar-hook --tool=cursor"}],
+    "afterShellExecution": [{"command": "/usr/local/bin/coffeebar-hook --tool=cursor"}],
+    "afterFileEdit": [{"command": "/usr/local/bin/coffeebar-hook --tool=cursor", "timeout": 5}]
+  }
+}
