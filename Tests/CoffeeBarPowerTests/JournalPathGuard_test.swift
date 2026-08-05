@@ -345,3 +345,119 @@ private func mode(of url: URL) throws -> mode_t {
     #expect(shared.isEmpty == false,
             "the shared rule found nothing wrong with a 0777 directory")
 }
+
+// MARK: - The gap SECURITY.md:184-190 names, closed
+
+@Test func aJournalDirectoryLeftAt0755IsRefused() throws {
+    // The document contradicted itself and the code followed the weaker half.
+    //
+    //   SECURITY.md:165-167  "owned by root and is not group-writable or
+    //                         other-writable"        -> 0755 SATISFIES this
+    //   SECURITY.md:187-190  "a journal directory an earlier build left 0755
+    //                         keeps that mode, and the M5 helper must REFUSE
+    //                         it rather than assume the writer corrected it"
+    //
+    // Carlos settled it toward safety: the journal directory must be exactly
+    // 0700. Nothing `FileJournalStore` creates can fail that, because it
+    // creates 0700; only a directory an earlier build left behind can, which is
+    // precisely what item 1 was written for.
+    //
+    // Named bug this catches: a world-READABLE journal directory. The mode is
+    // not writable, so every writability check passes it, while the `armedBy`
+    // provenance inside is legible to every account on the machine.
+    let root = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let url = root.appending(path: "state/probe-journal.json")
+    let store = FileJournalStore(url: url)
+    try store.write(makeRecord())
+
+    let stateDir = url.deletingLastPathComponent()
+    try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                          ofItemAtPath: stateDir.path)
+
+    let reader = GuardedJournalReader(url: url, store: store,
+                                      requiredOwner: getuid())
+    #expect(throws: JournalRefusal.self) { _ = try reader.read() }
+}
+
+@Test func anAncestorAt0755IsStillAcceptedSoTheProductionPathWorks() throws {
+    // The other side of the decision above, and the guard against
+    // over-correcting it.
+    //
+    // The exact-0700 rule binds the journal's OWN directory only. It cannot
+    // bind every ancestor: measured on this machine, `/` , `/Library` and
+    // `/Library/Application Support` are all root-owned 0755, so an
+    // ancestor-wide 0700 rule would refuse every journal in production and the
+    // feature would never run at all.
+    //
+    // Ancestors keep the weaker rule — root-owned, not group- or
+    // other-writable — which 0755 satisfies.
+    //
+    // Named bug this catches: tightening the leaf rule by tightening
+    // `PathSecurity`, which is shared with the program-path check, where
+    // `/usr/bin` is 0755 too.
+    let root = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    // Stands in for `/Library/Application Support`: an ancestor at 0755.
+    let middle = root.appending(path: "Application Support")
+    try FileManager.default.createDirectory(
+        at: middle, withIntermediateDirectories: true,
+        attributes: [.posixPermissions: 0o755])
+
+    let url = middle.appending(path: "state/probe-journal.json")
+    let store = FileJournalStore(url: url)
+    let written = makeRecord(priorValue: true)
+    try store.write(written)
+
+    // The store's promise about the directory it creates. Without this the
+    // acceptance below could be passing for the wrong reason.
+    #expect(try mode(of: url.deletingLastPathComponent()) == 0o700)
+    #expect(try mode(of: middle) == 0o755)
+
+    let reader = GuardedJournalReader(url: url, store: store,
+                                      requiredOwner: getuid())
+    #expect(try reader.read() == written)
+}
+
+// MARK: - Reading for a human must not destroy what the daemon needs
+
+@Test func aReadThatDoesNotQuarantineLeavesTheJournalForTheWatchdog() throws {
+    // `report` reads the same journal the watchdog acts on, and quarantining is
+    // a WRITE. If `report` moved a refused journal aside, the daemon's next
+    // tick would read nothing, answer `.hold`, and leave `SleepDisabled` set
+    // with no record of why — the same open-ended hold as BLOCKER 1, reached by
+    // a user simply asking what was armed.
+    //
+    // So quarantine belongs to the party that also RESTORES the setting. The
+    // watchdog quarantines; `report` looks and leaves.
+    let root = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let url = root.appending(path: "state/probe-journal.json")
+    let store = FileJournalStore(url: url)
+    try store.write(makeRecord())
+
+    let stateDir = url.deletingLastPathComponent()
+    try FileManager.default.setAttributes([.posixPermissions: 0o777],
+                                          ofItemAtPath: stateDir.path)
+
+    let inspector = GuardedJournalReader(url: url, store: store,
+                                         requiredOwner: getuid(),
+                                         quarantineOnRefusal: false)
+
+    // It still REFUSES. Not quarantining is not the same as trusting it.
+    #expect(throws: JournalRefusal.self) { _ = try inspector.read() }
+
+    #expect(FileManager.default.fileExists(atPath: url.path), """
+        an inspecting read quarantined the journal. The watchdog's next tick \
+        now reads nothing and holds, so the setting is never restored.
+        """)
+
+    // And the watchdog, given the same journal, still does its job.
+    let quarantining = GuardedJournalReader(url: url, store: store,
+                                            requiredOwner: getuid())
+    #expect(throws: JournalRefusal.self) { _ = try quarantining.read() }
+    #expect(FileManager.default.fileExists(atPath: url.path) == false)
+}

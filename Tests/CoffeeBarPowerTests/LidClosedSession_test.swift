@@ -108,6 +108,46 @@ private struct RecordingSupervisor: WatchdogSupervising {
     }
 }
 
+/// A supervisor that models what `install()` ACTUALLY STARTS.
+///
+/// `RecordingSupervisor.install()` is inert, and that inertness hid a defect
+/// that made the whole feature undo itself: the plist carries
+/// `RunAtLoad = true` and `ProgramArguments = [program, "watchdog"]`, so
+/// `launchctl bootstrap` does not merely register a job — it RUNS one, there
+/// and then, against the journal `arm` has already written.
+///
+/// No test that stubs `install()` to a no-op can see that. This one runs
+/// whatever `runAtLoad` holds, which the composing test sets to the same entry
+/// point `main.swift`'s daemon calls.
+private final class LaunchdModel: WatchdogSupervising, @unchecked Sendable {
+    let log: CallLog
+    private let lock = NSLock()
+    private var loaded = false
+
+    init(log: CallLog) { self.log = log }
+
+    /// What launchd executes at load. Assigned after the watchdog exists,
+    /// because the job and its supervisor refer to each other.
+    var runAtLoad: (@Sendable () -> Void)?
+
+    var isLoaded: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return loaded
+    }
+
+    func install() throws {
+        log.record("watchdog.install")
+        lock.lock(); loaded = true; lock.unlock()
+        // `RunAtLoad`. The job starts as part of the bootstrap, not later.
+        runAtLoad?()
+    }
+
+    func uninstall() throws {
+        log.record("watchdog.uninstall")
+        lock.lock(); loaded = false; lock.unlock()
+    }
+}
+
 private struct RecordingDisplay: DisplaySleepForcing {
     let log: CallLog
     /// What `isDisplayAwake()` answers AFTER `forceSleep()`. `nil` models the
@@ -190,6 +230,12 @@ private func makeScratchRoot() throws -> URL {
 
 private let fixedNow = Date(timeIntervalSince1970: 1_800_000_000)
 
+/// The machine booted an hour before the arm, which is the ordinary case.
+///
+/// A journal written AFTER this is not evidence of an unclean exit, so it must
+/// not trigger §8.2(4)'s unconditional revert.
+private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
+
 // MARK: - §8.2(1) — the journal lands before the mutation
 
 @Test func armWritesAndSyncsTheJournalBeforeItTouchesTheSleepSetting() throws {
@@ -210,7 +256,8 @@ private let fixedNow = Date(timeIntervalSince1970: 1_800_000_000)
         power: RecordingPower(log: log, state: .init(false)),
         supervisor: RecordingSupervisor(log: log),
         display: RecordingDisplay(log: log, awakeAfterForcing: false),
-        clock: { fixedNow })
+        clock: { fixedNow },
+        displayVerifyDelay: 0)
 
     try service.arm(ttlSeconds: 3600)
 
@@ -241,7 +288,8 @@ private let fixedNow = Date(timeIntervalSince1970: 1_800_000_000)
         power: RecordingPower(log: log, state: .init(false)),
         supervisor: RecordingSupervisor(log: log),
         display: RecordingDisplay(log: log, awakeAfterForcing: false),
-        clock: { fixedNow })
+        clock: { fixedNow },
+        displayVerifyDelay: 0)
 
     try service.arm(ttlSeconds: 3600)
 
@@ -269,7 +317,8 @@ private let fixedNow = Date(timeIntervalSince1970: 1_800_000_000)
         power: RecordingPower(log: log, state: .init(true)),   // already set
         supervisor: RecordingSupervisor(log: log),
         display: RecordingDisplay(log: log, awakeAfterForcing: false),
-        clock: { fixedNow })
+        clock: { fixedNow },
+        displayVerifyDelay: 0)
 
     try service.arm(ttlSeconds: 3600)
 
@@ -293,7 +342,8 @@ private let fixedNow = Date(timeIntervalSince1970: 1_800_000_000)
         power: RecordingPower(log: log, state: .init(false)),
         supervisor: RecordingSupervisor(log: log),
         display: RecordingDisplay(log: log, awakeAfterForcing: false),
-        clock: { fixedNow })
+        clock: { fixedNow },
+        displayVerifyDelay: 0)
 
     try service.arm(ttlSeconds: 99_999_999)
 
@@ -331,7 +381,8 @@ private let fixedNow = Date(timeIntervalSince1970: 1_800_000_000)
         power: power,
         supervisor: RecordingSupervisor(log: log),
         display: RecordingDisplay(log: log, awakeAfterForcing: false, failOnForce: true),
-        clock: { fixedNow })
+        clock: { fixedNow },
+        displayVerifyDelay: 0)
 
     #expect(throws: (any Error).self) { try service.arm(ttlSeconds: 3600) }
 
@@ -365,7 +416,8 @@ private let fixedNow = Date(timeIntervalSince1970: 1_800_000_000)
         power: power,
         supervisor: RecordingSupervisor(log: log, failOnInstall: true),
         display: RecordingDisplay(log: log, awakeAfterForcing: false),
-        clock: { fixedNow })
+        clock: { fixedNow },
+        displayVerifyDelay: 0)
 
     #expect(throws: (any Error).self) { try service.arm(ttlSeconds: 3600) }
 
@@ -395,7 +447,8 @@ private let fixedNow = Date(timeIntervalSince1970: 1_800_000_000)
         power: RecordingPower(log: log, state: .init(false)),
         supervisor: RecordingSupervisor(log: log),
         display: RecordingDisplay(log: log, awakeAfterForcing: false),
-        clock: { fixedNow })
+        clock: { fixedNow },
+        displayVerifyDelay: 0)
 
     try service.arm(ttlSeconds: 3600)
 
@@ -461,11 +514,80 @@ private let fixedNow = Date(timeIntervalSince1970: 1_800_000_000)
     #expect(power.state.current == true)
 }
 
+// MARK: - arm and its own daemon, composed
+
+@Test func armSurvivesTheDaemonThatArmItselfInstalls() throws {
+    // The acceptance the whole milestone rests on, and the one no stubbed
+    // supervisor can express: `arm` must still be armed once the daemon it
+    // installs has had its first look.
+    //
+    // Named bug this catches, and it was LIVE and shipping: `install()` writes
+    // a plist with `RunAtLoad = true`, so `launchctl bootstrap` starts the
+    // `watchdog` job immediately, against the journal `arm` wrote moments
+    // earlier. That first tick ran with `isBootEvaluation = true` — because
+    // `main.swift` treated ITS OWN start as a boot — and §8.2(4) reverts a
+    // dirty journal at boot unconditionally, above the TTL check. So `arm`
+    // installed a daemon whose first act was to undo `arm`.
+    //
+    // The end state had no attacker in it: sleep held, journal deleted, daemon
+    // booted out, and `revert` answering "nothing was armed" because the
+    // journal it needed was already gone. That is §8.2's named failure,
+    // produced by the feature itself.
+    //
+    // Every double here is a model, not a stub. `LaunchdModel.install()` runs
+    // the job, the power setting is real state, and the journal is a real
+    // `FileJournalStore` doing a real write.
+    let root = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let log = CallLog()
+    let url = root.appending(path: "state/probe-journal.json")
+    let store = FileJournalStore(url: url)
+    let power = RecordingPower(log: log, state: .init(false))
+    let supervisor = LaunchdModel(log: log)
+
+    let watchdog = WatchdogService(
+        reader: GuardedJournalReader(url: url, store: store, requiredOwner: getuid()),
+        power: power,
+        supervisor: supervisor,
+        notifier: RecordingNotifier(),
+        bootTime: { fixedBoot })
+
+    // Exactly what launchd runs at load: the `watchdog` verb, one tick.
+    supervisor.runAtLoad = { _ = try? watchdog.evaluate(now: fixedNow) }
+
+    let service = ArmService(
+        journal: RecordingJournal(log: log, inner: store),
+        power: power,
+        supervisor: supervisor,
+        display: RecordingDisplay(log: log, awakeAfterForcing: false),
+        clock: { fixedNow },
+        displayVerifyDelay: 0)
+
+    try service.arm(ttlSeconds: 3600)
+
+    // All three, because any one alone is survivable and the three together
+    // are what "armed" means.
+    #expect(power.state.current == true, """
+        sleep is not held after a successful arm. order: \(log.calls)
+        """)
+    #expect(try store.load() != nil, """
+        the daemon arm installed deleted arm's own journal. Nothing can revert \
+        the setting now, which is exactly §8.2's named failure.
+        order: \(log.calls)
+        """)
+    #expect(supervisor.isLoaded, """
+        the daemon booted itself out during arm, so nothing supervises the \
+        setting that is still held. order: \(log.calls)
+        """)
+}
+
 // MARK: - §8.2(2,3) — the watchdog reverts
 
 /// Builds a watchdog over a scratch journal that already holds `record`.
 private func makeArmedWatchdog(root: URL, record: JournalRecord,
-                               initiallyEnabled: Bool = true)
+                               initiallyEnabled: Bool = true,
+                               bootTime: Date = fixedBoot)
     throws -> (service: WatchdogService, power: RecordingPower,
                store: FileJournalStore, log: CallLog, notifier: RecordingNotifier) {
     let log = CallLog()
@@ -479,7 +601,8 @@ private func makeArmedWatchdog(root: URL, record: JournalRecord,
         reader: GuardedJournalReader(url: url, store: store, requiredOwner: getuid()),
         power: power,
         supervisor: RecordingSupervisor(log: log),
-        notifier: notifier)
+        notifier: notifier,
+        bootTime: { bootTime })
     return (service, power, store, log, notifier)
 }
 
@@ -559,22 +682,57 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
     #expect(armed.power.state.current == false)
 }
 
-@Test func theWatchdogRevertsUnconditionallyOnABootWithADirtyJournal() throws {
-    // §8.2(4). A journal present at boot means the armer never got to clean up,
-    // so the machine is holding a setting nobody is supervising. The TTL is
-    // irrelevant here — this one reverts even with hours left.
+@Test func theWatchdogRevertsUnconditionallyWhenTheJournalPredatesTheLastBoot() throws {
+    // §8.2(4). A journal written BEFORE the machine last booted means the armer
+    // never got to clean up, so the machine came back holding a setting nobody
+    // is supervising. The TTL is irrelevant here — this reverts with hours
+    // left.
+    //
+    // The boot time is what makes the claim true. "A journal exists" alone
+    // proves nothing about an unclean exit.
     let root = try makeScratchRoot()
     defer { try? FileManager.default.removeItem(at: root) }
 
-    let armed = try makeArmedWatchdog(root: root, record: armedRecord(ttlSeconds: 28_800))
+    let armed = try makeArmedWatchdog(
+        root: root, record: armedRecord(ttlSeconds: 28_800),
+        // The machine booted AFTER the journal was written.
+        bootTime: fixedNow.addingTimeInterval(1))
 
     let decision = try armed.service.evaluate(
-        now: fixedNow.addingTimeInterval(5), isBootEvaluation: true,
-        lastHeartbeat: fixedNow)
+        now: fixedNow.addingTimeInterval(5), lastHeartbeat: fixedNow)
 
     #expect(decision == .revert(.dirtyJournalAtBoot))
     #expect(armed.power.state.current == false)
     #expect(try armed.store.load() == nil)
+}
+
+@Test func theWatchdogDoesNotTreatItsOwnStartAsAMachineBoot() throws {
+    // BLOCKER 1's root cause, isolated from the composition test.
+    //
+    // `isBootEvaluation` used to mean "this process just started", and the
+    // daemon starts every time `arm` installs it — so `arm` armed the machine
+    // and immediately reverted itself. It has to mean "the MACHINE booted since
+    // this journal was written", which is a question only the boot time can
+    // answer.
+    //
+    // Here the journal is written an hour after boot, with its TTL live. The
+    // correct answer is to hold.
+    let root = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let armed = try makeArmedWatchdog(root: root,
+                                      record: armedRecord(ttlSeconds: 3600),
+                                      bootTime: fixedBoot)
+
+    let decision = try armed.service.evaluate(
+        now: fixedNow.addingTimeInterval(1), lastHeartbeat: nil)
+
+    #expect(decision == .hold, """
+        a fresh journal was read as a dirty boot, so the daemon undoes every \
+        arm the moment launchd starts it.
+        """)
+    #expect(armed.power.state.current == true)
+    #expect(try armed.store.load() != nil)
 }
 
 @Test func theWatchdogRestoresAPriorValueOfTrueRatherThanForcingSleepOn() throws {

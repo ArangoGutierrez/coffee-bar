@@ -4,6 +4,7 @@
 import Testing
 import Foundation
 @testable import CoffeeBarPower
+@testable import CoffeeBarCore
 
 // The shipped `--help` defect, and the guard that stops it coming back.
 //
@@ -98,7 +99,7 @@ func advertisedVerbs(in usage: String) -> [String] {
             "two verbs share a summary line: \(summaries)")
 }
 
-@Test func theVerbsRequiringRootSaySoAndTheOthersDoNot() {
+@Test func theVerbsRequiringRootSaySoAndTheOthersDoNot() throws {
     // A user deciding whether to prefix `sudo` reads this and nothing else, so
     // the answer is per-verb rather than a blanket warning.
     //
@@ -115,13 +116,63 @@ func advertisedVerbs(in usage: String) -> [String] {
     #expect(ProbeVerb.run.requiresRoot == false)
 
     // The marker has to reach the text, or the flag is invisible to the user.
-    for verb in ProbeVerb.allCases where verb.requiresRoot {
-        let row = try? #require(ProbeVerb.usage
+    //
+    // The EXACT suffix, not `contains("root")`. That looser shape is the same
+    // defect mutation testing already found once in this file: it passes today
+    // only because no summary happens to contain the word "root", and a summary
+    // reading "restore the prior setting as root saw it" would satisfy it for a
+    // verb whose marker had been dropped.
+    for verb in ProbeVerb.allCases {
+        let row = try #require(ProbeVerb.usage
             .split(separator: "\n")
-            .first { $0.split(whereSeparator: \.isWhitespace).first.map(String.init) == verb.rawValue })
-        #expect(row?.contains("root") == true,
-                "the usage row for \(verb.rawValue) does not say it needs root")
+            .first { $0.split(whereSeparator: \.isWhitespace).first.map(String.init)
+                        == verb.rawValue },
+            "no usage row for \(verb.rawValue)")
+
+        if verb.requiresRoot {
+            #expect(row.hasSuffix(" (root)"), """
+                the usage row for \(verb.rawValue) does not end in " (root)", \
+                so the user is not told it needs privilege.
+                row: \(row)
+                """)
+        } else {
+            #expect(row.hasSuffix(" (root)") == false, """
+                the usage row for \(verb.rawValue) claims it needs root. It \
+                does not, and marking it so trains the user to run everything \
+                under sudo.
+                row: \(row)
+                """)
+        }
     }
+}
+
+@Test func theDefaultTTLIsMinutesRatherThanTheEightHourCap() throws {
+    // §8.2(5) makes 8 h a CAP, "hard-capped regardless of settings". It was
+    // also the DEFAULT, which is a different claim and a much worse one.
+    //
+    // Supervision on this path is TTL-only: there is no heartbeat writer, so
+    // nothing shortens a hold that is running long. The default TTL therefore
+    // IS the worst case — a user who runs `sudo coffee-bar-probe arm`, walks
+    // away and never returns kept the machine awake for the full default.
+    // Eight hours of that is an overnight battery.
+    #expect(ProbeVerb.defaultTTLSeconds < JournalRecord.maxTTLSeconds, """
+        the default TTL is the cap. A cap bounds the worst case a user asks \
+        for; a default is what they get for asking nothing.
+        """)
+    // Minutes, not hours. The bound is deliberately loose — this pins the
+    // ORDER OF MAGNITUDE, which is the property that was wrong, not one
+    // particular number somebody may tune later.
+    #expect(ProbeVerb.defaultTTLSeconds <= 60 * 60)
+    #expect(ProbeVerb.defaultTTLSeconds >= 5 * 60,
+            "a default this short makes the feature useless without --ttl")
+
+    // And it survives the clamp unchanged, so the default a user is told about
+    // is the default they get.
+    let record = JournalRecord(
+        intent: .sleepDisabled, priorValue: false, setAt: Date(),
+        ttlSeconds: ProbeVerb.defaultTTLSeconds,
+        armedBy: ArmProvenance(pid: 1, binaryPath: "/x", uid: 501))
+    #expect(record.ttlSeconds == ProbeVerb.defaultTTLSeconds)
 }
 
 @Test func theDefaultVerbIsTheUnprivilegedOne() {
