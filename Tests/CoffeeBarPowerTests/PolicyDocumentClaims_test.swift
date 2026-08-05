@@ -577,3 +577,115 @@ private let rootPromisePattern = "\\b(?:no|without)\\s+root\\b"
         drop it.
         """)
 }
+
+// MARK: - Guard: a duration in a policy document is a real product constant
+
+/// Every duration a policy document may state, each read from the symbol that
+/// defines it.
+///
+/// **Why this sweep lives here and not in `DocsClaims_test.swift`.** That file's
+/// `everyDurationStatedIsARealProductConstant` knows `StalePolicy` alone,
+/// because `CoffeeBarCoreTests` depends on `CoffeeBarCore` and
+/// `ProbeVerb.defaultTTLSeconds` lives in `CoffeeBarPower`. It cannot reach half
+/// the numbers `SECURITY.md` states. Writing 1800 there as a literal would break
+/// the single rule that guard exists to enforce — that a number in prose is a
+/// real constant rather than a second copy of one. `CoffeeBarPowerTests` reaches
+/// all four, so the sweep moves rather than the rule bending.
+///
+/// This was not a theory. `SECURITY.md` joined `markdownSurfaces` on main while
+/// this branch added the M5 TTLs to that document. Each side was green alone and
+/// the two together were red, with no textual conflict for git to report.
+private let policyDurationConstants: [String: Int] = [
+    "StalePolicy.standard.workingTimeout": Int(StalePolicy.standard.workingTimeout),
+    "StalePolicy.standard.blockedTimeout": Int(StalePolicy.standard.blockedTimeout),
+    "ProbeVerb.defaultTTLSeconds": ProbeVerb.defaultTTLSeconds,
+    "JournalRecord.maxTTLSeconds": JournalRecord.maxTTLSeconds,
+]
+
+/// Deliberately the same shape `DocsClaims_test.swift` uses, so the two sweeps
+/// read one document the same way.
+///
+/// `[\s-]*` is the load-bearing part and it crosses newlines. `SECURITY.md`
+/// wraps "gives 30\n  minutes" across a line break, and a line-oriented pattern
+/// reports that document as carrying no duration at all — which is exactly how
+/// a hand grep of this file came back empty while three real durations sat in
+/// it.
+private let policyDurationPattern = "(\\d[\\d,_]*)[\\s-]*(second|minute|hour)s?"
+
+private let policySecondsPerUnit = ["second": 1, "minute": 60, "hour": 3600]
+
+/// Both capture groups of every duration in `text`.
+private func durationsStated(in text: String) throws -> [(digits: String, unit: String)] {
+    guard let expression = try? NSRegularExpression(pattern: policyDurationPattern,
+                                                    options: [.caseInsensitive])
+    else { throw BadMechanismPattern(pattern: policyDurationPattern) }
+    let ns = text as NSString
+    return expression.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        .map { (ns.substring(with: $0.range(at: 1)), ns.substring(with: $0.range(at: 2))) }
+}
+
+/// Every duration a policy document states is a constant the product really
+/// holds.
+///
+/// **Named bug this catches.** `SECURITY.md` says the default TTL is 30 minutes
+/// and the cap is 8 hours. Change `ProbeVerb.defaultTTLSeconds` to 45 minutes
+/// and the document keeps promising 30 — a security policy describing a bound
+/// the code no longer enforces. `theDocumentedTTLBoundsAreTheShippedConstants`
+/// catches that only where the number sits on the SAME LINE as its backticked
+/// symbol, because its anchor is `[^\n]{0,60}?`. It therefore misses the third
+/// mention, "the 30-minute default is deliberately the worst case", which names
+/// no symbol at all. This guard reads the prose instead of the neighbourhood of
+/// a symbol, so it sees all three.
+///
+/// STRUCTURAL / EQUALITY, with a PRESENCE anti-vacuity half below.
+///
+/// **What this CANNOT do.** It proves a stated duration EQUALS some product
+/// constant. It cannot prove the document attached the right constant to the
+/// right sentence: swapping "30 minutes" and "8 hours" in one paragraph leaves
+/// both numbers real, and both wrong. `theDocumentedTTLBoundsAreTheShippedConstants`
+/// is what pairs a number with its symbol, so the two guards are complementary
+/// rather than redundant.
+@Test func everyDurationInAPolicyDocumentIsARealProductConstant() throws {
+    let known = Set(policyDurationConstants.values)
+    var seen: Set<Int> = []
+    var sweptInSecurity = 0
+
+    for name in policyDocuments {
+        let prose = try readerFacingProse(name)
+        for stated in try durationsStated(in: prose) {
+            let digits = stated.digits.replacingOccurrences(of: ",", with: "")
+                                      .replacingOccurrences(of: "_", with: "")
+            guard let value = Int(digits),
+                  let scale = policySecondsPerUnit[stated.unit.lowercased()] else { continue }
+            let seconds = value * scale
+            seen.insert(seconds)
+            if name == "SECURITY.md" { sweptInSecurity += 1 }
+
+            #expect(known.contains(seconds), """
+                \(name) states "\(stated.digits) \(stated.unit)" = \(seconds) s, \
+                which is no product constant. Known: \
+                \(policyDurationConstants.sorted { $0.value < $1.value }
+                    .map { "\($0.key)=\($0.value)" })
+                """)
+        }
+    }
+
+    // ANTI-VACUITY. A rotted pattern matches nothing and this guard would pass
+    // on a document full of wrong numbers — the defect
+    // `everyControlNamedExistsInTheProduct` shipped with, where a regex that
+    // produced zero phrases asserted nothing at all and stayed green.
+    #expect(sweptInSecurity >= 3, """
+        the duration sweep found \(sweptInSecurity) duration(s) in SECURITY.md \
+        and that document states at least three: the 30-minute default twice \
+        and the 8-hour cap once. The pattern has rotted, so this guard is \
+        reading nothing.
+        """)
+    #expect(seen.contains(ProbeVerb.defaultTTLSeconds), """
+        the sweep never saw ProbeVerb.defaultTTLSeconds stated in a policy \
+        document, so the default TTL is described nowhere a reader can find it
+        """)
+    #expect(seen.contains(JournalRecord.maxTTLSeconds), """
+        the sweep never saw JournalRecord.maxTTLSeconds stated in a policy \
+        document, so the TTL cap is described nowhere a reader can find it
+        """)
+}
