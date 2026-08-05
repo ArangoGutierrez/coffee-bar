@@ -168,6 +168,19 @@ private func runShim(_ arguments: [String], stdin: Data) throws -> ShimRun {
 
     let outPipe = Pipe()
     let errPipe = Pipe()
+    // `Pipe` does not close its descriptors when it is deallocated, and
+    // `Process` takes ownership of only the two WRITE ends — it invalidates
+    // those during spawn. Nothing owns the read ends but this helper, so
+    // without these closes it strands two descriptors per call. All four are
+    // closed, and each `try?`, exactly as `CommandRunner.swift` does it: an end
+    // `Process` already took throws here, and that is not an error.
+    defer {
+        try? outPipe.fileHandleForReading.close()
+        try? outPipe.fileHandleForWriting.close()
+        try? errPipe.fileHandleForReading.close()
+        try? errPipe.fileHandleForWriting.close()
+    }
+
     let process = Process()
     process.executableURL = URL(fileURLWithPath: binary)
     process.arguments = arguments
@@ -710,6 +723,15 @@ private final class PseudoTerminal {
 
     let outPipe = Pipe()
     let errPipe = Pipe()
+    // Same reasoning as `runShim`. This test spawns its own child rather than
+    // going through the helper, so it owns the same obligation.
+    defer {
+        try? outPipe.fileHandleForReading.close()
+        try? outPipe.fileHandleForWriting.close()
+        try? errPipe.fileHandleForReading.close()
+        try? errPipe.fileHandleForWriting.close()
+    }
+
     let process = Process()
     process.executableURL = URL(fileURLWithPath: binary)
     process.arguments = ["--tool=nonsense"]
