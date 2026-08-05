@@ -1081,7 +1081,22 @@ Design spec §10. Four defects, all verified.
 ```bash
 grep -rl "76B900" assets/art/
 ```
-Expected: exactly one line, `assets/art/README.md`.
+
+Expected: **five** files.
+
+`assets/art/README.md` is the only one that carries the retired accent as
+brand prose, and it is the one you rewrite. The other four name the hex because
+they are the tools that DETECT it, and they must keep it:
+
+| File | Why it names `#76B900` |
+|---|---|
+| `census.py` | `RETIRED` — the value it searches every raster for |
+| `census_test.py` | fixtures that must flip the detector |
+| `remap.py` | `RETIRED` — the source hue it maps away from |
+| `remap_test.py` | fixtures proving the round-trip |
+
+Removing the hex from any of those four would disarm the guard that keeps the
+accent from coming back. Change none of them.
 
 - [ ] **Step 2: Replace the unfinished-recolour note**
 
