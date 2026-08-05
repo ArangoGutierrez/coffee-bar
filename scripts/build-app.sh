@@ -114,7 +114,7 @@ VERSION="${VERSION:-0.0.0-dev}"
 if [ -n "${COFFEE_BAR_VERSION:-}" ]; then
     echo "==> version ${VERSION} (from COFFEE_BAR_VERSION)"
 elif [ -n "${VERSION_RAW}" ]; then
-    echo "==> version ${VERSION} (from git tag ${VERSION_RAW})"
+    echo "==> version ${VERSION} (from git describe ${VERSION_RAW})"
 else
     echo "==> version ${VERSION} (no git tag in this repo; untagged fallback)"
 fi
@@ -240,6 +240,19 @@ iconutil -c icns "${ICON_TMP}/AppIcon.iconset" -o "${CONTENTS}/Resources/AppIcon
 [ -s "${CONTENTS}/Resources/AppIcon.icns" ] \
     || die "AppIcon.icns is missing or empty in the bundle"
 echo "    app icon: $(wc -c <"${CONTENTS}/Resources/AppIcon.icns" | tr -d ' ') bytes"
+
+# `-s` proves only that bytes exist. An iconset missing its large sizes still
+# produces a VALID .icns, and the app then ships a blurry icon that nothing
+# catches. 1024 is the size Finder and the App Switcher actually reach for.
+#
+# `sips` exits 0 on a missing or corrupt file and prints nothing, so the empty
+# string — not a non-zero status — is what reaches the comparison below. That
+# is why this reads the VALUE back rather than gating on the exit code.
+icon_px="$(sips -g pixelWidth "${CONTENTS}/Resources/AppIcon.icns" 2>/dev/null \
+    | awk '/pixelWidth:/ {print $2}')"
+[ "${icon_px}" = "1024" ] \
+    || die "AppIcon.icns reports pixelWidth '${icon_px}', expected 1024"
+echo "    app icon: 1024x1024"
 
 # --- Info.plist --------------------------------------------------------------
 #

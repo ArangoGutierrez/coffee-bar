@@ -73,18 +73,32 @@ func iconBuildLeavesTheTrackedTreeAlone() throws {
     // equivalent but is not: the realistic form of this bug is
     // `for f in "${ICONSET_SRC}"/*-2x.png`, where the loop HEADER names the
     // tracked path and the `mv` sits on the next line. A deny-list misses it.
-    // Exactly two uses are legitimate — proving the iconset exists, and naming
-    // it as the SOURCE of the copy. Any third use is the bug.
-    let sourceUses = lines.filter { $0.contains("${ICONSET_SRC}") }
+    // Exactly three uses are legitimate — defining the path, proving the
+    // iconset exists, and naming it as the SOURCE of the copy. Any fourth use
+    // is the bug.
+    //
+    // All THREE spellings of the tracked path are matched. Filtering on the
+    // braced form alone let the bug back in by ADDING a line rather than
+    // changing one: `$ICONSET_SRC` is not a substring of `${ICONSET_SRC}`, and
+    // a re-derived `"${REPO_ROOT}/assets/art/appicon/AppIcon.iconset"` names
+    // the same directory without mentioning the variable at all. Either writes
+    // into the tracked tree while this guard stays green.
+    let trackedPath = ["${ICONSET_SRC}",
+                       "$ICONSET_SRC",
+                       "assets/art/appicon/AppIcon.iconset"]
+    let sourceUses = lines.filter { line in trackedPath.contains { line.contains($0) } }
 
     #expect(!sourceUses.isEmpty, "the script must reference the tracked iconset somewhere")
 
     for line in sourceUses {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
+        // The definition names the path but writes nothing through it, and it
+        // is the one line that must carry the literal form.
+        let isDefinition = trimmed.hasPrefix("ICONSET_SRC=")
         let isExistenceCheck = trimmed.hasPrefix("[ -d \"${ICONSET_SRC}\" ]")
         let isCopySource = trimmed.contains("cp -R \"${ICONSET_SRC}\"")
-        #expect(isExistenceCheck || isCopySource,
-                "only the existence check and the copy may name the tracked iconset: \(trimmed)")
+        #expect(isDefinition || isExistenceCheck || isCopySource,
+                "only the definition, the existence check and the copy may name the tracked iconset: \(trimmed)")
     }
 
     // The copy itself has to exist, or there is nothing for the rename to be
