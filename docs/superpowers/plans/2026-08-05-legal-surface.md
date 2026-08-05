@@ -37,6 +37,30 @@ Every task's requirements implicitly include this section.
 - **Numbers in site prose must be real product constants.** Six parameterised guards in `DocsClaims_test.swift` sweep every discovered page under `site/`. A number invented for readability turns the suite red.
 - **Swift 6.** `Package.swift` declares `swift-tools-version 6.0` and `.swiftLanguageMode(.v6)`. Minimum macOS is 14.0.
 - **Never weaken a guard to make a page pass.** If a new page fails `everyPageCarriesTheSameSidebar()`, the page is wrong.
+- **A filtered test run must print a NON-ZERO count, or it verified nothing.**
+
+  > `swift test --filter <X>` returns **rc=0** when it matches nothing, printing
+  > `Test run with 0 tests`. That is a vacuous pass and it reads as green. Always
+  > quote the printed count. Treat `0 tests` as a FAILED verification.
+  >
+  > Filter on test NAMES, with a regex for several, so that renaming a test file
+  > cannot silently empty a run.
+  >
+  > **A claim that was tested and found false, recorded so nobody re-adds it.**
+  > legal-t4 reported that filtering on a test FILE name matches only while
+  > SwiftPM recompiles, and returns 0 tests on a no-op build. That is NOT
+  > reproducible. Measured on 2026-08-05, twice each, second run a no-op:
+  >
+  > ```
+  > swift test --filter DocsClaims      -> 11 tests, both runs
+  > swift test --filter PanelLegalLine  ->  4 tests, both runs
+  > ```
+  >
+  > SwiftPM matches the source file name consistently. The count rule above
+  > stands on its own merits; the mechanism legal-t4 gave for it does not.
+  >
+  > Filter on test NAMES, with a regex when you need several. Always quote the
+  > printed count. Treat `0 tests` as a FAILED verification, never as a pass.
 - **Do not push.** Do not open a PR. Do not comment on an issue. Leave every commit local and report.
 - **Work only in** `.worktrees/legal-surface` on branch `docs/legal-surface`. Never commit from the root checkout or from another worktree.
 
@@ -132,7 +156,7 @@ private var packageRoot: URL {
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `swift test --filter BundleLicence`
+Run: `swift test --filter "theRepositoryShipsTheLicence|theBuildScriptCopiesTheLicence"`
 
 Expected: `theRepositoryShipsTheLicenceTheBundleCopyDependsOn` PASSES (the repo already has a good `LICENSE`). `theBuildScriptCopiesTheLicenceAndChecksItArrived` FAILS on all three expectations, because `build-app.sh` names `LICENSE` nowhere.
 
@@ -171,7 +195,7 @@ macOS reads this key for the standard About panel and for Finder's Get Info, so 
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
-Run: `swift test --filter BundleLicence`
+Run: `swift test --filter "theRepositoryShipsTheLicence|theBuildScriptCopiesTheLicence"`
 
 Expected: both tests PASS.
 
@@ -651,7 +675,7 @@ private var packageRoot: URL {
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `swift test --filter PanelLegalLine`
+Run: `swift test --filter "thePanelNames|thePanelSays|theLegalLink|theTermsPage"`
 
 Expected: FAIL to compile, with `type 'PanelView' has no member 'legalLine'`. A compile failure is a valid red for this step.
 
@@ -700,7 +724,7 @@ In the same file, between the `Text(PanelView.versionLine(from:...))` block and 
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
-Run: `swift test --filter PanelLegalLine`
+Run: `swift test --filter "thePanelNames|thePanelSays|theLegalLink|theTermsPage"`
 
 Expected: all four PASS.
 
@@ -712,7 +736,7 @@ A link test that cannot go red is theater. Point the URL at a page that does not
 cp Sources/CoffeeBarUI/PanelView.swift /tmp/PanelView.swift.bak
 perl -0pi -e 's{coffee-bar/terms\.html}{coffee-bar/legal.html}' Sources/CoffeeBarUI/PanelView.swift
 diff /tmp/PanelView.swift.bak Sources/CoffeeBarUI/PanelView.swift
-swift test --filter PanelLegalLine
+swift test --filter "thePanelNames|thePanelSays|theLegalLink|theTermsPage"
 ```
 
 `diff` must print exactly one changed line. Expected: `theLegalLinkPointsAtThePublishedTermsPage` and `theTermsPageTheLinkPromisesExistsInThisRepository` both FAIL.
@@ -722,7 +746,7 @@ Restore and confirm green:
 ```bash
 command cp -f /tmp/PanelView.swift.bak Sources/CoffeeBarUI/PanelView.swift
 diff /tmp/PanelView.swift.bak Sources/CoffeeBarUI/PanelView.swift && echo "restored clean"
-swift test --filter PanelLegalLine
+swift test --filter "thePanelNames|thePanelSays|theLegalLink|theTermsPage"
 ```
 
 - [ ] **Step 7: Build the app and look at the panel**
