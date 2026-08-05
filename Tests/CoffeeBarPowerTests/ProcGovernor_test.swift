@@ -24,11 +24,24 @@ import Darwin
 
 // MARK: - Seams
 
-/// An inspector over a fixed table, so recovery can be checked against a pid
+/// An inspector over two fixed tables, so recovery can be checked against a pid
 /// that has been REUSED — which no suite can create on demand.
+///
+/// Two tables and not one, mirroring the real inspector: the deny rules read a
+/// record every process answers, and the identity comes from a PRIVILEGED record
+/// the kernel refuses for another user's process. A stub that fused them could
+/// not express "visible but unidentifiable", which is a state the real machine
+/// produces for `pid` 1.
 private struct StubInspector: ProcessInspecting {
     let table: [pid_t: ProcSnapshot]
+    var identities: [pid_t: ProcIdentity] = [:]
     func snapshot(of pid: pid_t) -> ProcSnapshot? { table[pid] }
+    func identity(of pid: pid_t) -> ProcIdentity? { identities[pid] }
+}
+
+private func identity(_ pid: pid_t, startedAt: UInt64 = 1_785_911_481,
+                      microseconds: UInt64 = 335_072) -> ProcIdentity {
+    ProcIdentity(pid: pid, startedAtSeconds: startedAt, startedAtMicroseconds: microseconds)
 }
 
 /// Records every call, and reads the journal off DISK at the moment the call is
@@ -73,12 +86,8 @@ private struct FailingJournal: DemotionJournalStoring {
 }
 
 private func snapshot(pid: pid_t, name: String, flags: UInt32 = 0x1404010,
-                      startedAt: UInt64 = 1_785_911_481,
-                      microseconds: UInt64 = 335_072,
                       uid: uid_t? = nil, pgid: pid_t = 999_001) -> ProcSnapshot {
-    ProcSnapshot(pid: pid, uid: uid ?? getuid(), ppid: 1, pgid: pgid, name: name, flags: flags,
-                 identity: ProcIdentity(pid: pid, startedAtSeconds: startedAt,
-                                        startedAtMicroseconds: microseconds))
+    ProcSnapshot(pid: pid, uid: uid ?? getuid(), ppid: 1, pgid: pgid, name: name, flags: flags)
 }
 
 private func journalPath() -> URL {
@@ -92,6 +101,39 @@ private func journalPath() -> URL {
 private func openPolicy(_ names: Set<String>) -> DemotionPolicy {
     DemotionPolicy(demotableNames: names, selfPID: 1_000_001,
                    selfUID: getuid(), selfPGID: 1_000_002)
+}
+
+/// Swift source with `//` line comments and `/* … */` block comments removed.
+///
+/// A `//` inside a string literal is treated as a comment here. That is wrong in
+/// general and harmless for the one use below: a `setpriority(` inside a string
+/// literal is not a call, so losing it cannot hide a call site.
+private func codeWithoutComments(_ text: String) -> String {
+    enum State { case code, lineComment, blockComment }
+    var state = State.code
+    var out = ""
+    var index = text.startIndex
+
+    while index < text.endIndex {
+        let character = text[index]
+        let following = text.index(after: index)
+        let next: Character? = following < text.endIndex ? text[following] : nil
+        var skip = false
+
+        switch state {
+        case .code:
+            if character == "/", next == "/" { state = .lineComment; skip = true }
+            else if character == "/", next == "*" { state = .blockComment; skip = true }
+            else { out.append(character) }
+        case .lineComment:
+            if character == "\n" { state = .code; out.append(character) }
+        case .blockComment:
+            if character == "*", next == "/" { state = .code; skip = true }
+        }
+
+        index = skip ? text.index(after: following) : following
+    }
+    return out
 }
 
 @Suite struct ProcGovernorTests {
@@ -116,7 +158,7 @@ private func openPolicy(_ names: Set<String>) -> DemotionPolicy {
         let governor = ProcGovernor(
             policy: openPolicy(["cb-ordered"]),
             journal: FileDemotionJournalStore(url: url),
-            inspector: StubInspector(table: [5000: subject]),
+            inspector: StubInspector(table: [5000: subject], identities: [5000: identity(5000)]),
             setter: setter)
 
         try governor.demote(5000)
@@ -138,7 +180,7 @@ private func openPolicy(_ names: Set<String>) -> DemotionPolicy {
         let governor = ProcGovernor(
             policy: openPolicy(["cb-unwritable"]),
             journal: FailingJournal(),
-            inspector: StubInspector(table: [5000: subject]),
+            inspector: StubInspector(table: [5000: subject], identities: [5000: identity(5000)]),
             setter: setter)
 
         #expect(throws: DemotionJournalError.self) { try governor.demote(5000) }
@@ -159,7 +201,7 @@ private func openPolicy(_ names: Set<String>) -> DemotionPolicy {
         let governor = ProcGovernor(
             policy: openPolicy(["cb-measured"]),
             journal: FileDemotionJournalStore(url: url),
-            inspector: StubInspector(table: [5000: subject]),
+            inspector: StubInspector(table: [5000: subject], identities: [5000: identity(5000)]),
             setter: JournalWatchingSetter(journalURL: url))
 
         try governor.demote(5000)
@@ -210,6 +252,34 @@ private func openPolicy(_ names: Set<String>) -> DemotionPolicy {
         #expect(setter.calls.isEmpty)
     }
 
+    @Test func aProcessWhoseIdentityTheKernelWithholdsIsRefused() throws {
+        // Visible, but unidentifiable. The real machine produces this state: the
+        // privileged record `identity(of:)` reads is refused for another user's
+        // process, and it is also refused for a process that exits between the
+        // two reads.
+        //
+        // The bug: journalling the entry anyway, with only a pid to name it. A
+        // later run would then have no way to tell that pid from a reused one,
+        // and would clear a background bit on whatever holds it — which is
+        // precisely the promotion invariant 2 forbids. Refusing costs one
+        // demotion that did not happen.
+        let url = journalPath()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let setter = JournalWatchingSetter(journalURL: url)
+        let subject = snapshot(pid: 5000, name: "cb-anonymous")
+
+        let governor = ProcGovernor(
+            policy: openPolicy(["cb-anonymous"]),
+            journal: FileDemotionJournalStore(url: url),
+            inspector: StubInspector(table: [5000: subject]),   // no identity for it
+            setter: setter)
+
+        #expect(throws: ProcGovernorError.unidentifiable(5000)) { try governor.demote(5000) }
+        #expect(setter.calls.isEmpty)
+        #expect(try FileDemotionJournalStore(url: url).load() == nil,
+                "an entry a later run could not match reached the journal")
+    }
+
     // MARK: - Recovery
 
     @Test func recoveryRestoresALivePidTheJournalNames() throws {
@@ -217,13 +287,14 @@ private func openPolicy(_ names: Set<String>) -> DemotionPolicy {
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = FileDemotionJournalStore(url: url)
         let demoted = snapshot(pid: 5000, name: "cb-live", flags: 0x1014010)
-        try store.append(DemotionEntry(identity: demoted.identity, name: "cb-live",
+        try store.append(DemotionEntry(identity: identity(5000), name: "cb-live",
                                        priorFlags: 0x1404010, demotedAt: Date()))
         let setter = JournalWatchingSetter(journalURL: url)
 
         let governor = ProcGovernor(
             policy: openPolicy([]), journal: store,
-            inspector: StubInspector(table: [5000: demoted]), setter: setter)
+            inspector: StubInspector(table: [5000: demoted], identities: [5000: identity(5000)]),
+            setter: setter)
 
         let report = try governor.recover()
 
@@ -246,18 +317,17 @@ private func openPolicy(_ names: Set<String>) -> DemotionPolicy {
         let url = journalPath()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = FileDemotionJournalStore(url: url)
-        let journalled = ProcIdentity(pid: 5000, startedAtSeconds: 1_785_911_481,
-                                      startedAtMicroseconds: 335_072)
-        try store.append(DemotionEntry(identity: journalled, name: "cb-was-here",
+        try store.append(DemotionEntry(identity: identity(5000), name: "cb-was-here",
                                        priorFlags: 0x1404010, demotedAt: Date()))
         // Same pid, started later: the kernel handed 5000 out again.
-        let stranger = snapshot(pid: 5000, name: "someone-else", flags: 0x1014010,
-                                startedAt: 1_785_999_999)
+        let stranger = snapshot(pid: 5000, name: "someone-else", flags: 0x1014010)
         let setter = JournalWatchingSetter(journalURL: url)
 
         let governor = ProcGovernor(
             policy: openPolicy([]), journal: store,
-            inspector: StubInspector(table: [5000: stranger]), setter: setter)
+            inspector: StubInspector(table: [5000: stranger],
+                                     identities: [5000: identity(5000, startedAt: 1_785_999_999)]),
+            setter: setter)
 
         let report = try governor.recover()
 
@@ -275,14 +345,15 @@ private func openPolicy(_ names: Set<String>) -> DemotionPolicy {
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = FileDemotionJournalStore(url: url)
         let subject = snapshot(pid: 5000, name: "cb-borrowed", flags: 0x1014010)
-        try store.append(DemotionEntry(identity: subject.identity, name: "cb-borrowed",
+        try store.append(DemotionEntry(identity: identity(5000), name: "cb-borrowed",
                                        priorFlags: 0x1014010,   // already background
                                        demotedAt: Date()))
         let setter = JournalWatchingSetter(journalURL: url)
 
         let governor = ProcGovernor(
             policy: openPolicy([]), journal: store,
-            inspector: StubInspector(table: [5000: subject]), setter: setter)
+            inspector: StubInspector(table: [5000: subject], identities: [5000: identity(5000)]),
+            setter: setter)
 
         let report = try governor.recover()
 
@@ -299,7 +370,7 @@ private func openPolicy(_ names: Set<String>) -> DemotionPolicy {
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = FileDemotionJournalStore(url: url)
         try store.append(DemotionEntry(
-            identity: ProcIdentity(pid: 5000, startedAtSeconds: 1, startedAtMicroseconds: 2),
+            identity: identity(5000, startedAt: 1, microseconds: 2),
             name: "cb-departed", priorFlags: 0x1404010, demotedAt: Date()))
         let setter = JournalWatchingSetter(journalURL: url)
 
@@ -322,15 +393,17 @@ private func openPolicy(_ names: Set<String>) -> DemotionPolicy {
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = FileDemotionJournalStore(url: url)
         let named = snapshot(pid: 5000, name: "cb-named", flags: 0x1014010)
-        let bystander = snapshot(pid: 5001, name: "cb-named", flags: 0x1014010,
-                                 startedAt: 1_785_911_999)
-        try store.append(DemotionEntry(identity: named.identity, name: "cb-named",
+        let bystander = snapshot(pid: 5001, name: "cb-named", flags: 0x1014010)
+        try store.append(DemotionEntry(identity: identity(5000), name: "cb-named",
                                        priorFlags: 0x1404010, demotedAt: Date()))
         let setter = JournalWatchingSetter(journalURL: url)
 
         let governor = ProcGovernor(
             policy: openPolicy(["cb-named"]), journal: store,
-            inspector: StubInspector(table: [5000: named, 5001: bystander]), setter: setter)
+            inspector: StubInspector(table: [5000: named, 5001: bystander],
+                                     identities: [5000: identity(5000),
+                                                  5001: identity(5001, startedAt: 1_785_911_999)]),
+            setter: setter)
 
         _ = try governor.recover()
 
@@ -378,12 +451,23 @@ private func openPolicy(_ names: Set<String>) -> DemotionPolicy {
             .appendingPathComponent("Sources")
 
         var callers: Set<String> = []
+        var discussedInProse: Set<String> = []
         let walker = try #require(FileManager.default.enumerator(
             at: sources, includingPropertiesForKeys: nil))
         for case let file as URL in walker where file.pathExtension == "swift" {
             let text = try String(contentsOf: file, encoding: .utf8)
-            if text.contains("setpriority(") { callers.insert(file.lastPathComponent) }
+            if text.contains("setpriority(") { discussedInProse.insert(file.lastPathComponent) }
+            if codeWithoutComments(text).contains("setpriority(") {
+                callers.insert(file.lastPathComponent)
+            }
         }
+
+        // Pins that the comment stripping does something. Several files in this
+        // package DISCUSS the call in prose — the argument order is a trap worth
+        // documenting — and a scan that counted those would fire on every run.
+        // A guard that cries wolf gets deleted, and the guard is the point.
+        #expect(discussedInProse.count > callers.count,
+                "no file discusses setpriority in prose any more; the stripping below is untested")
 
         // Pins the premise. An empty scan — a moved directory, a changed
         // extension — would make the comparison below pass for the wrong reason.

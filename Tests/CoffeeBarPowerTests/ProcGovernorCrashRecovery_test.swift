@@ -35,10 +35,13 @@ import Darwin
 /// `DemotionCrashPath_test.swift` finds `coffee-bar-probe` the same way.
 private final class CrashRecoveryAnchor: NSObject {}
 
+/// The binary carries the TARGET's name, not a product's: `coffee-bar-probe` is
+/// renamed by its `.executable` product entry and this harness has none, on
+/// purpose.
 private func harnessPath() -> String {
     Bundle(for: CrashRecoveryAnchor.self).bundleURL
         .deletingLastPathComponent()
-        .appendingPathComponent("coffee-bar-governor-harness")
+        .appendingPathComponent("CoffeeBarGovernorHarness")
         .path
 }
 
