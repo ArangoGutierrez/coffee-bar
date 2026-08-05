@@ -220,3 +220,34 @@ import Foundation
     #expect(HookShim.connectTimeout < HookShim.totalTimeout,
             "the connect bound is not inside the total bound; the total does not bound the run")
 }
+
+// MARK: - The shim's product name and the health check's marker are one name
+
+@Test func theShimProductNameMatchesTheMarkerTheHealthCheckLooksFor() throws {
+    // Named bug this catches: somebody renames the `coffeebar-hook` product in
+    // Package.swift. Every documented command still names the old binary, the
+    // build still succeeds, the shim still posts — and `HookHealth` goes on
+    // matching a binary name that no longer exists, so a correctly wired Codex
+    // or Cursor user is reported as broken by a panel that cannot be argued
+    // with.
+    //
+    // The two literals live in different files with nothing tying them
+    // together: `HookHealth.shimCommandName` in CoffeeBarCore, and the
+    // `.executable` product in Package.swift. This is that tie.
+    let manifest = try String(
+        contentsOf: repoRoot().appending(path: "Package.swift"), encoding: .utf8)
+
+    // Match the product line rather than a bare occurrence of the name, so a
+    // mention in a comment cannot satisfy this guard.
+    let pattern = #"\.executable\(name:\s*"([^"]+)"\s*,\s*targets:\s*\["CoffeeBarShim"\]"#
+    let re = try NSRegularExpression(pattern: pattern)
+    let range = NSRange(manifest.startIndex..., in: manifest)
+    let match = re.firstMatch(in: manifest, range: range)
+
+    let declared = try #require(match.flatMap { Range($0.range(at: 1), in: manifest) }
+        .map { String(manifest[$0]) },
+        "Package.swift declares no .executable product for the CoffeeBarShim target")
+
+    #expect(declared == HookHealth.shimCommandName,
+            "Package.swift ships the shim as \"\(declared)\" but HookHealth looks for \"\(HookHealth.shimCommandName)\"")
+}

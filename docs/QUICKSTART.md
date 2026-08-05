@@ -165,9 +165,11 @@ Use that same command for every event you wire, changing only the event name it
 sits under.
 
 **Keep the `--socket` argument even though it names the default.** The health
-check recognises a hook as its own by finding `commandMarker` in the command you
-wired, and that marker is the socket path. Drop the argument and the shim still
-posts correctly, while the panel goes on reporting the hook as missing.
+check recognises a hook as its own by finding any of `HookHealth.commandMarkers`
+in the command you wired: the socket path, or the shim's own binary name. The
+command above carries both, so the panel still recognises it if you drop the
+argument. Keeping it costs nothing and leaves the command recognisable by either
+marker rather than by one.
 
 `--tool` takes `claude-code`, `codex` or `cursor`, and it decides which endpoint
 the payload goes to. That is the whole reason the shim exists: a payload cannot
@@ -192,9 +194,9 @@ it rather than trusting these.
 run end to end against a real ingest socket, each with its own recorded payload,
 and each arrived under its own origin. Only the Claude Code wiring on this page
 was exercised as an agent CONFIGURATION. Codex keeps its hooks in
-`~/.codex/config.toml`, which is TOML and not JSON at all, and Cursor keeps its
-own in `~/.cursor/hooks.json` under a different nesting. Neither has been wired
-and run here, so no recipe for either is printed.
+`~/.codex/hooks.json`, and Cursor keeps its own in `~/.cursor/hooks.json` under a
+flatter nesting. Neither has been wired and run here, so no recipe for either is
+printed.
 
 ## 3. Check it is listening
 
