@@ -53,13 +53,24 @@ hold. Three of its other claims do not.
    `site/appicon-web.svg` is the same geometry on the web tile `#F2F0EB`.
 4. **`web/` has a source after all.** The brand doc states the web rasters are
    cut from `site/appicon-web.svg`, and that file exists and carries `#A2571E`.
-   Only `github/` and `wordmark/` — 8 rasters — have no source.
-5. **The brand doc's unfinished-recolour note omits `wordmark/`.** Lines 40–45
+5. **Nine sets of rasters are byte-identical duplicates**, compared by SHA-256
+   of their RGBA bytes. `github/repo-avatar-1024.png` is the dark appicon render
+   at 1024. `github/repo-avatar-512.png`, `web/icon-512-dark.png` and the dark
+   appicon render at 512 are one image. The whole `AppIcon.iconset` duplicates
+   the light `png/default/` renders. So both GitHub avatars have a source, and
+   only **6** rasters do not: the two composite `github/` images and the four
+   `wordmark/` files.
+
+   A note on method: `ImageChops.difference(a, b).getbbox()` reports `None` for
+   two RGBA images that differ in RGB, because the difference alpha is zero
+   everywhere and Pillow treats fully transparent pixels as empty. That produced
+   a false "identical" reading. Compare content hashes, not `getbbox`.
+6. **The brand doc's unfinished-recolour note omits `wordmark/`.** Lines 40–45
    name `appicon/**`, `web/**` and `github/**`. The census shows `wordmark/`
    carries 4 green rasters.
-6. **The note calls the re-cut "a tracked follow-up", and no such issue exists.**
+7. **The note calls the re-cut "a tracked follow-up", and no such issue exists.**
    The full issue list holds nothing about art, icons, palette or recolour.
-7. **The note says "the installed app icon stays green".** There is no installed
+8. **The note says "the installed app icon stays green".** There is no installed
    app icon. Fact 1 contradicts this sentence.
 
 ## 3. The brand rule this design obeys
@@ -132,13 +143,19 @@ extension ServingModel {
 }
 
 enum BrandPalette {
+    struct RGB: Equatable { let r, g, b: Double; init(hex: String) }
+
+    // nil for .warning, which is SwiftUI's semantic .orange and has no fixed
+    // value. Pinning a hex there would stop it adapting.
     static func rgb(_ role: ColorRole,
                     scheme: ColorScheme,
-                    contrast: ColorSchemeContrast) -> (r: Double, g: Double, b: Double)
+                    contrast: ColorSchemeContrast) -> RGB?
 
     static func color(_ role: ColorRole,
                       scheme: ColorScheme,
                       contrast: ColorSchemeContrast) -> Color
+
+    static func contrastRatio(_ a: RGB, against b: RGB) -> Double
 }
 ```
 
@@ -211,7 +228,7 @@ renames there, and runs `iconutil` on the copy.
 
 ## 9. The art re-cut
 
-### 9.1 Track A — from source, 32 rasters
+### 9.1 Track A — from source, 34 rasters
 
 The recolour is a single hex substitution per file, already validated by the site
 redesign.
@@ -231,13 +248,14 @@ Each regenerated file is compared against its site twin where one exists. The
 flattened SVGs must differ from `site/appicon-{light,dark}.svg` by nothing at
 all once the substitution lands.
 
-### 9.2 Track B — hue remap, 8 rasters
+### 9.2 Track B — hue remap, 6 rasters
 
-`github/` and `wordmark/` have no vector source. A scripted per-pixel remap maps
-the green hue band onto `state` and preserves alpha, so anti-aliased edges do not
-fringe.
+Six files have no vector source: `github/readme-header-1600x400.png`,
+`github/social-preview-1280x640.png` and the four `wordmark/` rasters. A scripted
+per-pixel remap rotates the green hue onto `state` and preserves each pixel's
+saturation, value and alpha, so anti-aliased edges do not fringe.
 
-Both groups carry typography or composite layout that a remap can degrade. If a
+All six carry typography or composite layout that a remap can degrade. If a
 visual check fails, those files leave this project and become a separate art
 task. They do not ship degraded.
 
@@ -287,7 +305,7 @@ non-trivial before reading it.
 
 | Risk | Mitigation |
 |---|---|
-| A hue remap fringes the wordmark or the social preview. | §9.2. Those 8 files fall out to a separate task rather than ship degraded. |
+| A hue remap fringes the wordmark or the social preview. | §9.2. Those 6 files fall out to a separate task rather than ship degraded. |
 | `brew install librsvg` fails or is unwanted. | Headless Chrome is installed and was used for the site last session. |
 | Increased-contrast variants get chosen by eye. | §6.3 makes the threshold a measurement asserted by a test. |
 | The icon step breaks the Homebrew build. | The step uses `iconutil` only, which runs without Xcode. Verified. |
@@ -295,7 +313,8 @@ non-trivial before reading it.
 
 ## 13. Out of scope, worth an issue
 
-- `github/` and `wordmark/` have no vector source. The art arrives as an external
-  zip export. A follow-up should author real sources so the package rebuilds.
+- The two composite `github/` images and the four `wordmark/` rasters have no
+  vector source. The art arrives as an external zip export. A follow-up should
+  author real sources so the package rebuilds.
 - An `AccentColor` asset becomes cheap once M4 requires full Xcode on the release
   machine. Revisit D2 then.
