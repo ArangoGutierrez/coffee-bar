@@ -45,6 +45,10 @@ must re-run these and report any delta before writing copy.
 | Sidebar guard 4a | `everyPageCarriesTheSameSidebar()` | each page carries **exactly one** `<nav class="sidebar">`, byte-identical across pages |
 | Version guard 3 | `everyPageShowsTheNewestReleasedVersion()` | each page carries **exactly one** `<p class="sidebar-version">` naming the newest tag |
 | Footer guard | `SiteClaims_test.swift` | **none exists.** The footer is unguarded. |
+| DMG downloads | `gh api repos/ArangoGutierrez/coffee-bar/releases` | `coffee-bar-0.1.1.dmg`, `download_count` = **5** |
+| Tap formula url | tap `Formula/coffee-bar.rb` | GitHub's auto-generated tarball for `v0.1.1`, **not** a release asset |
+| Tap clones, 14 days | `gh api repos/ArangoGutierrez/homebrew-coffee-bar/traffic/clones` | 30 clones, **25 unique** |
+| Repo traffic, 14 days | `gh api repos/ArangoGutierrez/coffee-bar/traffic/views` | 38 views, 1 unique |
 
 **Warning.** Row 9 corrects an error made during brainstorming. The design lead
 stated the Apple and NVIDIA disclaimer was "missing everywhere". It is present
@@ -230,7 +234,20 @@ The page ends with a version stamp: **"This page describes v0.1.1."**
    updates (issue #29). That check is the first request that leaves the Mac.
    When it ships, this page names what it sends before the release goes out.
 
-5. **The version stamp:** "This page describes v0.1.1."
+5. **Downloading is a separate thing.** One short paragraph, because a reader
+   who is told "nothing leaves your Mac" may reasonably wonder about the
+   download itself:
+
+   > Getting coffee-bar is a normal web request. GitHub serves the download and
+   > counts it, as it does for every file it hosts. That is GitHub's logging,
+   > under GitHub's privacy policy, and it happens before coffee-bar runs. The
+   > app itself sends nothing.
+
+   This paragraph exists so the page is honest, not because the project is
+   liable for it. Do not turn it into a cookie or tracking notice: the site
+   sets no cookie, loads no font, and calls no CDN.
+
+6. **The version stamp:** "This page describes v0.1.1."
 
 Section 4 is the versioned wording the goal calls for. It states today's
 behaviour as today's behaviour, and it commits to naming a change before the
@@ -270,7 +287,63 @@ two drift.
 **This section grants no permission to add telemetry.** It records that the
 decision is open and states the process a future decision must follow.
 
-## 9. Guards
+## 9. Distribution counting
+
+The maintainer wants to know how many people take the app. This section records
+what already answers that, why it is not telemetry, and what the project
+deliberately does **not** build.
+
+### 9.1 It is not telemetry
+
+The counting happens on GitHub's servers, for requests a person makes to GitHub.
+The app sends nothing, opens no socket, and contains no counting code. The
+network promise in `SECURITY.md` is untouched, and no consent dialog is needed.
+
+A future reader must not mistake the privacy page for a ban on this. The privacy
+page describes what **the app** sends. It says nothing about what GitHub logs
+when somebody downloads a file, because the project does not control that and
+never did.
+
+### 9.2 The two counters that already exist
+
+| Question | Read it with | Limit |
+|---|---|---|
+| How many took the DMG? | `gh api repos/ArangoGutierrez/coffee-bar/releases --jq '.[].assets[] \| "\(.name) \(.download_count)"'` | counts requests, not people |
+| How many use Homebrew? | `gh api repos/ArangoGutierrez/homebrew-coffee-bar/traffic/clones` | counts `brew tap`, not `brew install` |
+
+The website Download button needs nothing. It links straight at the release
+asset, so a click is a download, and the asset counter already sees it. This
+also keeps the "no analytics, no CDN" comment at the top of every page true.
+
+### 9.3 What the numbers cannot tell you
+
+State these limits beside any figure quoted from them.
+
+1. `download_count` counts **requests**. Retries, bots and mirrors are included.
+   It is a floor, not a count of humans.
+2. The traffic API keeps **14 days**. History older than that is gone, and no
+   job snapshots it.
+3. The tap clone count measures `brew tap`, which includes CI and anyone who
+   cloned the tap for any reason. `brew install` is **invisible**, because the
+   formula points at GitHub's auto-generated tarball, and GitHub publishes no
+   counter for those.
+4. Both measure **acquisition, not use**. A person who downloads the app and
+   never opens it counts the same as a daily user.
+
+Limit 4 is the honest argument for shipping issue #29. An update check is the
+only mechanism on the roadmap that distinguishes an install from a user.
+
+### 9.4 Decisions taken
+
+- **Do not** upload a source tarball as a release asset to give Homebrew its own
+  counter. The precision does not yet justify a change to the release process.
+- **Do not** add a scheduled job to snapshot the traffic numbers.
+- **Do not** add analytics to the site.
+- Read the two counters by hand when the number is wanted.
+
+Revisit 9.4 only when a decision depends on the Homebrew figure.
+
+## 10. Guards
 
 | Guard | File | What it catches |
 |---|---|---|
@@ -286,16 +359,22 @@ pass.
 A builder must not weaken guard 4a to accommodate the new pages. If a new page
 fails 4a, the page is wrong, not the guard.
 
-## 10. Out of scope
+## 11. Out of scope
 
-- Telemetry of any kind. A separate design decides it, if it is ever decided.
+- Telemetry of any kind, meaning code in the app that sends anything. A separate
+  design decides it, if it is ever decided. Reading GitHub's download counters
+  is **not** telemetry, and section 9 covers it.
+- A source tarball as a release asset, and the formula change that would give
+  Homebrew its own install counter. Recorded in section 9.4.
+- A scheduled job that snapshots the traffic numbers before the 14-day window
+  drops them. Recorded in section 9.4.
 - A cookie banner. The site sets no cookie, loads no font, and calls no CDN.
 - A privacy policy written as a legal instrument. Apache-2.0 §7 and §8 carry
   the legal weight; these pages carry the plain-English explanation.
 - Any change to the Mac App Store position. It stays ruled out.
 - A first-run consent dialog.
 
-## 11. Acceptance
+## 12. Acceptance
 
 A builder reports this work done only with the output of each command pasted
 into the report.
@@ -307,3 +386,5 @@ into the report.
 5. `grep -c 'sidebar-version' site/terms.html site/privacy.html` prints `1` for each.
 6. `grep -in nvidia README.md` returns a match.
 7. Every "does not do" line in `terms.html` is traced to the source file that makes it true.
+8. Both counter commands in section 9.2 run and print a number. Paste the output. This proves the commands are correct before anyone relies on them.
+9. `grep -c 'analytics' site/terms.html site/privacy.html` shows the new pages add no tracking script.
