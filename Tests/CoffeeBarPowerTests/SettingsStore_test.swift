@@ -168,4 +168,72 @@ struct SettingsStoreTests {
         // keeps two keys apart; this proves the app asks it for two.
         #expect(SettingsKey.holdDisplayAwake != SettingsKey.batteryFloorPercent)
     }
+
+    // MARK: - The demotable set (issue #14)
+
+    @Test func theDemotableKeyStringNeverChangesAndCollidesWithNothing() {
+        // Held for the reason the other two keys are: a rename discards the
+        // demotable set of every user who chose one, silently, and the next
+        // launch demotes nothing with nothing to report.
+        #expect(SettingsKey.demotableProcessNames == "demotableProcessNames")
+        #expect(SettingsKey.demotableProcessNames != SettingsKey.holdDisplayAwake)
+        #expect(SettingsKey.demotableProcessNames != SettingsKey.batteryFloorPercent)
+    }
+
+    @Test func anUnsetDemotableSetIsEmptyAndNotEverything() throws {
+        // Handoff §2.3: "Default `demotable` to empty. Opt-in only." THE bug
+        // this catches is an unset list read as "no restriction", which is how
+        // an allow list becomes a deny list by accident — every same-uid process
+        // on the machine would become eligible for throttling, with no user
+        // having asked for any of it.
+        let suite = try throwawaySuite()
+        defer { suite.defaults.removePersistentDomain(forName: suite.name) }
+        let store = UserDefaultsSettingsStore(defaults: suite.defaults)
+
+        #expect(store.stringArray(forKey: SettingsKey.demotableProcessNames) == nil)
+        #expect(store.demotableProcessNames().isEmpty)
+    }
+
+    @Test func aDemotableSetSurvivesARestart() throws {
+        // The setting is a STORED FORMAT: written on one launch and read on the
+        // next. A second store over the same storage is what a restart looks
+        // like, and an in-memory-only setting would pass a same-store read-back.
+        let suite = try throwawaySuite()
+        defer { suite.defaults.removePersistentDomain(forName: suite.name) }
+        let store = UserDefaultsSettingsStore(defaults: suite.defaults)
+
+        store.setStringArray(["Xcode", "node"], forKey: SettingsKey.demotableProcessNames)
+
+        let nextLaunch = UserDefaultsSettingsStore(defaults: suite.defaults)
+        #expect(nextLaunch.demotableProcessNames() == ["Xcode", "node"])
+    }
+
+    @Test func aValueOfTheWrongTypeReadsAsEmptyRatherThanCrashing() throws {
+        // `UserDefaults` holds whatever anybody writes, and a plist a user or an
+        // older build edited by hand can carry a string where a list belongs.
+        // The bug this catches is a force-cast: the app would trap at launch on
+        // a preference file it does not control. Empty is the safe answer,
+        // because empty demotes nothing.
+        let suite = try throwawaySuite()
+        defer { suite.defaults.removePersistentDomain(forName: suite.name) }
+        suite.defaults.set("Xcode", forKey: SettingsKey.demotableProcessNames)
+        let store = UserDefaultsSettingsStore(defaults: suite.defaults)
+
+        #expect(store.stringArray(forKey: SettingsKey.demotableProcessNames) == nil)
+        #expect(store.demotableProcessNames().isEmpty)
+    }
+
+    @Test func aDuplicatedEntryIsOneMemberOfTheSet() throws {
+        // A list is what a user edits; a set is what the policy needs. The bug
+        // this catches is a policy fed an array, where a duplicate would make
+        // `contains` do the same work twice and, worse, would let the count of
+        // the demotable set disagree with the number of processes it names.
+        let suite = try throwawaySuite()
+        defer { suite.defaults.removePersistentDomain(forName: suite.name) }
+        let store = UserDefaultsSettingsStore(defaults: suite.defaults)
+
+        store.setStringArray(["node", "node", "Xcode"], forKey: SettingsKey.demotableProcessNames)
+
+        #expect(store.demotableProcessNames() == ["node", "Xcode"])
+    }
 }
