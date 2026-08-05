@@ -1299,21 +1299,27 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // package can watch the panel draw a line.
     //
     // LIMIT, stated rather than hidden: this proves the panel NAMES the
-    // property, not that it renders what it reads. A mention inside a comment
-    // would satisfy it. It is a tripwire against deleting the render, not proof
-    // the render is correct.
+    // property in CODE, not that it renders what it reads. It is a tripwire
+    // against deleting the render, not proof the render is correct.
     let files = try appLayerSources()
     #expect(files.count == expectedSourceCount,
             "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
 
     let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
                              "the app layer no longer compiles a PanelView.swift")
-    let source = try String(contentsOf: panel, encoding: .utf8)
 
-    #expect(source.contains("model.hookAdvisory"), """
-        PanelView.swift never reads model.hookAdvisory, so the hook health \
-        check reaches the user nowhere. Render it, or delete the property and \
-        the checks that assert its text.
+    // CODE, never the raw file, for the reason `2247ae4` records on the
+    // lid-closed check below. Proven here by the same mutation: replacing a
+    // render with a comment that NAMES the property left the raw-file version
+    // of this check green, so the tripwire could be walked past by anyone who
+    // documented what they deleted.
+    let code = swiftCodeWithoutComments(try String(contentsOf: panel, encoding: .utf8))
+
+    #expect(code.contains("model.hookAdvisory"), """
+        PanelView.swift never reads model.hookAdvisory in code, so the hook \
+        health check reaches the user nowhere. Render it, or delete the \
+        property and the checks that assert its text. A comment naming the \
+        property does not satisfy this.
         """)
 }
 
@@ -1369,21 +1375,26 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // a dead socket ships under a panel that looks healthy.
     //
     // Same LIMIT as above, stated rather than hidden: this proves the panel
-    // NAMES each property, not that it renders it correctly. A mention in a
-    // comment would satisfy it. It is a tripwire against deleting the render.
+    // NAMES each property in CODE, not that it renders it correctly. It is a
+    // tripwire against deleting the render.
     let files = try appLayerSources()
     #expect(files.count == expectedSourceCount,
             "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
 
     let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
                              "the app layer no longer compiles a PanelView.swift")
-    let source = try String(contentsOf: panel, encoding: .utf8)
+
+    // CODE, never the raw file. Same reason as the check above: these three
+    // properties are each named in the prose around their own render, so a raw
+    // read cannot tell a live render from a note about one.
+    let code = swiftCodeWithoutComments(try String(contentsOf: panel, encoding: .utf8))
 
     for property in ["model.attention", "model.workingSummary", "model.ingestAdvisory"] {
-        #expect(source.contains(property), """
-            PanelView.swift never reads \(property), so what the model computes \
-            for it reaches the user nowhere. Render it, or delete the property \
-            and the checks that assert its value.
+        #expect(code.contains(property), """
+            PanelView.swift never reads \(property) in code, so what the model \
+            computes for it reaches the user nowhere. Render it, or delete the \
+            property and the checks that assert its value. A comment naming the \
+            property does not satisfy this.
             """)
     }
 }
@@ -1448,31 +1459,41 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // check above this one exists because of it.
     //
     // Same LIMIT as the two checks above, stated rather than hidden: this
-    // proves the panel NAMES the binding, not that it draws a usable control.
-    // M1 design §5.4 forbids asserting on rendered AppKit text, so no check in
-    // this package can watch the picker appear. It is a tripwire against
-    // deleting the control, not proof the control is right.
+    // proves the panel NAMES the binding in CODE, not that it draws a usable
+    // control. M1 design §5.4 forbids asserting on rendered AppKit text, so no
+    // check in this package can watch the picker appear. It is a tripwire
+    // against deleting the control, not proof the control is right.
     let files = try appLayerSources()
     #expect(files.count == expectedSourceCount,
             "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
 
     let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
                              "the app layer no longer compiles a PanelView.swift")
-    let source = try String(contentsOf: panel, encoding: .utf8)
+
+    // CODE, never the raw file, and this check is the one that PROVED the need.
+    // Two mutations were run against the raw-file version: deleting the Display
+    // picker outright turned it red, but replacing that picker with a comment
+    // naming `$model.holdDisplayAwake` left it GREEN. Issue #12's acceptance —
+    // the user has to be able to FIND the setting — was therefore unproven
+    // against anyone who deleted the control and said so in a comment. The
+    // raw-file version was sound only by the accident that no comment in
+    // `PanelView.swift` happened to name the binding.
+    let code = swiftCodeWithoutComments(try String(contentsOf: panel, encoding: .utf8))
 
     // The BINDING, not the property. `model.holdDisplayAwake` would be
     // satisfied by a line that merely displays the value, and a setting the
     // user can read and not change is not a setting.
-    #expect(source.contains("$model.holdDisplayAwake"), """
-        PanelView.swift binds no control to model.holdDisplayAwake, so the \
-        display hold can be stored and honoured and the user can never turn it \
-        on. Issue #12 asks for a control they can see.
+    #expect(code.contains("$model.holdDisplayAwake"), """
+        PanelView.swift binds no control to model.holdDisplayAwake in code, so \
+        the display hold can be stored and honoured and the user can never turn \
+        it on. Issue #12 asks for a control they can see. A comment naming the \
+        binding does not satisfy this.
         """)
 
     // The labels come from the model, for the reason the Serving picker's do:
     // a second list of literals in this view can drift from the sentence
     // `servingSummary` writes, and design §5.4 rules out catching that.
-    #expect(source.contains("ServingModel.displayLabel"), """
+    #expect(code.contains("ServingModel.displayLabel"), """
         PanelView.swift names its own labels for the display control. They \
         belong on ServingModel beside the Serving labels, where a check can \
         read them.
@@ -1481,8 +1502,9 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // And the line that says what is actually held has to be the model's, not
     // a sentence composed here. It reads "the display may still sleep", which
     // is FALSE once the user opts in, and no check could see it in this file.
-    #expect(source.contains("model.servingSummary"), """
-        PanelView.swift never reads model.servingSummary, so the line telling \
-        the user what is held is composed in the view where no check reads it.
+    #expect(code.contains("model.servingSummary"), """
+        PanelView.swift never reads model.servingSummary in code, so the line \
+        telling the user what is held is composed in the view where no check \
+        reads it.
         """)
 }
