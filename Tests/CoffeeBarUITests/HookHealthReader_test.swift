@@ -143,6 +143,52 @@ private func scratchCopy(of fixture: String) throws -> URL {
             "the file that IS on disk was not read; this check would pass on nothing")
 }
 
+@Test func statusReadsThisReadersOwnFileAndNeverTheRealHomeOne() throws {
+    // Named bug this catches, and it was LATENT rather than theoretical:
+    // `status()` read `settingsURL`, which falls back to the design §6 default
+    // when this reader covers no Claude Code file. A reader built for Codex
+    // alone therefore opened the DEVELOPER'S REAL `~/.claude/settings.json` —
+    // the machine-dependent read that the `hookFiles` comment says this design
+    // exists to prevent. Probed on a machine with a wired home file, a
+    // Codex-only reader returned `.wired` while `statuses()` returned `[:]`.
+    //
+    // No production path called it, so nothing shipped wrong. It was a trap
+    // laid for the next caller, and closing it costs nothing.
+    //
+    // `.unreadable` is the honest answer: this reader has no Claude Code file,
+    // so it cannot confirm the entries are installed. That is what `.unreadable`
+    // means everywhere else in this type.
+    let root = packageRoot.appending(path: "Tests/Fixtures")
+    let codexOnly = HookHealthReader(
+        hookFiles: [.codex: root.appending(path: "codex-settings/wired.json")])
+
+    #expect(codexOnly.status() == .unreadable,
+            "status() reached a file this reader does not cover")
+
+    // The discriminating pair. A reader that DOES cover Claude Code still reads
+    // its own file, so the check above cannot pass by making `status()` inert.
+    let claudeCode = HookHealthReader(
+        settingsURL: root.appending(path: "claude-settings/wired.json"))
+    #expect(claudeCode.status() == .wired,
+            "status() stopped reading the file this reader was given")
+
+    // LIMIT, stated rather than hidden: the first expectation discriminates
+    // only where `~/.claude/settings.json` exists and is not itself
+    // `.unreadable`. On a machine with no such file the old fallback also
+    // returned `.unreadable`, so this would pass vacuously there. It is
+    // strongest exactly where the hazard is real, and the mutation record for
+    // this branch proves it red against the old fallback.
+    // `statuses()` was always right here — it reads the map and never the
+    // fallback — so it reports Codex and says nothing about Claude Code. That
+    // is the contrast that made the old `status()` behaviour visible as a bug
+    // rather than a choice: the two methods disagreed about which files this
+    // reader covers.
+    #expect(codexOnly.statuses() == [.codex: .wired],
+            "statuses() reported \(codexOnly.statuses())")
+    #expect(codexOnly.statuses()[.claudeCode] == nil,
+            "statuses() reached a Claude Code file this reader does not cover")
+}
+
 @Test func claudeCodeAloneIsExemptFromTheExistenceGate() throws {
     // Named bug this catches, and it shipped: the gate applied to Claude Code
     // as well, so a user who had never created `~/.claude/settings.json` got no

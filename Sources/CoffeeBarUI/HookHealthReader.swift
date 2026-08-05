@@ -4,6 +4,31 @@
 import Foundation
 import CoffeeBarCore
 
+/// What `ServingModel` needs from a hook-health source.
+///
+/// A protocol so a check can inject a source whose two reads DISAGREE, which is
+/// the only way to prove `ServingModel.hookHealth` is DERIVED from the
+/// collection rather than read a second time. A guard driven by real files
+/// cannot see that bug: both reads land microseconds apart against one
+/// unchanging file, so they agree even when the model is wrong.
+///
+/// It also puts this type beside the four `ServingModel` seams that were
+/// already protocols — the assertion holder, the power reader, the ingest
+/// listener and the settings store. `HookHealthReader` was the one concrete
+/// dependency left. None of the four is named in code or in prose here, because
+/// a boundary check in `AppLayerBoundary_test.swift` reserves the holder's type
+/// names to `ServingModel.swift` and reads this file RAW, comments included.
+/// That check is right to, so this comment works around it rather than the
+/// other way about.
+public protocol HookHealthProviding: Sendable {
+    /// Claude Code's verdict, or `.unreadable` when this source has no Claude
+    /// Code file. No existence gate: an absent file still reaches `.unreadable`,
+    /// because that user is the first-run user the advisory exists for.
+    func status() -> HookHealthStatus
+    /// Every tool this source has something to say about.
+    func statuses() -> [AgentTool: HookHealthStatus]
+}
+
 /// Reads each agent tool's hook file and reports whether our hooks are
 /// installed in it.
 ///
@@ -24,6 +49,13 @@ import CoffeeBarCore
 /// `readingTheStatusLeavesTheFileExactlyAsItWas` runs this type and compares
 /// the bytes on disk, and `noSourceFileThatKnowsTheSettingsPathCanWriteToIt`
 /// reads this source for any call that puts bytes on disk.
+/// `readingEveryToolsStatusLeavesEveryFileExactlyAsItWas` extends the first to
+/// all three files.
+///
+/// **It reads only the files it was GIVEN.** Every read goes through
+/// `hookFiles`, so a reader built for one tool cannot reach another tool's file
+/// or the machine's real home directory. That is what keeps a check driven by a
+/// fixture from quietly reading the developer's own configuration.
 ///
 /// **What it can and cannot see.** `.wired` means the entries are in the file.
 /// It does NOT mean an event has ever arrived: PE finding B2 measured a second
@@ -40,29 +72,6 @@ import CoffeeBarCore
 /// move is a file move and a module change with no behaviour in it. It is
 /// DEFERRED rather than done: it buys no correctness, and both directories are
 /// scanned by `AppLayerBoundary_test.swift` either way.
-/// What `ServingModel` needs from a hook-health source.
-///
-/// A protocol so a check can inject a source whose two reads DISAGREE, which is
-/// the only way to prove `ServingModel.hookHealth` is DERIVED from the
-/// collection rather than read a second time. A guard driven by real files
-/// cannot see that bug: both reads land microseconds apart against one
-/// unchanging file, so they agree even when the model is wrong.
-///
-/// It also puts this type beside the four `ServingModel` seams that were
-/// already protocols — the assertion holder, the power reader, the ingest
-/// listener and the settings store. `HookHealthReader` was the one concrete
-/// dependency left. None of the four is named in code or in prose here, because
-/// a boundary check in `AppLayerBoundary_test.swift` reserves the holder's type
-/// names to `ServingModel.swift` and reads this file RAW, comments included.
-/// That check is right to, so this comment works around it rather than the
-/// other way about.
-public protocol HookHealthProviding: Sendable {
-    /// Claude Code's verdict, with no existence gate.
-    func status() -> HookHealthStatus
-    /// Every tool this source has something to say about.
-    func statuses() -> [AgentTool: HookHealthStatus]
-}
-
 public struct HookHealthReader: HookHealthProviding {
     /// The hook file this reader inspects for each tool it covers.
     ///
@@ -105,27 +114,53 @@ public struct HookHealthReader: HookHealthProviding {
     /// Design §6 fixes the location.
     public static var defaultSettingsURL: URL { defaultURL(for: .claudeCode) }
 
-    /// Claude Code's settings file, or the design §6 default when this reader
-    /// does not cover Claude Code at all.
+    /// Where Claude Code's settings file lives for this reader, or the design §6
+    /// default when this reader does not cover Claude Code at all.
     ///
     /// Kept as a named property because `theDefaultSettingsURLIsTheUsersClaudeSettings`
     /// pins it, and because `noSourceFileThatKnowsTheSettingsPathCanWriteToIt`
-    /// finds this file through the name. Both initialisers above supply a Claude
-    /// Code entry, so the fallback is unreachable through this package's API.
+    /// finds this file through the name.
+    ///
+    /// **The fallback IS reachable, and no read goes through it.** An earlier
+    /// version of this comment claimed both initialisers always supply a Claude
+    /// Code entry, so the fallback could never fire. That was FALSE:
+    /// `init(hookFiles:)` is public and takes any map, and this branch's own
+    /// `aToolWithNoFileOnDiskGetsNoVerdictAtAll` builds a reader from `.codex`
+    /// and `.cursor` alone.
+    ///
+    /// It once mattered. `status()` read this property, so a reader covering no
+    /// Claude Code file opened the machine's REAL `~/.claude/settings.json` and
+    /// returned a verdict about a file nobody had asked it to read. `status()`
+    /// now reads `hookFiles` directly, so this property reports a LOCATION and
+    /// nothing opens a file through it.
     public var settingsURL: URL {
         hookFiles[.claudeCode] ?? HookHealthReader.defaultSettingsURL
     }
 
+    /// Claude Code's verdict, or `.unreadable` when this reader has no Claude
+    /// Code file.
+    ///
     /// Never throws. An absent file, a directory, a permission refusal and a
     /// half-saved file all reach the panel as `.unreadable`, because none of
-    /// them is evidence that the entries are gone.
+    /// them is evidence that the entries are gone. A reader that covers no
+    /// Claude Code file reaches the same verdict, for the same reason: it has
+    /// seen nothing that says the entries are gone.
     ///
-    /// Claude Code's verdict with NO existence gate, unlike `status(for:)`. The
-    /// difference is deliberate and `ServingModel` depends on it: this answers
-    /// "what does the file say", and the panel separately decides whether the
-    /// user runs the tool at all.
+    /// **It reads `hookFiles`, never `settingsURL`.** Going through that
+    /// property let a Codex-only reader fall back to the machine's real home
+    /// file, which is the machine-dependent read the `hookFiles` comment above
+    /// exists to prevent. No production path called it, so nothing shipped
+    /// wrong; it was a trap laid for the next caller.
+    /// `statusReadsThisReadersOwnFileAndNeverTheRealHomeOne` holds the line.
+    ///
+    /// Like `status(for: .claudeCode)`, this applies NO existence gate — an
+    /// absent Claude Code file still reaches `.unreadable` rather than nothing,
+    /// because that user is the first-run user the advisory exists for. The two
+    /// therefore agree about Claude Code, and an earlier version of this comment
+    /// wrongly drew a contrast between them that the fix round had removed.
     public func status() -> HookHealthStatus {
-        HookHealth.status(ofSettings: try? Data(contentsOf: settingsURL))
+        guard let url = hookFiles[.claudeCode] else { return .unreadable }
+        return HookHealth.status(ofSettings: try? Data(contentsOf: url))
     }
 
     /// What `tool`'s hook file says, or `nil` when there is nothing to say.
