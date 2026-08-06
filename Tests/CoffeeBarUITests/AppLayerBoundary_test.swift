@@ -904,17 +904,25 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     }
 }
 
-@Test func thePanelOffersTheQuietOthersControl() throws {
-    // PRESENCE, the same tripwire shape as `thePanelOffersTheDisplayHoldControl`
-    // and for the same reason: `ServingModel` can store the switch,
-    // `ProcessGovernance` can weigh it and `ProcGovernor` can act on it with
-    // every check green while the panel offers no way to turn it on.
+@Test func thePreferencesWindowOffersTheQuietOthersControl() throws {
+    // RETARGETED from `PanelView.swift` to `PreferencesView.swift` when the
+    // control moved into the Preferences window. The invariant did not change
+    // and is not about the panel: the user has to be able to FIND the switch.
+    // The surface that offers it did change, so this follows it rather than
+    // being deleted — a findability guard pointed at the wrong surface reports
+    // a control missing while it works, and one deleted reports nothing at all.
+    //
+    // PRESENCE, the same tripwire shape as
+    // `thePreferencesWindowOffersTheDisplayHoldControl` and for the same
+    // reason: `ServingModel` can store the switch, `ProcessGovernance` can
+    // weigh it and `ProcGovernor` can act on it with every check green while
+    // no surface offers a way to turn it on.
     //
     // That is not hypothetical on this branch. `ProcGovernor` landed with 2853
     // lines of tested code and ZERO production callers, and issue #13 exists
     // partly to complain that `LaunchDaemonInstaller` shipped the same way.
     //
-    // LIMIT, stated rather than hidden: this proves the panel NAMES the
+    // LIMIT, stated rather than hidden: this proves the window NAMES the
     // binding, not that it draws a usable control. Design §5.4 rules out
     // asserting on rendered AppKit text.
     //
@@ -922,30 +930,32 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // that a mention in a comment satisfies them; this one refuses that,
     // because commenting the control out is the likeliest way it disappears and
     // the surrounding prose would keep naming it. A presence guard that a
-    // comment satisfies passes over the deletion it exists to catch.
+    // comment satisfies passes over the deletion it exists to catch. That
+    // matters more since the move, not less: `PreferencesView.swift` explains
+    // this control in prose several lines long.
     let files = try appLayerSources()
     #expect(files.count == expectedSourceCount,
             "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
 
-    let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
-                             "the app layer no longer compiles a PanelView.swift")
-    let source = swiftCodeWithoutComments(try String(contentsOf: panel, encoding: .utf8))
+    let window = try #require(files.first { $0.lastPathComponent == "PreferencesView.swift" },
+                              "the app layer no longer compiles a PreferencesView.swift")
+    let source = swiftCodeWithoutComments(try String(contentsOf: window, encoding: .utf8))
 
     // The BINDING, not the property. `model.quietEverythingElse` would be
     // satisfied by a line that merely displays the value, and a switch the user
     // can read and not flip is not a switch.
     #expect(source.contains("$model.quietEverythingElse"), """
-        PanelView.swift binds no control to model.quietEverythingElse, so the \
-        governor can be wired, stored and honoured and the user can never turn \
-        it on.
+        PreferencesView.swift binds no control to model.quietEverythingElse, so \
+        the governor can be wired, stored and honoured and the user can never \
+        turn it on.
         """)
 
     // The label comes from the model, where a check can read it. The wording is
     // constrained — macOS cannot promote a process — so a literal composed in
     // this view is a claim nothing in this package could ever check.
     #expect(source.contains("ServingModel.quietOthersLabel"), """
-        PanelView.swift names its own label for the quiet-others control. It \
-        belongs on ServingModel beside the other control labels, where \
+        PreferencesView.swift names its own label for the quiet-others control. \
+        It belongs on ServingModel beside the other control labels, where \
         theQuietOthersLabelNamesWhatIsQuietedAndClaimsNoSpeedUp reads it.
         """)
 }
@@ -1950,12 +1960,17 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
         """)
 }
 
-@Test func thePanelOffersTheDisplayHoldControl() throws {
+@Test func thePreferencesWindowOffersTheDisplayHoldControlAndThePanelReportsItsResult() throws {
+    // TWO SURFACES, and that split is the point of the name. The control moved
+    // into the Preferences window; the line reporting what it achieved stayed
+    // in the panel. Both halves are findability, and they are now findable in
+    // different places, so a guard reading one file can no longer hold them.
+    //
     // Issue #12's acceptance, and the one thing no other check in this
     // repository can see: the user has to be able to FIND the setting.
     // `ServingModel` can store it, `PowerBroker` can weigh it and
-    // `AssertionHolder` can raise it with every check green while the panel
-    // offers no way to turn it on — which is a feature that does not exist.
+    // `AssertionHolder` can raise it with every check green while no surface
+    // offers a way to turn it on — which is a feature that does not exist.
     //
     // That is not hypothetical here. Commit 5116326 landed the hook health
     // check, the model published it, and `PanelView` read it nowhere; the
@@ -1972,6 +1987,8 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
 
     let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
                              "the app layer no longer compiles a PanelView.swift")
+    let window = try #require(files.first { $0.lastPathComponent == "PreferencesView.swift" },
+                              "the app layer no longer compiles a PreferencesView.swift")
 
     // CODE, never the raw file, and this check is the one that PROVED the need.
     // Two mutations were run against the raw-file version: deleting the Display
@@ -1980,26 +1997,31 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // the user has to be able to FIND the setting — was therefore unproven
     // against anyone who deleted the control and said so in a comment. The
     // raw-file version was sound only by the accident that no comment in
-    // `PanelView.swift` happened to name the binding.
+    // `PanelView.swift` happened to name the binding, and that accident is
+    // spent: the panel now explains in prose that this control moved.
     let code = swiftCodeWithoutComments(try String(contentsOf: panel, encoding: .utf8))
+    let windowCode = swiftCodeWithoutComments(try String(contentsOf: window, encoding: .utf8))
 
     // The BINDING, not the property. `model.holdDisplayAwake` would be
     // satisfied by a line that merely displays the value, and a setting the
     // user can read and not change is not a setting.
-    #expect(code.contains("$model.holdDisplayAwake"), """
-        PanelView.swift binds no control to model.holdDisplayAwake in code, so \
-        the display hold can be stored and honoured and the user can never turn \
-        it on. Issue #12 asks for a control they can see. A comment naming the \
-        binding does not satisfy this.
+    #expect(windowCode.contains("$model.holdDisplayAwake"), """
+        PreferencesView.swift binds no control to model.holdDisplayAwake in \
+        code, so the display hold can be stored and honoured and the user can \
+        never turn it on. Issue #12 asks for a control they can see. A comment \
+        naming the binding does not satisfy this.
         """)
 
     // The labels come from the model, for the reason the Serving picker's do:
-    // a second list of literals in this view can drift from the sentence
-    // `servingSummary` writes, and design §5.4 rules out catching that.
-    #expect(code.contains("ServingModel.displayLabel"), """
-        PanelView.swift names its own labels for the display control. They \
-        belong on ServingModel beside the Serving labels, where a check can \
-        read them.
+    // a second list of literals in the view can drift from the sentence
+    // `servingSummary` writes, and design §5.4 rules out catching that. The
+    // move made this sharper rather than looser — the labels stayed on
+    // `ServingModel` while the control crossed to another file, which is the
+    // whole benefit of their living there.
+    #expect(windowCode.contains("ServingModel.displayLabel"), """
+        PreferencesView.swift names its own labels for the display control. \
+        They belong on ServingModel beside the Serving labels, where a check \
+        can read them.
         """)
 
     // And the line that says what is actually held has to be the model's, not

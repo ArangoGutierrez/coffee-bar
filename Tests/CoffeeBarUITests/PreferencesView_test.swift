@@ -181,3 +181,45 @@ private let versionSurfaces = [(file: "PanelView.swift", type: "PanelView"),
             """)
     }
 }
+
+/// Where each moved control is allowed to be named, and where it is not.
+///
+/// Read through `surfaceCode(named:)`, so COMMENT-STRIPPED, and that is
+/// load-bearing rather than incidental — the same discriminator the version
+/// guard above rests on. `PanelView.swift` explains each of these controls in
+/// prose several lines long, and the deletion takes the control's comment with
+/// it only if whoever deletes it remembers to. Against raw file text the
+/// negative half would then be satisfied by the explanation of a control that
+/// is gone, or fail over one that is only discussed.
+@Test func eachMovedControlLivesInExactlyOneSurface() throws {
+    // Named bug this catches: a control left behind in the panel during the
+    // move, so the user has two of them and they disagree — or a refactor that
+    // silently moves one back.
+    let panel = try surfaceCode(named: "PanelView.swift")
+    let prefs = try surfaceCode(named: "PreferencesView.swift")
+
+    for control in ["holdDisplayAwake", "batteryFloorPercent", "quietEverythingElse"] {
+        #expect(prefs.contains(control), "Preferences lost \(control)")
+        #expect(!panel.contains(control), "\(control) is still in the panel")
+    }
+    // The Serving picker STAYS. This half is what makes the guard discriminate
+    // rather than just assert everything moved.
+    #expect(panel.contains("$model.intent"))
+    #expect(!prefs.contains("$model.intent"))
+}
+
+@Test func theFloorSliderIsBuiltOverThePolicyAndAddsNoSecondBoundingSite() throws {
+    // Named bug this catches: a UI that clamps. Bounding lives at PowerInputs.init
+    // and WatchdogDecision — a third site is a value corrected in two places with
+    // different rules.
+    //
+    // Comment-stripped, for the reason the guard above states, and here the
+    // negative half needs it most: the honest way to record this decision is a
+    // comment in `PreferencesView.swift` saying the view does NOT call
+    // `BatteryFloor.bounded`, and against raw text that sentence is what turns
+    // the guard red.
+    let prefs = try surfaceCode(named: "PreferencesView.swift")
+    #expect(prefs.contains("BatteryFloor.permitted"))
+    #expect(prefs.contains("BatteryFloor.step"))
+    #expect(!prefs.contains("BatteryFloor.bounded"))
+}

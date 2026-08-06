@@ -27,7 +27,17 @@ func tintIsConfinedToTheHeldSegments() throws {
     // A COUNT, not a presence check. One `.tint` on the enclosing VStack would
     // satisfy a `contains` assertion while painting the Quit button and every
     // focus ring roast — the exact regression this replaces.
-    #expect(pickers == 3, "expected 3 segmented pickers, found \(pickers)")
+    //
+    // ONE, down from three, and the number is not incidental. The Display and
+    // Battery floor pickers moved into the Preferences window, which draws no
+    // brand tint at all: `brand(_:)` is `PanelView`'s own, and the window is a
+    // system-styled form. Only the Serving picker still colours held segments,
+    // which is what assets/art/README.md lines 18-20 assign `state` to.
+    //
+    // The count still discriminates at 1 — deleting the tint gives 0 — and the
+    // adjacency check below is what carries the placement half, exactly as it
+    // did at 3.
+    #expect(pickers == 1, "expected 1 segmented picker, found \(pickers)")
     #expect(tints == pickers,
             "expected one .tint per segmented picker: \(pickers) pickers, \(tints) tints")
 
