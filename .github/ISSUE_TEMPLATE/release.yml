@@ -346,7 +346,10 @@ body:
 
         - [ ] Add the release to `CHANGELOG.md` AND to `site/changelog.html` in
               the same commit, carrying the same date on both sides.
-        - [ ] Update the displayed version to `X.Y.Z`.
+        - [ ] Update `<p class="sidebar-version">` to `vX.Y.Z` on EVERY page, not
+              just the one you were looking at. `everyPageCarriesTheSameSidebar`
+              requires the sidebar to be byte-identical everywhere, so a partial
+              edit fails that guard as well as the version guard above.
         - [ ] Update or add the DMG download link.
         - [ ] **Run the suite by hand before merging the site change.**
               `.github/workflows/pages.yml` checks only that `site/index.html` is
