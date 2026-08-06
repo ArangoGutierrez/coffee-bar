@@ -73,17 +73,62 @@ private func surfaceCode(named name: String) throws -> String {
         try String(contentsOf: sources.appending(path: relative), encoding: .utf8))
 }
 
+/// Each surface, and the type whose `body` has to render the version.
+///
+/// The TYPE is named as well as the file, and that is load-bearing rather than
+/// tidy. `PanelView.swift` declares TWO `View`s — `MenuBarLabel` at the top,
+/// `PanelView` below it — so a scoper anchored on the first
+/// `var body: some View` in the file reads `MenuBarLabel`'s body, which renders
+/// no version and correctly never should. Scoping that way makes the check fail
+/// on a CORRECT tree, which is worse than not scoping at all: a guard that is
+/// wrong when the code is right teaches people to silence it.
+private let versionSurfaces = [(file: "PanelView.swift", type: "PanelView"),
+                               (file: "PreferencesView.swift", type: "PreferencesView")]
+
 @Test func everyTopLevelSurfaceShowsTheRunningVersion() throws {
     // Named bug this catches: a second surface that composes its own version
     // sentence, or none at all. Two spellings of the version leave the user
     // comparing numbers that disagree with no way to tell which app is running
     // — the confusion issue #47 already cost this project once.
-    let surfaces = ["PanelView.swift", "PreferencesView.swift"]
-    for name in surfaces {
-        let code = try surfaceCode(named: name)
-        #expect(code.contains("versionLine(from:"),
-                "\(name) does not show the running version")
-        #expect(!code.contains("CFBundleShortVersionString"),
-                "\(name) reads the version key directly instead of using the one seam")
+    for surface in versionSurfaces {
+        let code = try surfaceCode(named: surface.file)
+
+        // Scoped to the TYPE, then to that type's `body`. A `contains` over the
+        // whole file proves the seam is NAMED somewhere in it, which is not the
+        // invariant: extract the version into a helper and drop the call from
+        // `body` and the file still names it, while the window shows nothing.
+        // Measured before this scoping landed — that surface compiled with no
+        // warning and the whole suite stayed green at 837 tests.
+        //
+        // `braceBlock` is the reader `AppLayerBoundary_test.swift` already uses
+        // to hold two call sites of one method apart. Reused rather than
+        // rewritten, for the reason `surfaceCode` reuses the lexer.
+        let declared = try #require(braceBlock(after: "struct \(surface.type): View", in: code), """
+            \(surface.file) declares no `struct \(surface.type): View`. The guard \
+            names a surface this package no longer has, so it can prove nothing \
+            about it.
+            """)
+        let body = try #require(braceBlock(after: "var body: some View", in: declared.block), """
+            \(surface.type) declares no body, so nothing in it can render the \
+            version.
+            """)
+
+        #expect(body.block.contains("versionLine(from:"), """
+            \(surface.type).body does not render the running version. A helper \
+            that names the seam is not enough — the user reads the window, not \
+            the file.
+            """)
+
+        // FILE-WIDE, deliberately, unlike the check above. This one asks whether
+        // the surface goes around the seam, and a helper reading
+        // `CFBundleShortVersionString` directly is exactly as wrong as `body`
+        // doing it — worse, since it is further from the eye. Narrowing this to
+        // `body` would lose that and fix nothing.
+        #expect(!code.contains("CFBundleShortVersionString"), """
+            \(surface.file) reads the version key directly instead of using the \
+            one seam. Two readings of the stamp can disagree, and \
+            AppVersion.display(from:) owns the rule that an unusable one says \
+            "unknown" rather than drawing a blank tail.
+            """)
     }
 }

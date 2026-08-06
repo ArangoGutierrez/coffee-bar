@@ -571,7 +571,18 @@ private func argumentSpans(of call: String, in code: String) -> [String] {
 /// literals, so a `{` or `}` inside one would misbalance the count. Nothing this
 /// reads carries a brace in a literal today. It is a structural reader and not
 /// the Swift grammar.
-private func braceBlock(after needle: String, in code: String)
+/// Internal rather than `private`, which in Swift is scoped to this file.
+/// `PreferencesView_test.swift` scopes its version check to a `body` block with
+/// it, for the reason this one exists: a `contains` over a whole file is
+/// satisfied by any call site, including one no rendered surface reaches. One
+/// tested brace reader in this target, not two — a second could disagree with
+/// this one, and the two guards would then argue about what a block is.
+///
+/// It finds the FIRST `{` after `needle`, so a needle appearing more than once
+/// in a file scopes to the earliest match. `PreferencesView_test.swift` composes
+/// two calls — type first, then `body` — because `PanelView.swift` declares two
+/// `View`s and the first `var body: some View` in it belongs to `MenuBarLabel`.
+func braceBlock(after needle: String, in code: String)
     -> (block: String, rest: String)? {
     guard let found = code.range(of: needle),
           let open = code[found.upperBound...].firstIndex(of: "{")
