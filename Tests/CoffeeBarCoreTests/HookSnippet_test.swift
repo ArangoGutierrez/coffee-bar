@@ -217,6 +217,49 @@ func everySnippetCarriesAMarkerTheCheckerRecognises(_ tool: AgentTool) throws {
 }
 
 @Test(arguments: AgentTool.allCases)
+func everyCommandIsTheCurlFormAndNamesNoUninstalledBinary(_ tool: AgentTool) throws {
+    // **`HookHealth` cannot be relied on for this one, and that is the point.**
+    // `HookHealth.commandMarkers` accepts `shimCommandName` as well as the socket
+    // path, so a snippet whose command is `coffeebar-hook …` satisfies the
+    // checker completely — and nothing installs that binary on a `PATH`.
+    // `everySnippetCarriesAMarkerTheCheckerRecognises` above passes over exactly
+    // that snippet. So does the round trip. The command FORM has no reader-side
+    // guard anywhere, which leaves this the only place it can be pinned.
+    //
+    // Named bug this catches: somebody later swaps the shim back in, or renames
+    // a flag. Every other check stays green, the panel reports `.wired`, and
+    // every user who clicks Copy pastes a command that cannot run.
+    //
+    // Pinned in three pieces rather than as `contains("curl")`, because the
+    // requirement is the command's FORM: a snippet that merely mentions `curl`
+    // somewhere while transporting over the wrong flag posts nothing at all.
+    let found = try commands(in: tool)
+    #expect(found.count == 5, "\(tool) snippet holds \(found.count) commands, expected 5")
+
+    for command in found {
+        #expect(command.hasPrefix("curl "),
+                "\(tool) runs \(command.prefix(40))…; the snippet must invoke curl")
+
+        #expect(!command.contains(HookHealth.shimCommandName),
+                """
+                \(tool) command names \(HookHealth.shimCommandName), which nothing \
+                installs on a PATH. HookHealth accepts it as a marker, so the panel \
+                would report .wired over a command the user cannot run.
+                """)
+
+        // `range(of:)` and not `contains`: a renamed flag has to fail to RESOLVE
+        // here rather than be satisfied by the socket path appearing elsewhere
+        // in the line.
+        let flag = "--unix-socket "
+        let range = try #require(command.range(of: flag),
+                                 "\(tool) command carries no \(flag)argument: \(command)")
+        #expect(command[range.upperBound...]
+                    .hasPrefix("\"$HOME/Library/Application Support/coffee-bar/ingest.sock\""),
+                "\(tool) passes something other than the quoted socket path to \(flag)")
+    }
+}
+
+@Test(arguments: AgentTool.allCases)
 func noSnippetCarriesAnAbsoluteHomePath(_ tool: AgentTool) throws {
     // `CoffeeBarCore` does no I/O and resolves no home directory (design §8). A
     // literal `/Users/…` in a snippet is also a path that is wrong on every
