@@ -29,6 +29,33 @@ public enum SettingsKey {
     /// machine is already dead. `theBatteryFloorKeyStringNeverChanges` holds the
     /// string itself.
     public static let batteryFloorPercent = "batteryFloorPercent"
+
+    /// The process names the user opted in to E-core demotion (issue #14).
+    ///
+    /// Absent by default, and the default is EMPTY. Absent is not "everything"
+    /// here, and that difference is the whole setting: handoff §2.3 makes the
+    /// demotable set opt-in only, because an app that silently E-core-demotes a
+    /// compile job or a video call will be uninstalled the same day.
+    /// `anUnsetDemotableSetIsEmptyAndNotEverything` holds it.
+    ///
+    /// A name is matched EXACTLY against the name the kernel reports, never as a
+    /// prefix or a substring. This list decides what MAY be demoted, so a loose
+    /// match widens the blast radius rather than narrowing it.
+    public static let demotableProcessNames = "demotableProcessNames"
+
+    /// Whether the user asked coffee-bar to put the demotable set into darwin
+    /// background state while an agent works (issue #14).
+    ///
+    /// Absent by default, and the default is `false`. This is the SECOND opt-in
+    /// and both are required: `demotableProcessNames` says WHICH processes may
+    /// be touched, and this says whether to touch any of them. Handoff §2.3
+    /// makes the set opt-in; Carlos added this switch on 2026-08-05 so a user who
+    /// has named a process can stop the behaviour without emptying their list.
+    ///
+    /// It is the whole profile. There is no `Aggressive` tier in this package
+    /// and none is planned — handoff §2.2 ships "Quiet everything else" as one
+    /// switch. `theQuietOthersKeyStringNeverChanges` holds the string itself.
+    public static let quietEverythingElse = "quietEverythingElse"
 }
 
 /// Where a user preference is kept.
@@ -55,6 +82,34 @@ public protocol SettingsStoring: Sendable {
     /// The stored number, or `nil` when the key has never been written.
     func integer(forKey key: String) -> Int?
     func setInteger(_ value: Int, forKey key: String)
+
+    /// The stored list, or `nil` when the key has never been written OR holds
+    /// something that is not a list of strings.
+    ///
+    /// The two are folded together on purpose. `UserDefaults` holds whatever
+    /// anybody writes, and a preferences file a user or an older build edited by
+    /// hand can carry a bare string where a list belongs. Both cases mean the
+    /// same thing to every caller — there is no usable list — and the demotable
+    /// set reads either as empty, which demotes nothing.
+    func stringArray(forKey key: String) -> [String]?
+    func setStringArray(_ value: [String], forKey key: String)
+}
+
+extension SettingsStoring {
+
+    /// The demotable set the user configured, as a set. Empty when unset.
+    ///
+    /// **Empty is the default and empty means nothing is demotable.** Handoff
+    /// §2.3 makes this opt-in only. Reading an absent key as "no restriction"
+    /// turns an allow list into a deny list and makes every same-uid process on
+    /// the machine eligible, which is the failure this whole seam exists to
+    /// prevent.
+    ///
+    /// A set rather than the stored array, because that is what
+    /// `DemotionPolicy` needs and a user's list may repeat an entry.
+    public func demotableProcessNames() -> Set<String> {
+        Set(stringArray(forKey: SettingsKey.demotableProcessNames) ?? [])
+    }
 }
 
 /// The real store, over `UserDefaults`.
@@ -96,6 +151,21 @@ public struct UserDefaultsSettingsStore: SettingsStoring, @unchecked Sendable {
     }
 
     public func setInteger(_ value: Int, forKey key: String) {
+        defaults.set(value, forKey: key)
+    }
+
+    /// `object(forKey:)` and a conditional cast, never `stringArray(forKey:)`.
+    ///
+    /// The built-in `UserDefaults.stringArray(forKey:)` also answers `nil` for a
+    /// wrong type, so the difference here is smaller than for the two above —
+    /// but the cast is written out so a preferences file carrying a string, a
+    /// number or a list of numbers under this key reads as `nil` rather than
+    /// trapping. The app does not own that file and cannot assume its shape.
+    public func stringArray(forKey key: String) -> [String]? {
+        defaults.object(forKey: key) as? [String]
+    }
+
+    public func setStringArray(_ value: [String], forKey key: String) {
         defaults.set(value, forKey: key)
     }
 }

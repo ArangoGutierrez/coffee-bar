@@ -28,6 +28,22 @@ public final class ServingModel {
     private let now: @Sendable () -> Date
     private var controller = HoldController()
 
+    /// The composition root for process demotion, or `nil` to govern nothing.
+    ///
+    /// **The ONE seam on this type whose default is null rather than real, and
+    /// the direction is the reason.** The listener's default is the real one
+    /// because a null listener ships an app with no ingest and nothing to
+    /// notice. Here the direction is inverted: a null governance ships an app
+    /// that demotes nothing, which is this product's documented default and the
+    /// safe answer. A real default would also point every check in this package
+    /// at the user's own demotion journal and their own running applications,
+    /// and no check may touch a process it does not own.
+    ///
+    /// The missing wire cannot ship silently.
+    /// `theAppComposesTheProcessGovernanceAndRecoversAtLaunchAndOnQuit` reads
+    /// `main.swift` for the construction and for the launch recovery.
+    private let governance: ProcessGovernance?
+
     /// True once `startMonitoring` has started the listener successfully.
     ///
     /// The listener starts AT MOST ONCE per model. A second `start()` on the
@@ -557,7 +573,8 @@ public final class ServingModel {
                 settings: any SettingsStoring = UserDefaultsSettingsStore(),
                 listener: any IngestListening = UnixSocketIngestListener(),
                 policy: StalePolicy = .standard,
-                now: @escaping @Sendable () -> Date = { Date() }) {
+                now: @escaping @Sendable () -> Date = { Date() },
+                governance: ProcessGovernance? = nil) {
         self.holder = holder
         self.reader = reader
         self.health = health
@@ -565,6 +582,7 @@ public final class ServingModel {
         self.listener = listener
         self.policy = policy
         self.now = now
+        self.governance = governance
         self.reading = reader.read()
         // Read ONCE, here, and never again. `refresh()` runs every 30 seconds
         // and on every hook event; re-reading the store on each of those would
@@ -590,6 +608,12 @@ public final class ServingModel {
         // first touch of the control heals it.
         self.batteryFloorPercentStorage =
             settings.integer(forKey: SettingsKey.batteryFloorPercent) ?? BatteryFloor.default
+        // Read once, here, for the reason above. `?? false` is the product's
+        // default and is the second of the two opt-ins issue #14 requires: a
+        // key nobody wrote reads as `nil` here, never as `true`, so coffee-bar
+        // demotes nothing for a user who never asked.
+        self.quietEverythingElseStorage =
+            settings.bool(forKey: SettingsKey.quietEverythingElse) ?? false
     }
 
     // There is deliberately NO `deinit` here, and none may be added.
@@ -734,6 +758,82 @@ public final class ServingModel {
     /// `init`. Private, for the reason `holdDisplayAwakeStorage` is.
     private var batteryFloorPercentStorage: Int
 
+    /// Bound to the panel's fourth control. Whether coffee-bar puts the
+    /// processes the user named into darwin background state while an agent
+    /// works (issue #14).
+    ///
+    /// **A SETTING, and the SECOND of two opt-ins.** `demotableProcessNames`
+    /// says WHICH processes may be touched and defaults to empty; this says
+    /// whether to touch any of them and defaults to `false`. Carlos chose two
+    /// over one so a user who has named a process can stop the behaviour
+    /// without losing their list.
+    ///
+    /// It is the whole profile. There is no `Aggressive` tier in this package
+    /// and none is planned — handoff §2.2 ships one switch.
+    ///
+    /// **macOS cannot promote a process**, so nothing here may be worded as a
+    /// speed-up. The handoff cites Oakley twice: `taskpolicy` "functions as a
+    /// brake, but not as an accelerator". `ServingModel.quietOthersLabel(for:)`
+    /// carries the wording.
+    ///
+    /// It never reaches `setpriority` on its own. The setter hands it to
+    /// `ProcessGovernance` through `refresh()`, which weighs it against the
+    /// other three conditions first.
+    ///
+    /// The setter WRITES BEFORE it reconciles, like the two settings above: a
+    /// crash between the two would lose a choice the user has already seen take
+    /// effect. It reconciles at all because a user turning this OFF is asking
+    /// for their applications back now, not at the next 30-second tick —
+    /// `turningTheSwitchOffRestoresImmediatelyRatherThanAtTheNextTick`.
+    public var quietEverythingElse: Bool {
+        get { quietEverythingElseStorage }
+        set {
+            quietEverythingElseStorage = newValue
+            settings.setBool(newValue, forKey: SettingsKey.quietEverythingElse)
+            refresh()
+        }
+    }
+
+    /// The backing store for `quietEverythingElse`, seeded from the settings in
+    /// `init`. Private, for the reason `holdDisplayAwakeStorage` is.
+    private var quietEverythingElseStorage: Bool
+
+    /// What the quiet-others control is CALLED.
+    ///
+    /// Here rather than in `PanelView`, for the reason `displayLabel(for:)` is:
+    /// design §5.4 rules out asserting on the rendered control, so a label
+    /// written in the view is a label no check reads.
+    ///
+    /// **It names what happens to the OTHER applications, never what happens to
+    /// the agent.** macOS has no mechanism to promote a process — the handoff
+    /// cites Oakley twice, that `taskpolicy` "functions as a brake, but not as
+    /// an accelerator" — so "Boost agents" would be a claim this product cannot
+    /// support. Handoff §2.2 ships this phrase for exactly that reason.
+    ///
+    /// No battery saving, no percentage and no duration appears here either. A
+    /// 2026-08-01 audit spent a day removing unverifiable claims of that kind,
+    /// and `theQuietOthersLabelNamesWhatIsQuietedAndClaimsNoSpeedUp` refuses
+    /// their return.
+    ///
+    /// A single constant rather than one string per position: this is a binary
+    /// opt-in and the panel renders it as a toggle, so a second label would be a
+    /// label nothing draws.
+    static let quietOthersLabel = "Quiet everything else"
+
+    /// Undoes every demotion the journal records. Call it at launch and on a
+    /// clean exit.
+    ///
+    /// Both are the same operation, because the journal is what says which
+    /// processes to put back and it outlives whatever wrote it. `main.swift`
+    /// calls this once from `App.init()` and again from
+    /// `NSApplication.willTerminateNotification`.
+    ///
+    /// Does nothing when no governance was supplied, which is the state every
+    /// check in this package runs in.
+    public func restoreDemotedProcesses() {
+        governance?.restoreEverythingDemoted()
+    }
+
     /// Re-samples power, retires silent sessions, and reconciles the assertion.
     /// Safe to call on a timer.
     ///
@@ -806,6 +906,29 @@ public final class ServingModel {
             holder.release()
             isServing = false
         }
+
+        // Process demotion, AFTER the assertion is reconciled. The two are
+        // independent — the trigger below weighs neither `intent` nor the
+        // battery floor — and the assertion is the one the user is watching, so
+        // it is not made to wait behind a walk over every running application.
+        //
+        // The demotable set is re-read on EVERY pass, unlike the three settings
+        // seeded in `init`. Those three are bound to panel controls, and
+        // re-reading would move a control under the user; this one has no
+        // control at all — `docs/` gives the `defaults write` command — so a
+        // read taken once in `init` would mean the user's edit did nothing until
+        // they relaunched the app.
+        //
+        // `working` and `sessions` are the arrays `evaluate` was handed above,
+        // never a second source. The count is the trigger's second condition;
+        // the pids are a deny rule, and they are empty in a shipped build
+        // because no hook payload carries one.
+        governance?.reconcile(
+            onBattery: reading.source == .battery,
+            workingAgentCount: working.count,
+            protectedAgentPIDs: Set(sessions.compactMap(\.pid)),
+            demotableNames: settings.demotableProcessNames(),
+            quietEverythingElse: quietEverythingElseStorage)
     }
 
     /// Applies one hook event and reconciles immediately.

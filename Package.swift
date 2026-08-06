@@ -41,6 +41,16 @@ let package = Package(
         // because SwiftPM treats this target's `main.swift` as top-level code.
         .executableTarget(name: "CoffeeBarShim", dependencies: ["CoffeeBarCore"],
                           swiftSettings: [.swiftLanguageMode(.v6)]),
+        // A demoter a check can SIGKILL. `ProcGovernor` is the first thing here
+        // that touches a pid it does not own, and the demotion outlives whatever
+        // applied it, so the crash-recovery criterion needs a real second
+        // process running the real governor. A SIGKILL cannot be caught, so that
+        // process cannot be this one.
+        //
+        // Deliberately a target and NOT a product: `scripts/build-app.sh` builds
+        // `--product coffee-bar`, so this never reaches a release.
+        .executableTarget(name: "CoffeeBarGovernorHarness", dependencies: ["CoffeeBarPower"],
+                          swiftSettings: [.swiftLanguageMode(.v6)]),
         .testTarget(name: "CoffeeBarCoreTests", dependencies: ["CoffeeBarCore"],
                     swiftSettings: [.swiftLanguageMode(.v6)]),
         .testTarget(name: "CoffeeBarPowerTests", dependencies: ["CoffeeBarPower"],

@@ -168,4 +168,177 @@ struct SettingsStoreTests {
         // keeps two keys apart; this proves the app asks it for two.
         #expect(SettingsKey.holdDisplayAwake != SettingsKey.batteryFloorPercent)
     }
+
+    // MARK: - The demotable set (issue #14)
+
+    @Test func theDemotableKeyStringNeverChangesAndCollidesWithNothing() {
+        // Held for the reason the other two keys are: a rename discards the
+        // demotable set of every user who chose one, silently, and the next
+        // launch demotes nothing with nothing to report.
+        #expect(SettingsKey.demotableProcessNames == "demotableProcessNames")
+        #expect(SettingsKey.demotableProcessNames != SettingsKey.holdDisplayAwake)
+        #expect(SettingsKey.demotableProcessNames != SettingsKey.batteryFloorPercent)
+    }
+
+    // MARK: - The second opt-in (issue #14)
+
+    @Test func theQuietOthersKeyStringNeverChanges() {
+        // Held for the reason the other three keys are: a rename discards the
+        // switch of every user who turned it on, silently, and the next launch
+        // falls back to the default with nothing to report.
+        //
+        // Collision with all three existing keys is asserted here rather than in
+        // a separate check, because one key serving two settings is the exact
+        // failure `SettingsKey`'s doc comment describes — and this key holds a
+        // `Bool` where `demotableProcessNames` holds a list, so a collision
+        // would make BOTH reads answer `nil` and disable the feature in a way no
+        // error reports.
+        #expect(SettingsKey.quietEverythingElse == "quietEverythingElse")
+        #expect(SettingsKey.quietEverythingElse != SettingsKey.holdDisplayAwake)
+        #expect(SettingsKey.quietEverythingElse != SettingsKey.batteryFloorPercent)
+        #expect(SettingsKey.quietEverythingElse != SettingsKey.demotableProcessNames)
+    }
+
+    @Test func anUnsetQuietOthersSwitchIsOffAndNotOn() throws {
+        // The bug this catches is `UserDefaults.bool(forKey:)` reaching this
+        // setting, which answers `false` for a key nobody wrote — the same
+        // answer as a deliberate opt-out. That happens to be harmless for THIS
+        // key and is asserted anyway, because the direction is what matters: a
+        // read that ever resolved an absent key to `true` would demote processes
+        // for a user who never asked, which is the failure both opt-ins exist to
+        // prevent.
+        let suite = try throwawaySuite()
+        defer { suite.defaults.removePersistentDomain(forName: suite.name) }
+        let store = UserDefaultsSettingsStore(defaults: suite.defaults)
+
+        #expect(store.bool(forKey: SettingsKey.quietEverythingElse) == nil)
+    }
+
+    @Test func theQuietOthersSwitchSurvivesARestart() throws {
+        // A STORED FORMAT: written on one launch and read on the next. A second
+        // store over the same storage is what a restart looks like, and an
+        // in-memory-only setting would pass a same-store read-back.
+        let suite = try throwawaySuite()
+        defer { suite.defaults.removePersistentDomain(forName: suite.name) }
+        UserDefaultsSettingsStore(defaults: suite.defaults)
+            .setBool(true, forKey: SettingsKey.quietEverythingElse)
+
+        let nextLaunch = UserDefaultsSettingsStore(defaults: suite.defaults)
+        #expect(nextLaunch.bool(forKey: SettingsKey.quietEverythingElse) == true)
+    }
+
+    @Test func anUnsetDemotableSetIsEmptyAndNotEverything() throws {
+        // Handoff §2.3: "Default `demotable` to empty. Opt-in only." THE bug
+        // this catches is an unset list read as "no restriction", which is how
+        // an allow list becomes a deny list by accident — every same-uid process
+        // on the machine would become eligible for throttling, with no user
+        // having asked for any of it.
+        let suite = try throwawaySuite()
+        defer { suite.defaults.removePersistentDomain(forName: suite.name) }
+        let store = UserDefaultsSettingsStore(defaults: suite.defaults)
+
+        #expect(store.stringArray(forKey: SettingsKey.demotableProcessNames) == nil)
+        #expect(store.demotableProcessNames().isEmpty)
+    }
+
+    @Test func aDemotableSetSurvivesARestart() throws {
+        // The setting is a STORED FORMAT: written on one launch and read on the
+        // next. A second store over the same storage is what a restart looks
+        // like, and an in-memory-only setting would pass a same-store read-back.
+        let suite = try throwawaySuite()
+        defer { suite.defaults.removePersistentDomain(forName: suite.name) }
+        let store = UserDefaultsSettingsStore(defaults: suite.defaults)
+
+        store.setStringArray(["Xcode", "node"], forKey: SettingsKey.demotableProcessNames)
+
+        let nextLaunch = UserDefaultsSettingsStore(defaults: suite.defaults)
+        #expect(nextLaunch.demotableProcessNames() == ["Xcode", "node"])
+    }
+
+    @Test func aValueOfTheWrongTypeReadsAsEmptyRatherThanCrashing() throws {
+        // `UserDefaults` holds whatever anybody writes, and a plist a user or an
+        // older build edited by hand can carry a string where a list belongs.
+        // The bug this catches is a force-cast: the app would trap at launch on
+        // a preference file it does not control. Empty is the safe answer,
+        // because empty demotes nothing.
+        let suite = try throwawaySuite()
+        defer { suite.defaults.removePersistentDomain(forName: suite.name) }
+        suite.defaults.set("Xcode", forKey: SettingsKey.demotableProcessNames)
+        let store = UserDefaultsSettingsStore(defaults: suite.defaults)
+
+        #expect(store.stringArray(forKey: SettingsKey.demotableProcessNames) == nil)
+        #expect(store.demotableProcessNames().isEmpty)
+    }
+
+    @Test func aDuplicatedEntryIsOneMemberOfTheSet() throws {
+        // A list is what a user edits; a set is what the policy needs. The bug
+        // this catches is a policy fed an array, where a duplicate would make
+        // `contains` do the same work twice and, worse, would let the count of
+        // the demotable set disagree with the number of processes it names.
+        let suite = try throwawaySuite()
+        defer { suite.defaults.removePersistentDomain(forName: suite.name) }
+        let store = UserDefaultsSettingsStore(defaults: suite.defaults)
+
+        store.setStringArray(["node", "node", "Xcode"], forKey: SettingsKey.demotableProcessNames)
+
+        #expect(store.demotableProcessNames() == ["node", "Xcode"])
+    }
+
+    // MARK: - The documented way to set it
+
+    @Test func theDocumentedDefaultsCommandNamesTheRealDomainAndTheRealKey() throws {
+        // Acceptance line 1 of issue #14 says the demotable set is
+        // "configurable and documented". The type was configurable and nothing
+        // could configure it: no panel control writes the key, and until this
+        // check no document gave a command that does.
+        //
+        // Both halves of that command are literals no compiler sees. The DOMAIN
+        // is the app's bundle identifier, and a `defaults write` against the
+        // wrong domain succeeds, prints nothing and is read by nobody. The KEY
+        // is `SettingsKey.demotableProcessNames`, and a key is a STORED FORMAT —
+        // the file header says so — so a document that drifts from it tells the
+        // user to write a preference the app never reads.
+        //
+        // Both are therefore read back out of the tree rather than written here.
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()      // …/Tests/CoffeeBarPowerTests
+            .deletingLastPathComponent()      // …/Tests
+            .deletingLastPathComponent()      // package root
+
+        // The bundle identifier as `scripts/build-app.sh` sets it. That script
+        // assembles the bundle, so it is the only place that decides which
+        // preference domain the shipped app reads.
+        let buildScript = try String(
+            contentsOf: root.appendingPathComponent("scripts/build-app.sh"), encoding: .utf8)
+        let bundleIDLine = try #require(
+            buildScript.split(separator: "\n").first { $0.hasPrefix("BUNDLE_ID=") },
+            "scripts/build-app.sh no longer sets BUNDLE_ID; this guard cannot run")
+        let bundleID = bundleIDLine
+            .replacingOccurrences(of: "BUNDLE_ID=", with: "")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\" "))
+        #expect(bundleID.contains("."), "BUNDLE_ID read back as \"\(bundleID)\", which is not a domain")
+
+        let handoff = try String(
+            contentsOf: root.appendingPathComponent("docs/coffee-bar-HANDOFF.md"), encoding: .utf8)
+        let commands = handoff.split(separator: "\n")
+            .map(String.init)
+            .filter { $0.contains("defaults write") && $0.contains("demotable") }
+
+        #expect(!commands.isEmpty,
+                "docs/coffee-bar-HANDOFF.md gives no `defaults write` line for the demotable set, so no user can configure it")
+
+        for command in commands {
+            #expect(command.contains(bundleID),
+                    """
+                    the handoff writes to a domain that is not \(bundleID), which is \
+                    what scripts/build-app.sh gives the bundle. That command writes a \
+                    preference the app never reads: "\(command)"
+                    """)
+            #expect(command.contains(SettingsKey.demotableProcessNames),
+                    """
+                    the handoff writes a key that is not \
+                    "\(SettingsKey.demotableProcessNames)": "\(command)"
+                    """)
+        }
+    }
 }

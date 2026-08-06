@@ -1,0 +1,919 @@
+// Copyright 2026 Carlos Eduardo Arango Gutierrez
+// SPDX-License-Identifier: Apache-2.0
+
+import Testing
+import Foundation
+import Darwin
+@testable import CoffeeBarPower
+
+// The governor: the one door every demotion crosses, and the recovery a later
+// run performs.
+//
+// Two rules decide almost everything here.
+//
+// **Journal first.** The record is written and forced to stable storage BEFORE
+// `setpriority`, never after. A journal written afterwards is defeated by a
+// `SIGKILL` in the window between the two calls: the process is demoted, nothing
+// on disk says so, and no later run can undo it. Carlos settled this over a
+// recommendation panel HARD-DISSENT on 2026-08-05, and it is the same ordering
+// rule the sleep watchdog already follows.
+//
+// **Restore only what this app demoted, and only if it is still the same
+// process.** Four conditions, each catching a different way of promoting
+// something nobody asked to promote.
+
+// MARK: - Seams
+
+/// An inspector over two fixed tables, so recovery can be checked against a pid
+/// that has been REUSED — which no suite can create on demand.
+///
+/// Two tables and not one, mirroring the real inspector: the deny rules read a
+/// record every process answers, and the identity comes from a PRIVILEGED record
+/// the kernel refuses for another user's process. A stub that fused them could
+/// not express "visible but unidentifiable", which is a state the real machine
+/// produces for `pid` 1.
+private struct StubInspector: ProcessInspecting {
+    let table: [pid_t: ProcSnapshot]
+    var identities: [pid_t: ProcIdentity] = [:]
+    func snapshot(of pid: pid_t) -> ProcSnapshot? { table[pid] }
+    func identity(of pid: pid_t) -> ProcIdentity? { identities[pid] }
+}
+
+private func identity(_ pid: pid_t, startedAt: UInt64 = 1_785_911_481,
+                      microseconds: UInt64 = 335_072) -> ProcIdentity {
+    ProcIdentity(pid: pid, startedAtSeconds: startedAt, startedAtMicroseconds: microseconds)
+}
+
+/// Records every call, and reads the journal off DISK at the moment the call is
+/// made.
+///
+/// That reading is the ordering proof. Asserting that both things happened would
+/// pass for either order; asserting that the journal already named the pid when
+/// `setpriority` was about to run cannot.
+private final class JournalWatchingSetter: DarwinBackgroundSetting, @unchecked Sendable {
+    private let journalURL: URL
+    private let lock = NSLock()
+    private var _calls: [(on: Bool, pid: pid_t)] = []
+    private var _journalNamedThePID: [Bool] = []
+    let result: Int32
+
+    init(journalURL: URL, result: Int32 = 0) {
+        self.journalURL = journalURL
+        self.result = result
+    }
+
+    var calls: [(on: Bool, pid: pid_t)] { lock.withLock { _calls } }
+    var journalNamedThePID: [Bool] { lock.withLock { _journalNamedThePID } }
+
+    func setBackground(_ on: Bool, for pid: pid_t) -> Int32 {
+        let onDisk = (try? FileDemotionJournalStore(url: journalURL).load())?.entries ?? []
+        let named = onDisk.contains { $0.identity.pid == pid }
+        lock.withLock {
+            _calls.append((on, pid))
+            _journalNamedThePID.append(named)
+        }
+        return result
+    }
+}
+
+/// A journal whose `append` always fails.
+private struct FailingJournal: DemotionJournalStoring {
+    func load() throws -> DemotionJournalRecord? { nil }
+    func append(_ entry: DemotionEntry) throws {
+        throw DemotionJournalError.writeFailed("the disk said no")
+    }
+    func replace(with entries: [DemotionEntry]) throws {}
+    func clear() throws {}
+}
+
+/// A setter whose answer depends on the pid.
+///
+/// One recovery can then hold a restore that worked AND a restore that failed,
+/// which is what tells "keep the failures" apart from "keep everything".
+private final class PerPIDSetter: DarwinBackgroundSetting, @unchecked Sendable {
+    private let results: [pid_t: Int32]
+    private let lock = NSLock()
+    private var _calls: [(on: Bool, pid: pid_t)] = []
+
+    init(results: [pid_t: Int32]) { self.results = results }
+
+    var calls: [(on: Bool, pid: pid_t)] { lock.withLock { _calls } }
+
+    func setBackground(_ on: Bool, for pid: pid_t) -> Int32 {
+        lock.withLock { _calls.append((on, pid)) }
+        return results[pid] ?? 0
+    }
+}
+
+private func snapshot(pid: pid_t, name: String, flags: UInt32 = 0x1404010,
+                      uid: uid_t? = nil, pgid: pid_t = 999_001) -> ProcSnapshot {
+    ProcSnapshot(pid: pid, uid: uid ?? getuid(), ppid: 1, pgid: pgid, name: name, flags: flags)
+}
+
+private func journalPath() -> URL {
+    FileManager.default.temporaryDirectory
+        .appendingPathComponent("cb-governor-\(UUID().uuidString)")
+        .appendingPathComponent("demotion-journal.json")
+}
+
+/// An open policy that allows exactly `names`, with none of the deny rules
+/// pointing at the pids these checks use.
+private func openPolicy(_ names: Set<String>) -> DemotionPolicy {
+    DemotionPolicy(demotableNames: names, selfPID: 1_000_001,
+                   selfUID: getuid(), selfPGID: 1_000_002)
+}
+
+/// Swift source with `//` line comments and `/* … */` block comments removed.
+///
+/// A `//` inside a string literal is treated as a comment here. That is wrong in
+/// general and harmless for the one use below: a `setpriority(` inside a string
+/// literal is not a call, so losing it cannot hide a call site.
+private func codeWithoutComments(_ text: String) -> String {
+    enum State { case code, lineComment, blockComment }
+    var state = State.code
+    var out = ""
+    var index = text.startIndex
+
+    while index < text.endIndex {
+        let character = text[index]
+        let following = text.index(after: index)
+        let next: Character? = following < text.endIndex ? text[following] : nil
+        var skip = false
+
+        switch state {
+        case .code:
+            if character == "/", next == "/" { state = .lineComment; skip = true }
+            else if character == "/", next == "*" { state = .blockComment; skip = true }
+            else { out.append(character) }
+        case .lineComment:
+            if character == "\n" { state = .code; out.append(character) }
+        case .blockComment:
+            if character == "*", next == "/" { state = .code; skip = true }
+        }
+
+        index = skip ? text.index(after: following) : following
+    }
+    return out
+}
+
+/// Doc-comment continuations joined, with a space OUTSIDE a `code span` and
+/// with nothing INSIDE one.
+///
+/// The parity matters, and neither rule works alone. The citation this guard was
+/// written for is wrapped mid-identifier across two `///` lines, so joining
+/// every continuation with a space rebuilds it as two words and the shape filter
+/// drops it — the guard would pass over its own reason for existing. Joining
+/// every continuation with nothing instead fuses `launchctl bootstrap system`
+/// into one token and reports a shell command as a missing symbol. Measured:
+/// that false positive appeared on the first run.
+///
+/// A code span cannot cross out of a comment block, so a non-comment line closes
+/// any span that is open.
+private func docCommentsJoined(_ text: String) -> String {
+    var out = ""
+    var insideSpan = false
+
+    for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+        let trimmed = line.drop { $0 == " " || $0 == "\t" }
+        guard trimmed.hasPrefix("///") else {
+            out += "\n"
+            insideSpan = false
+            continue
+        }
+        var body = String(trimmed.dropFirst(3))
+        if body.hasPrefix(" ") { body.removeFirst() }
+
+        out += insideSpan ? body : " " + body
+        if body.count(where: { $0 == "`" }) % 2 == 1 { insideSpan.toggle() }
+    }
+    return out
+}
+
+private func packageRoot() -> URL {
+    URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()      // …/Tests/CoffeeBarPowerTests
+        .deletingLastPathComponent()      // …/Tests
+        .deletingLastPathComponent()      // package root
+}
+
+/// The sentence every document describing the governor must carry while nothing
+/// calls it.
+///
+/// A literal, because the guard below has to look for something. It is the
+/// shortest phrase that cannot be written by accident and cannot be true of a
+/// wired feature.
+private let unwiredMarker = "no production code path calls it"
+
+/// The two targets a call site does not make the feature live.
+///
+/// `CoffeeBarPower` is the library itself. `CoffeeBarGovernorHarness` is a
+/// `Package.swift` TARGET with no product entry, built only by this suite —
+/// `scripts/build-app.sh` builds `--product coffee-bar` — so a user cannot run
+/// it and a release does not contain it.
+private let targetsThatDoNotShipTheFeature = ["/CoffeeBarPower/", "/CoffeeBarGovernorHarness/"]
+
+/// Every sentence a production caller makes FALSE.
+///
+/// The other half of the marker above, and the half the earlier version of this
+/// guard could not reach. That version LIFTED itself the moment the feature went
+/// live — correctly — and a lifted guard returns before it opens a document, so
+/// it protected the unwired state and nothing after it. Both sentences below
+/// then sat in `docs/coffee-bar-HANDOFF.md` for a whole commit while
+/// `docs/ACCEPTED-RISKS.md` said "Live, and bounded by two opt-ins", so two
+/// documents in this repository contradicted each other.
+///
+/// The first entry is the damaging one. It sat inside the "How to set it" block,
+/// beside the `defaults write` command that is the ONLY route a user has to fill
+/// the demotable set — so a reader who believed it never ran the command, the
+/// set stayed empty, trigger condition 3 never held, and the feature reached
+/// nobody.
+///
+/// LITERALS, not prose analysis. This guard can say that a KNOWN false sentence
+/// is still in the tree. It claims nothing about a sentence nobody has told it
+/// about, and it is not a substitute for reading the documents.
+private let sentencesFalsifiedByWiring = [
+    unwiredMarker,
+    "has no effect on the running app today",
+    "nothing calls the governor",
+    "Today nothing demotes anything",
+]
+
+/// `text` with every run of whitespace collapsed to one space.
+///
+/// A document wraps its lines, so "because nothing calls the\ngovernor" is one
+/// sentence to a reader and two lines to `contains`. A guard that read the raw
+/// text would pass over the very phrase it was given.
+/// `everyDocumentAboutTheGovernorMatchesWhetherAnythingCallsIt` pins the
+/// behaviour on the wrapped original before it uses it.
+private func flattenedWhitespace(_ text: String) -> String {
+    text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+}
+
+@Suite struct ProcGovernorTests {
+
+    // MARK: - Journal first
+
+    @Test func theJournalNamesThePidBeforeSetpriorityIsCalled() throws {
+        // THE ordering check, and the requirement Carlos settled over a panel
+        // HARD-DISSENT. The bug: journal AFTER the demotion. A SIGKILL between
+        // the two calls then leaves a demoted process that nothing on disk
+        // names, so no later run can restore it — and darwin background state
+        // survives its author, which the repository already measured.
+        //
+        // The setter reads the journal off the filesystem at the moment it is
+        // called. Asserting that both things happened would pass for either
+        // order.
+        let url = journalPath()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let setter = JournalWatchingSetter(journalURL: url)
+        let subject = snapshot(pid: 5000, name: "cb-ordered")
+
+        let governor = ProcGovernor(
+            policy: openPolicy(["cb-ordered"]),
+            journal: FileDemotionJournalStore(url: url),
+            inspector: StubInspector(table: [5000: subject], identities: [5000: identity(5000)]),
+            setter: setter)
+
+        try governor.demote(5000)
+
+        #expect(setter.calls.count == 1)
+        #expect(setter.calls.first?.on == true)
+        #expect(setter.journalNamedThePID == [true],
+                "setpriority ran before the journal named the pid; a crash in that window strands the process")
+    }
+
+    @Test func aJournalThatCannotBeWrittenStopsTheDemotion() throws {
+        // The other half of "journal first": if the record cannot be made
+        // durable, the mutation must not happen at all. A governor that demotes
+        // anyway produces exactly the state the ordering rule exists to prevent,
+        // and does it without even crashing first.
+        let setter = JournalWatchingSetter(journalURL: journalPath())
+        let subject = snapshot(pid: 5000, name: "cb-unwritable")
+
+        let governor = ProcGovernor(
+            policy: openPolicy(["cb-unwritable"]),
+            journal: FailingJournal(),
+            inspector: StubInspector(table: [5000: subject], identities: [5000: identity(5000)]),
+            setter: setter)
+
+        #expect(throws: DemotionJournalError.self) { try governor.demote(5000) }
+        #expect(setter.calls.isEmpty, "the process was demoted although its journal write failed")
+    }
+
+    @Test func theMeasuredPriorFlagsReachTheJournalRatherThanAnAssumedZero() throws {
+        // The restore target is MEASURED, never assumed — the same rule
+        // JournalRecord.priorValue follows for the sleep setting. The bug: a
+        // governor journalling `priorFlags: 0`. Recovery would then treat a
+        // process some other tool had already backgrounded as this app's doing
+        // and promote it.
+        let url = journalPath()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let alreadyBackground: UInt32 = 0x1014010
+        let subject = snapshot(pid: 5000, name: "cb-measured", flags: alreadyBackground)
+
+        let governor = ProcGovernor(
+            policy: openPolicy(["cb-measured"]),
+            journal: FileDemotionJournalStore(url: url),
+            inspector: StubInspector(table: [5000: subject], identities: [5000: identity(5000)]),
+            setter: JournalWatchingSetter(journalURL: url))
+
+        try governor.demote(5000)
+
+        let written = try #require(try FileDemotionJournalStore(url: url).load())
+        #expect(written.entries.first?.priorFlags == alreadyBackground)
+        #expect(written.entries.first?.appliedByThisApp == false)
+    }
+
+    // MARK: - The protected set, at the door
+
+    @Test func aProtectedProcessIsRefusedAndIsNeitherJournalledNorTouched() throws {
+        // Invariant 1 at the choke point. The refusal must land BEFORE the
+        // journal too: an entry for a process this app never demoted would make
+        // a later run clear a background bit somebody else set.
+        let url = journalPath()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let setter = JournalWatchingSetter(journalURL: url)
+        let subject = snapshot(pid: 5000, name: "WindowServer")
+
+        let governor = ProcGovernor(
+            policy: openPolicy(["WindowServer"]),      // opted in, deliberately
+            journal: FileDemotionJournalStore(url: url),
+            inspector: StubInspector(table: [5000: subject]),
+            setter: setter)
+
+        #expect(throws: ProcGovernorError.refused(.protectedName)) { try governor.demote(5000) }
+        #expect(setter.calls.isEmpty)
+        #expect(try FileDemotionJournalStore(url: url).load() == nil,
+                "a refused process reached the journal")
+    }
+
+    @Test func aPidWithNoProcessIsRefusedRatherThanDemotedBlind() throws {
+        // The bug: demoting a pid the inspector could not read. Between the
+        // caller choosing a pid and the governor acting on it the process may
+        // have exited, and the pid may already belong to something else.
+        let url = journalPath()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let setter = JournalWatchingSetter(journalURL: url)
+
+        let governor = ProcGovernor(
+            policy: openPolicy(["cb-anything"]),
+            journal: FileDemotionJournalStore(url: url),
+            inspector: StubInspector(table: [:]),
+            setter: setter)
+
+        #expect(throws: ProcGovernorError.vanished(5000)) { try governor.demote(5000) }
+        #expect(setter.calls.isEmpty)
+    }
+
+    @Test func aProcessWhoseIdentityTheKernelWithholdsIsRefused() throws {
+        // Visible, but unidentifiable. The real machine produces this state: the
+        // privileged record `identity(of:)` reads is refused for another user's
+        // process, and it is also refused for a process that exits between the
+        // two reads.
+        //
+        // The bug: journalling the entry anyway, with only a pid to name it. A
+        // later run would then have no way to tell that pid from a reused one,
+        // and would clear a background bit on whatever holds it — which is
+        // precisely the promotion invariant 2 forbids. Refusing costs one
+        // demotion that did not happen.
+        let url = journalPath()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let setter = JournalWatchingSetter(journalURL: url)
+        let subject = snapshot(pid: 5000, name: "cb-anonymous")
+
+        let governor = ProcGovernor(
+            policy: openPolicy(["cb-anonymous"]),
+            journal: FileDemotionJournalStore(url: url),
+            inspector: StubInspector(table: [5000: subject]),   // no identity for it
+            setter: setter)
+
+        #expect(throws: ProcGovernorError.unidentifiable(5000)) { try governor.demote(5000) }
+        #expect(setter.calls.isEmpty)
+        #expect(try FileDemotionJournalStore(url: url).load() == nil,
+                "an entry a later run could not match reached the journal")
+    }
+
+    // MARK: - Recovery
+
+    @Test func recoveryRestoresALivePidTheJournalNames() throws {
+        let url = journalPath()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = FileDemotionJournalStore(url: url)
+        let demoted = snapshot(pid: 5000, name: "cb-live", flags: 0x1014010)
+        try store.append(DemotionEntry(identity: identity(5000), name: "cb-live",
+                                       priorFlags: 0x1404010, demotedAt: Date()))
+        let setter = JournalWatchingSetter(journalURL: url)
+
+        let governor = ProcGovernor(
+            policy: openPolicy([]), journal: store,
+            inspector: StubInspector(table: [5000: demoted], identities: [5000: identity(5000)]),
+            setter: setter)
+
+        let report = try governor.recover()
+
+        #expect(report.restored == [5000])
+        #expect(setter.calls.count == 1)
+        #expect(setter.calls.first?.on == false, "recovery demoted instead of restoring")
+        #expect(try store.load() == nil, "the journal outlived the recovery it described")
+    }
+
+    @Test func recoveryLeavesAReusedPidAlone() throws {
+        // THE pid-reuse check, and the one the brief asks to be told about. A
+        // pid that is alive but now belongs to a DIFFERENT process must not be
+        // restored: clearing a background bit on a stranger's process is a
+        // change the user never asked for, and the stranger may have set that
+        // bit on purpose.
+        //
+        // The journal carries pid AND start time. Same pid, different start
+        // time, so this is a different process — which is a state no suite can
+        // create on demand, hence the stub.
+        let url = journalPath()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = FileDemotionJournalStore(url: url)
+        try store.append(DemotionEntry(identity: identity(5000), name: "cb-was-here",
+                                       priorFlags: 0x1404010, demotedAt: Date()))
+        // Same pid, started later: the kernel handed 5000 out again.
+        let stranger = snapshot(pid: 5000, name: "someone-else", flags: 0x1014010)
+        let setter = JournalWatchingSetter(journalURL: url)
+
+        let governor = ProcGovernor(
+            policy: openPolicy([]), journal: store,
+            inspector: StubInspector(table: [5000: stranger],
+                                     identities: [5000: identity(5000, startedAt: 1_785_999_999)]),
+            setter: setter)
+
+        let report = try governor.recover()
+
+        #expect(report.reused == [5000])
+        #expect(report.restored.isEmpty)
+        #expect(setter.calls.isEmpty, "a reused pid was restored; a stranger's process was promoted")
+    }
+
+    @Test func recoveryLeavesAProcessSomeoneElseBackgroundedAlone() throws {
+        // Invariant 2. The journal says the process ALREADY carried
+        // EXT_DARWINBG when coffee-bar demoted it, so some other tool put it
+        // there. Clearing it now promotes a process the user never asked to
+        // promote — the hazard handoff §5.6 records for `taskpolicy -B`.
+        let url = journalPath()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = FileDemotionJournalStore(url: url)
+        let subject = snapshot(pid: 5000, name: "cb-borrowed", flags: 0x1014010)
+        try store.append(DemotionEntry(identity: identity(5000), name: "cb-borrowed",
+                                       priorFlags: 0x1014010,   // already background
+                                       demotedAt: Date()))
+        let setter = JournalWatchingSetter(journalURL: url)
+
+        let governor = ProcGovernor(
+            policy: openPolicy([]), journal: store,
+            inspector: StubInspector(table: [5000: subject], identities: [5000: identity(5000)]),
+            setter: setter)
+
+        let report = try governor.recover()
+
+        #expect(report.leftAlone == [5000])
+        #expect(setter.calls.isEmpty, "a bit this app never set was cleared")
+    }
+
+    @Test func recoveryAsksNothingOfAPidThatIsGone() throws {
+        // A process that exited needs nothing: darwin background state is an
+        // attribute of the task, so it died with it. The bug this catches is a
+        // recovery that calls `setpriority` on a dead pid anyway — which the
+        // kernel may refuse today and may hand to a new process tomorrow.
+        let url = journalPath()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = FileDemotionJournalStore(url: url)
+        try store.append(DemotionEntry(
+            identity: identity(5000, startedAt: 1, microseconds: 2),
+            name: "cb-departed", priorFlags: 0x1404010, demotedAt: Date()))
+        let setter = JournalWatchingSetter(journalURL: url)
+
+        let governor = ProcGovernor(
+            policy: openPolicy([]), journal: store,
+            inspector: StubInspector(table: [:]), setter: setter)
+
+        let report = try governor.recover()
+
+        #expect(report.gone == [5000])
+        #expect(setter.calls.isEmpty)
+    }
+
+    @Test func recoveryTouchesNoPidTheJournalDoesNotName() throws {
+        // Invariant 2, stated the other way round. The bug: a recovery that
+        // sweeps every process matching the demotable names, or every process
+        // it can see, rather than only the entries on disk. `-B` on a process
+        // born background PROMOTES it.
+        let url = journalPath()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = FileDemotionJournalStore(url: url)
+        let named = snapshot(pid: 5000, name: "cb-named", flags: 0x1014010)
+        let bystander = snapshot(pid: 5001, name: "cb-named", flags: 0x1014010)
+        try store.append(DemotionEntry(identity: identity(5000), name: "cb-named",
+                                       priorFlags: 0x1404010, demotedAt: Date()))
+        let setter = JournalWatchingSetter(journalURL: url)
+
+        let governor = ProcGovernor(
+            policy: openPolicy(["cb-named"]), journal: store,
+            inspector: StubInspector(table: [5000: named, 5001: bystander],
+                                     identities: [5000: identity(5000),
+                                                  5001: identity(5001, startedAt: 1_785_911_999)]),
+            setter: setter)
+
+        _ = try governor.recover()
+
+        #expect(setter.calls.map(\.pid) == [5000],
+                "recovery touched a pid the journal never named")
+    }
+
+    @Test func anEmptyJournalIsACleanStartRatherThanAnError() throws {
+        // Runs on every launch, including the ordinary one where no run ever
+        // demoted anything. A throw here would turn a clean start into a
+        // reported failure.
+        let url = journalPath()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let setter = JournalWatchingSetter(journalURL: url)
+
+        let governor = ProcGovernor(
+            policy: openPolicy([]), journal: FileDemotionJournalStore(url: url),
+            inspector: StubInspector(table: [:]), setter: setter)
+
+        let report = try governor.recover()
+
+        #expect(report == RecoveryReport())
+        #expect(setter.calls.isEmpty)
+    }
+
+    // MARK: - A restore that FAILED is not a refusal
+
+    @Test func aRestoreThatFailedKeepsItsEntryAndTheOtherBucketsAreCleared() throws {
+        // The bug: `recover()` clearing the WHOLE journal, including entries
+        // whose restore FAILED. One transient EPERM then leaves a process on the
+        // E-cores AND deletes the only record naming it, so no later run can
+        // find it. That is the exact state the journal-first ordering exists to
+        // prevent, reached from the other end.
+        //
+        // A failed restore is not a refusal. The three refusal buckets describe
+        // processes this run has decided never to touch; `failed` describes a
+        // process this run still means to restore and could not.
+        //
+        // Three entries, one per outcome, so "keep the failures" cannot pass by
+        // keeping everything: the gone entry must go and the restored one too.
+        let url = journalPath()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = FileDemotionJournalStore(url: url)
+
+        try store.append(DemotionEntry(identity: identity(5000), name: "cb-stubborn",
+                                       priorFlags: 0x1404010, demotedAt: Date()))
+        try store.append(DemotionEntry(identity: identity(5001), name: "cb-obliging",
+                                       priorFlags: 0x1404010, demotedAt: Date()))
+        try store.append(DemotionEntry(identity: identity(5002), name: "cb-departed",
+                                       priorFlags: 0x1404010, demotedAt: Date()))
+
+        let setter = PerPIDSetter(results: [5000: EPERM, 5001: 0])
+        let governor = ProcGovernor(
+            policy: openPolicy([]), journal: store,
+            inspector: StubInspector(
+                table: [5000: snapshot(pid: 5000, name: "cb-stubborn", flags: 0x1014010),
+                        5001: snapshot(pid: 5001, name: "cb-obliging", flags: 0x1014010)],
+                identities: [5000: identity(5000), 5001: identity(5001)]),
+            setter: setter)
+
+        let report = try governor.recover()
+
+        #expect(report.failed == [5000])
+        #expect(report.restored == [5001])
+        #expect(report.gone == [5002])
+
+        let kept = try #require(
+            try store.load(),
+            "the journal was deleted although a restore failed; nothing on disk names the stranded process any more")
+        #expect(kept.entries.map(\.identity.pid) == [5000],
+                "recovery kept \(kept.entries.map(\.identity.pid)); only the failed entry may survive")
+    }
+
+    @Test func aLaterRunRetriesTheEntryWhoseRestoreFailed() throws {
+        // Keeping the entry is worth nothing unless a later run acts on it, and
+        // acting on it is the whole reason not to delete it: the transient EPERM
+        // clears, the next launch reads the journal back, and the process comes
+        // off the E-cores.
+        //
+        // The bug this catches is a fix that keeps the entry but marks it spent,
+        // or one that keeps it and then skips it for ever.
+        let url = journalPath()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = FileDemotionJournalStore(url: url)
+        try store.append(DemotionEntry(identity: identity(5000), name: "cb-stubborn",
+                                       priorFlags: 0x1404010, demotedAt: Date()))
+
+        let live = StubInspector(
+            table: [5000: snapshot(pid: 5000, name: "cb-stubborn", flags: 0x1014010)],
+            identities: [5000: identity(5000)])
+
+        let firstRun = ProcGovernor(policy: openPolicy([]), journal: store,
+                                    inspector: live,
+                                    setter: PerPIDSetter(results: [5000: EPERM]))
+        #expect(try firstRun.recover().failed == [5000])
+
+        // A SECOND store over the same path, because this is what a later launch
+        // has: the file and nothing else.
+        let laterStore = FileDemotionJournalStore(url: url)
+        let retrySetter = PerPIDSetter(results: [5000: 0])
+        let secondRun = ProcGovernor(policy: openPolicy([]), journal: laterStore,
+                                     inspector: live, setter: retrySetter)
+
+        let report = try secondRun.recover()
+
+        #expect(report.restored == [5000], "the later run never retried the failed entry")
+        #expect(retrySetter.calls.map(\.on) == [false], "the retry demoted instead of restoring")
+        #expect(try laterStore.load() == nil, "the entry outlived the restore that succeeded")
+    }
+
+    @Test func aKeptEntryDisappearsOnceItsProcessDoes() throws {
+        // The BOUND on retention, and the answer to "what stops a dead pid
+        // sitting in the journal for ever".
+        //
+        // An entry is kept only when its process is alive, still the same
+        // process, and carries a bit this app set — the three guards that run
+        // BEFORE the restore is attempted. When that process exits, the next
+        // recovery classifies it `gone` and drops it. So a retained entry cannot
+        // outlive its process, and the journal cannot grow a permanent tail of
+        // pids nobody can act on.
+        //
+        // The bug: "keep whatever was not restored", which retains the `gone`,
+        // `reused` and `leftAlone` buckets as well and never releases them.
+        let url = journalPath()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = FileDemotionJournalStore(url: url)
+        try store.append(DemotionEntry(identity: identity(5000), name: "cb-stubborn",
+                                       priorFlags: 0x1404010, demotedAt: Date()))
+
+        let whileAlive = ProcGovernor(
+            policy: openPolicy([]), journal: store,
+            inspector: StubInspector(
+                table: [5000: snapshot(pid: 5000, name: "cb-stubborn", flags: 0x1014010)],
+                identities: [5000: identity(5000)]),
+            setter: PerPIDSetter(results: [5000: EPERM]))
+        #expect(try whileAlive.recover().failed == [5000])
+        #expect(try store.load() != nil, "the failed entry was not kept, so this check proves nothing")
+
+        // The process exits. Nothing answers for that pid any more.
+        let afterItExits = ProcGovernor(policy: openPolicy([]), journal: store,
+                                        inspector: StubInspector(table: [:]),
+                                        setter: PerPIDSetter(results: [:]))
+        let report = try afterItExits.recover()
+
+        #expect(report.gone == [5000])
+        #expect(try store.load() == nil,
+                "a pid whose process is gone stayed in the journal; nothing will ever clear it")
+    }
+
+    // MARK: - One door
+
+    @Test func nothingOutsideTheGovernorPutsAForeignProcessIntoBackground() throws {
+        // A STRUCTURAL guard, in the shape `PrivacyBoundary_test.swift` uses.
+        //
+        // The bug it catches is the one issue #11 shipped: a rule applied at one
+        // door and not at another. A second call site for `setpriority` anywhere
+        // under Sources would demote without crossing DemotionPolicy, and every
+        // check in this file would still pass. It cannot prove no route exists —
+        // only that no source file outside these two opens one.
+        //
+        // `DemotionProbe.swift` is allowed because it targets `getpid()` and
+        // nothing else, which `theShippedProbeDemotesOnlyItsOwnProcess` pins.
+        let allowed: Set<String> = ["DemotionProbe.swift", "ProcGovernor.swift"]
+
+        let sources = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()      // …/Tests/CoffeeBarPowerTests
+            .deletingLastPathComponent()      // …/Tests
+            .deletingLastPathComponent()      // package root
+            .appendingPathComponent("Sources")
+
+        var callers: Set<String> = []
+        var discussedInProse: Set<String> = []
+        let walker = try #require(FileManager.default.enumerator(
+            at: sources, includingPropertiesForKeys: nil))
+        for case let file as URL in walker where file.pathExtension == "swift" {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            if text.contains("setpriority(") { discussedInProse.insert(file.lastPathComponent) }
+            if codeWithoutComments(text).contains("setpriority(") {
+                callers.insert(file.lastPathComponent)
+            }
+        }
+
+        // Pins that the comment stripping does something. Several files in this
+        // package DISCUSS the call in prose — the argument order is a trap worth
+        // documenting — and a scan that counted those would fire on every run.
+        // A guard that cries wolf gets deleted, and the guard is the point.
+        #expect(discussedInProse.count > callers.count,
+                "no file discusses setpriority in prose any more; the stripping below is untested")
+
+        // Pins the premise. An empty scan — a moved directory, a changed
+        // extension — would make the comparison below pass for the wrong reason.
+        #expect(callers.contains("ProcGovernor.swift"),
+                "the scan found no call in the governor itself; it is looking in the wrong place")
+        #expect(callers == allowed,
+                "setpriority is called outside the governor: \(callers.subtracting(allowed))")
+    }
+
+    // MARK: - A comment may not cite something that does not exist
+
+    @Test func everyLongIdentifierACommentCitesExistsSomewhereInTheTree() throws {
+        // `DemotionPolicy.swift` cited
+        // `nothingOutsideTheGovernorEverCallsSetpriorityOnAForeignPid` as the
+        // guard that keeps the second door shut. No such test has ever existed;
+        // the real one is
+        // `nothingOutsideTheGovernorPutsAForeignProcessIntoBackground`. A reader
+        // who goes looking finds nothing and concludes the guard was deleted.
+        //
+        // A citation is the only part of a comment a machine CAN check, and
+        // checking it is what makes naming the guard worth doing. This does not
+        // check that the named test checks what the sentence claims — nothing
+        // can — only that it is there to read.
+        //
+        // Comments are stripped from the RESOLUTION side, so a name that exists
+        // in prose alone does not resolve itself. That is exactly the defect.
+        let root = packageRoot()
+
+        func swiftFiles(under directory: String) throws -> [URL] {
+            let base = root.appendingPathComponent(directory)
+            let walker = try #require(FileManager.default.enumerator(
+                at: base, includingPropertiesForKeys: nil),
+                                      "cannot walk \(directory); this guard cannot run")
+            var found: [URL] = []
+            for case let file as URL in walker where file.pathExtension == "swift" {
+                found.append(file)
+            }
+            return found
+        }
+
+        let sources = try swiftFiles(under: "Sources")
+        let tests = try swiftFiles(under: "Tests")
+        #expect(sources.count >= 10 && tests.count >= 10,
+                "found \(sources.count) source and \(tests.count) test files; the walk is looking in the wrong place")
+
+        // Everything DECLARED, with comments removed. A declaration is code.
+        var declarations = ""
+        for file in sources + tests {
+            declarations += codeWithoutComments(try String(contentsOf: file, encoding: .utf8))
+        }
+        #expect(declarations.count > 100_000,
+                "the comment stripper returned \(declarations.count) bytes of code; every name below would look undeclared")
+
+        // Every backticked identifier a comment in Sources cites.
+        //
+        // Doc-comment continuations are joined FIRST. The broken citation above
+        // is wrapped across two `///` lines, so a scan of the raw text would not
+        // see it at all and this guard would have passed over the one defect it
+        // was written for.
+        // The wrap handling, pinned on a literal rather than trusted from the
+        // sweep. Nothing in the tree is guaranteed to stay wrapped, so once the
+        // one wrapped citation is repaired this is the only thing that keeps the
+        // rejoining honest. Both directions are asserted, because each rule on
+        // its own produces a defect and the second one is silent.
+        let probe = """
+        /// prose naming `someVeryLongIdentifier
+        /// ThatWrapsAcrossTwoLines` and then a shell command
+        /// `launchctl bootstrap system` written on one line
+        """
+        let joinedProbe = docCommentsJoined(probe)
+        #expect(joinedProbe.contains("someVeryLongIdentifierThatWrapsAcrossTwoLines"),
+                "a citation wrapped across two /// lines is not rejoined, so this guard cannot see the defect it exists for")
+        #expect(joinedProbe.contains("launchctl bootstrap system"),
+                "a shell command on one line was fused into a single token, which this guard would report as a missing symbol")
+
+        var cited: [String: Set<String>] = [:]
+        let spans = try NSRegularExpression(pattern: "`([^`\\n]{1,140})`")
+        for file in sources {
+            let joined = docCommentsJoined(try String(contentsOf: file, encoding: .utf8))
+            let ns = joined as NSString
+            for m in spans.matches(in: joined, range: NSRange(location: 0, length: ns.length)) {
+                let name = ns.substring(with: m.range(at: 1))
+                // A lowerCamelCase run of at least 20 characters. Long enough
+                // that a word from an English sentence cannot reach it, and
+                // narrow enough that a path, a flag, an expression, a shell
+                // command or a type name is not mistaken for one.
+                guard name.count >= 20,
+                      let first = name.first, first.isLowercase, first.isLetter,
+                      name.allSatisfy({ $0.isLetter || $0.isNumber }) else { continue }
+                cited[name, default: []].insert(file.lastPathComponent)
+            }
+        }
+
+        // Anti-vacuity. A normaliser that stopped matching would report zero
+        // unresolved names and pass, for ever, over any citation at all.
+        #expect(cited.count >= 20,
+                "only \(cited.count) citations matched; the scanner has stopped reading comments: \(cited.keys.sorted())")
+
+        let unresolved = cited
+            .filter { !declarations.contains($0.key) }
+            .map { "\($0.key) (cited in \($0.value.sorted().joined(separator: ", ")))" }
+            .sorted()
+
+        #expect(unresolved.isEmpty,
+                "a comment cites something that is declared nowhere in Sources or Tests:\n\(unresolved.joined(separator: "\n"))")
+    }
+
+    // MARK: - The documents must match what the product does
+
+    @Test func everyDocumentAboutTheGovernorMatchesWhetherAnythingCallsIt() throws {
+        // The `LaunchDaemonInstaller` shape that issue #13 complains about,
+        // repeating one milestone later: prose in the PRESENT TENSE about a
+        // feature no code path reaches. `docs/ACCEPTED-RISKS.md` said "every
+        // process it had demoted stays demoted until coffee-bar next starts and
+        // reads its journal back", and `docs/ROADMAP.md` said issue #14 "added a
+        // SECOND journal" at a path the app never creates. coffee-bar demotes
+        // nothing and creates no such file. The code is honest about itself and
+        // that does not help, because the documents are what a person reads.
+        //
+        // **This guard SWAPS rules rather than lifting itself, and that is the
+        // repair.** The earlier version lifted: the moment anything outside the
+        // library and the harness called the governor it returned, before it
+        // opened a single document. So it could not block the follow-up that
+        // wired the feature — which was the point — but it also could not see
+        // the sentences the wiring had just made FALSE. It protected the unwired
+        // state and nothing after it, and two sentences shipped saying the
+        // feature does nothing while `docs/ACCEPTED-RISKS.md` said it is live.
+        //
+        // Unwired, every document must CARRY `unwiredMarker`. Wired, every
+        // document must carry NONE of `sentencesFalsifiedByWiring`. There is no
+        // state in which this guard reads no document.
+        let root = packageRoot()
+
+        var productionCallers: Set<String> = []
+        var anyCaller: Set<String> = []
+        let walker = try #require(FileManager.default.enumerator(
+            at: root.appendingPathComponent("Sources"), includingPropertiesForKeys: nil))
+        for case let file as URL in walker where file.pathExtension == "swift" {
+            let code = codeWithoutComments(try String(contentsOf: file, encoding: .utf8))
+            guard code.contains("ProcGovernor(") || code.contains(".recover()") else { continue }
+            anyCaller.insert(file.lastPathComponent)
+            if !targetsThatDoNotShipTheFeature.contains(where: { file.path.contains($0) }) {
+                productionCallers.insert(file.lastPathComponent)
+            }
+        }
+
+        // Pins the premise. An empty scan — a moved directory, a renamed type —
+        // would satisfy "no production caller" for the wrong reason and turn the
+        // branch below into a guard that can never fire. The harness builds a
+        // governor and demotes with it, so the scan must see that one.
+        #expect(anyCaller.contains("main.swift"),
+                "the scan found no ProcGovernor construction anywhere under Sources; it is looking in the wrong place")
+
+        // The wrap handling, pinned on the WRAPPED ORIGINAL rather than trusted.
+        // The sentence this half exists for was written across two lines in
+        // `docs/coffee-bar-HANDOFF.md`, so a raw `contains` would report the
+        // document clean and this guard would pass over the one defect it was
+        // added for.
+        let wrappedOriginal = """
+        **This command has no effect on the running app today**, because nothing calls the
+        governor. It is the interface the wiring work will consume.
+        """
+        #expect(flattenedWhitespace(wrappedOriginal).contains("nothing calls the governor"), """
+            a sentence wrapped across two lines is not rejoined, so this guard \
+            cannot see the phrase it was given.
+            """)
+
+        for name in ["docs/ACCEPTED-RISKS.md", "docs/ROADMAP.md",
+                     "docs/coffee-bar-HANDOFF.md"] {
+            let text = try String(contentsOf: root.appendingPathComponent(name), encoding: .utf8)
+            // Failure-closed. A mis-resolved path would otherwise report a clean
+            // document, which is the false-absence trap `DocsClaims_test.swift`
+            // records.
+            #expect(text.count > 1000,
+                    "\(name) read back as \(text.count) bytes; this guard is scanning the wrong file")
+            let flattened = flattenedWhitespace(text)
+
+            // WIRED. The present tense is now true, so the marker is no longer
+            // required — and every sentence saying the feature does nothing is
+            // now false. This is the branch the lifting version never reached.
+            guard productionCallers.isEmpty else {
+                for stale in sentencesFalsifiedByWiring {
+                    // The boolean is HOISTED for the reason the unwired half
+                    // hoists its own, below.
+                    let carries = flattened.contains(stale)
+                    #expect(carries == false, """
+                        \(name) still says "\(stale)", and \(productionCallers.sorted()) \
+                        calls the governor. The sentence is FALSE. If it sits beside the \
+                        `defaults write` command it is worse than false: that command is \
+                        the only route a user has to fill the demotable set, so a reader \
+                        who believes it never runs it and the feature reaches nobody.
+                        """)
+                }
+                continue
+            }
+
+            // The boolean is HOISTED, and that is not a style choice.
+            // `#expect(text.contains(...))` expands `text` into the failure
+            // report, so a miss dumped the whole 130 KB handoff — 1012 log
+            // lines — and buried the message that says what to do. Expanding
+            // `carries` prints `false`, which carries no information and
+            // therefore leaves the message as the payload.
+            let carries = flattened.contains(unwiredMarker)
+            #expect(carries,
+                    """
+                    \(name) describes ProcGovernor but never says "\(unwiredMarker)", \
+                    and no file outside \(targetsThatDoNotShipTheFeature) calls it. \
+                    A reader concludes the feature is live. It is not.
+                    """)
+        }
+    }
+}

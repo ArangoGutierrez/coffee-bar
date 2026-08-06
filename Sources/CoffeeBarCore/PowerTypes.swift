@@ -26,7 +26,7 @@ public enum PowerSource: String, Codable, Sendable {
 /// is what makes an off switch possible. Nothing is released, so there is no
 /// stored-value migration to answer for.
 ///
-/// `CaseIterable` so `displaySleepAssertionIsNeverRequested` can sweep every
+/// `CaseIterable` so `noUserIntentAloneRequestsTheDisplayAssertion` can sweep every
 /// case rather than a hand-written list. That check is the one invariant
 /// separating this product from `caffeinate -d`; the list it used to carry was
 /// the whole enum until this case arrived, and a fourth case would have

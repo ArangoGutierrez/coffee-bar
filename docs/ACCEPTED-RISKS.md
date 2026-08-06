@@ -21,6 +21,58 @@ rationale. `Tests/CoffeeBarUITests/ServingModelIngest_test.swift:395`,
 **Reopen when.** The panel gains room to separate "why your click did nothing"
 from "why the machine is not held right now".
 
+## A crash would leave demoted processes demoted until the next start (issue #14)
+
+**Live, and bounded by two opt-ins.** `Sources/CoffeeBarUI/ProcessGovernance.swift` is the
+production caller. `ServingModel.refresh()` reconciles on every 30-second tick, and
+`Sources/CoffeeBarApp/main.swift` calls `restoreDemotedProcesses()` at launch and again on
+`NSApplication.willTerminateNotification`.
+
+**Nothing is demotable until the user names something.** coffee-bar demotes a process only
+while ALL FOUR of these hold: the machine is on battery, at least one agent session is
+working, the demotable set is non-empty, and the "Quiet everything else" switch is on. The
+set defaults to empty and the switch defaults to off, so a user who has changed neither
+carries none of the exposure below.
+
+**Applications only.** Enumeration is `NSWorkspace.shared.runningApplications`, not
+`proc_listpids`. A headless process — a compiler, a test runner, a container daemon —
+appears nowhere in that list and cannot be demoted by this build. That is a deliberate
+bound on the blast radius: an app that silently demoted a compile job would be uninstalled
+the same day.
+
+**The tracked-agent deny rule carries no data yet.** `DemotionPolicy` is given
+`agentPIDs`, and the set is empty in every shipped build, because no hook payload carries a
+pid and `SessionHub` constructs every session with `pid: nil`. A user who names an agent's
+own process in their demotable set is therefore not protected by that rule. The other eight
+rules still apply.
+
+**Behaviour.** `ProcGovernor` demotes processes coffee-bar does not own. A
+demotion applied to a foreign process is state on THAT process, so it outlives whatever
+applied it. If coffee-bar were `SIGKILL`ed, no cleanup of any kind would run, and every
+process it had demoted would stay demoted until coffee-bar next started and read its
+journal back. For a long-lived process such as a browser that can mean days.
+
+**Why accepted.** Recovery is a journal a later run reads back, decided on 2026-08-05 over
+a recommendation panel HARD-DISSENT. The alternative was a supervising process that
+outlives the app. That is a second process to install, keep running and keep in step, which
+is a larger permanent cost than the window it closes. It is **not** a privilege question: a
+supervisor would not have needed root, and an earlier claim that it would was wrong and was
+withdrawn.
+
+The exposure is bounded by construction. Darwin background state is a process attribute, so
+it dies with the process and never survives a reboot. "Bounded" can still mean days, and
+nothing here treats this as solved.
+
+**Guard.** `Tests/CoffeeBarPowerTests/ProcGovernorCrashRecovery_test.swift`,
+`aDemotionOutlivesTheSIGKILLedDemoterAndALaterRunUndoesIt`, runs the whole thing: a real
+victim, a real second process running the real governor, a real `SIGKILL`, `proc_pidinfo`
+proving the victim is still demoted, then a later run clearing the bit.
+`Tests/CoffeeBarPowerTests/DemotionCrashPath_test.swift` records the underlying hazard.
+
+**Reopen when.** coffee-bar demotes processes by default rather than by opt-in, or a user
+reports a process that stayed slow after a crash, or enumeration widens past
+`NSWorkspace` to reach headless processes.
+
 ## Staleness is measured on a wall clock (audit id20)
 
 **Behaviour.** `StalePolicy` subtracts wall-clock values. After a backward clock

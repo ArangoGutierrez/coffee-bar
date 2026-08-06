@@ -167,6 +167,7 @@ private let expectedAppLayerEntries = [
     "Sources/CoffeeBarUI/HookHealthReader.swift",
     "Sources/CoffeeBarUI/MenuBarGlyphs.swift",
     "Sources/CoffeeBarUI/PanelView.swift",
+    "Sources/CoffeeBarUI/ProcessGovernance.swift",
     "Sources/CoffeeBarUI/ServingModel.swift",
 ]
 
@@ -507,6 +508,107 @@ private func swiftCodeWithoutComments(_ source: String) -> String {
     return String(kept)
 }
 
+/// The argument list of every `call` in `code`, one string per call site.
+///
+/// Balanced-paren, so a nested call inside an argument does not end the span
+/// early — `ancestorPIDs: inspector.ancestors(of: selfPID)` is one argument and
+/// not the end of the list.
+///
+/// LIMIT, stated rather than hidden: `swiftCodeWithoutComments` KEEPS string
+/// literals, so a `(` or `)` inside one would misbalance the count. No
+/// construction this reads carries a literal today. It is a structural reader,
+/// not the Swift grammar.
+private func argumentSpans(of call: String, in code: String) -> [String] {
+    let characters = Array(code)
+    let needle = Array(call)
+    var spans: [String] = []
+    var index = 0
+
+    while index + needle.count <= characters.count {
+        guard Array(characters[index ..< index + needle.count]) == needle else {
+            index += 1
+            continue
+        }
+        var cursor = index + needle.count
+        let start = cursor
+        var depth = 1
+        while cursor < characters.count && depth > 0 {
+            if characters[cursor] == "(" { depth += 1 }
+            if characters[cursor] == ")" { depth -= 1 }
+            cursor += 1
+        }
+        // `cursor - 1` drops the closing paren the loop consumed. An unbalanced
+        // span runs to the end of the file, which fails the checks below rather
+        // than passing them.
+        spans.append(String(characters[start ..< max(start, cursor - 1)]))
+        index = cursor
+    }
+    return spans
+}
+
+/// The body of the first `{ … }` block that follows `needle` in `code`, and
+/// `code` with that block cut out of it.
+///
+/// Written for a TRAILING closure, which `argumentSpans(of:in:)` cannot reach:
+/// the closure sits OUTSIDE the parentheses, so a paren-balanced reader stops
+/// before it. Splitting the file into "inside that block" and "everything else"
+/// is what lets one guard hold two call sites of the SAME method INDEPENDENTLY.
+/// A `contains` cannot: one call satisfies it for both.
+///
+/// Order does not take part. The block is removed wherever it sits, so moving
+/// the registration above or below the other call site does not change either
+/// answer.
+///
+/// LIMIT, stated rather than hidden, and it is the same limit
+/// `argumentSpans(of:in:)` carries: `swiftCodeWithoutComments` KEEPS string
+/// literals, so a `{` or `}` inside one would misbalance the count. Nothing this
+/// reads carries a brace in a literal today. It is a structural reader and not
+/// the Swift grammar.
+private func braceBlock(after needle: String, in code: String)
+    -> (block: String, rest: String)? {
+    guard let found = code.range(of: needle),
+          let open = code[found.upperBound...].firstIndex(of: "{")
+    else { return nil }
+
+    var depth = 0
+    var cursor = open
+    while cursor < code.endIndex {
+        if code[cursor] == "{" { depth += 1 }
+        if code[cursor] == "}" {
+            depth -= 1
+            if depth == 0 {
+                let close = code.index(after: cursor)
+                return (String(code[open ..< close]),
+                        String(code[code.startIndex ..< open]) + String(code[close...]))
+            }
+        }
+        cursor = code.index(after: cursor)
+    }
+    // Unbalanced. Reported as "no block" rather than as a span running to the
+    // end of the file, so the caller fails rather than reads the whole file as
+    // the block and passes.
+    return nil
+}
+
+/// The four `DemotionPolicy` arguments that DEFAULT to empty.
+///
+/// Each names a deny rule that is OFF unless a caller fills it, and the
+/// composition root is the only place that can know any of them:
+///
+///   - `agentPIDs` — the agent tools coffee-bar tracks;
+///   - `frontmostPID` — the application the user is looking at;
+///   - `ancestorPIDs` — coffee-bar's own parent chain;
+///   - `extraProtectedNames` — coffee-bar's own executables.
+///
+/// Written WITH the colon, so the check reads an argument LABEL and not a
+/// mention of the same word somewhere in an expression.
+private let optionalProtections = [
+    "agentPIDs:",
+    "frontmostPID:",
+    "ancestorPIDs:",
+    "extraProtectedNames:",
+]
+
 /// Every file the app layer's targets compile, package-root relative and
 /// sorted.
 private func appLayerEntries() throws -> [String] {
@@ -780,6 +882,240 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
         for name in forbidden {
             #expect(!source.contains(name),
                     "\(file.lastPathComponent) names \(name); the app layer holds no assertion of its own")
+        }
+    }
+}
+
+@Test func thePanelOffersTheQuietOthersControl() throws {
+    // PRESENCE, the same tripwire shape as `thePanelOffersTheDisplayHoldControl`
+    // and for the same reason: `ServingModel` can store the switch,
+    // `ProcessGovernance` can weigh it and `ProcGovernor` can act on it with
+    // every check green while the panel offers no way to turn it on.
+    //
+    // That is not hypothetical on this branch. `ProcGovernor` landed with 2853
+    // lines of tested code and ZERO production callers, and issue #13 exists
+    // partly to complain that `LaunchDaemonInstaller` shipped the same way.
+    //
+    // LIMIT, stated rather than hidden: this proves the panel NAMES the
+    // binding, not that it draws a usable control. Design §5.4 rules out
+    // asserting on rendered AppKit text.
+    //
+    // COMMENT-STRIPPED, unlike the three panel tripwires above it. Those state
+    // that a mention in a comment satisfies them; this one refuses that,
+    // because commenting the control out is the likeliest way it disappears and
+    // the surrounding prose would keep naming it. A presence guard that a
+    // comment satisfies passes over the deletion it exists to catch.
+    let files = try appLayerSources()
+    #expect(files.count == expectedSourceCount,
+            "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
+
+    let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
+                             "the app layer no longer compiles a PanelView.swift")
+    let source = swiftCodeWithoutComments(try String(contentsOf: panel, encoding: .utf8))
+
+    // The BINDING, not the property. `model.quietEverythingElse` would be
+    // satisfied by a line that merely displays the value, and a switch the user
+    // can read and not flip is not a switch.
+    #expect(source.contains("$model.quietEverythingElse"), """
+        PanelView.swift binds no control to model.quietEverythingElse, so the \
+        governor can be wired, stored and honoured and the user can never turn \
+        it on.
+        """)
+
+    // The label comes from the model, where a check can read it. The wording is
+    // constrained — macOS cannot promote a process — so a literal composed in
+    // this view is a claim nothing in this package could ever check.
+    #expect(source.contains("ServingModel.quietOthersLabel"), """
+        PanelView.swift names its own label for the quiet-others control. It \
+        belongs on ServingModel beside the other control labels, where \
+        theQuietOthersLabelNamesWhatIsQuietedAndClaimsNoSpeedUp reads it.
+        """)
+}
+
+@Test func theAppComposesTheProcessGovernanceAndRecoversAtLaunchAndOnQuit() throws {
+    // PRESENCE. `ServingModel.governance` is the ONE seam on that type whose
+    // default is null rather than the real implementation, so this is what
+    // stops the missing wire shipping silently — the exact objection the
+    // listener's real-by-default comment raises.
+    //
+    // FOUR separate things are held, because each can be deleted on its own and
+    // the other three still read as a working feature:
+    //
+    //   1. the app CONSTRUCTS a ProcessGovernance;
+    //   2. it HANDS it to the model, rather than building one and dropping it;
+    //   3. it RECOVERS AT LAUNCH, so a demotion an earlier run was killed
+    //      before undoing does not outlive that run;
+    //   4. it RECOVERS ON THE WAY OUT, so a clean quit does not leave a process
+    //      on the E-cores until the next launch.
+    //
+    // 3 and 4 are the same METHOD NAME at two call sites, and until 2026-08-06
+    // this guard held them with one `code.contains("restoreDemotedProcesses()")`
+    // — which EITHER call site satisfies on its own. Measured: deleting the
+    // App.init() call and keeping the terminate block left the whole suite at
+    // rc=0 with 732 tests passing. The hazard that leaves is the one
+    // docs/ACCEPTED-RISKS.md says the launch recovery closes: a run that ends by
+    // SIGKILL posts no willTerminateNotification, so only a later LAUNCH can
+    // undo what it left demoted.
+    //
+    // They are separated STRUCTURALLY rather than by counting to two. A count
+    // reaches two when somebody writes the terminate call twice, and the block
+    // split says which call site is missing.
+    //
+    // COMMENT-STRIPPED, because `main.swift` explains all three in prose. A raw
+    // read would be satisfied by the explanation of the thing it deleted.
+    //
+    // Same LIMIT as the panel tripwires: this proves `main.swift` names each
+    // call, not that the composition is correct. `ProcessGovernance_test.swift`
+    // holds the behaviour; `main.swift` is top-level code that no test target
+    // can import, which is why a source read is the only route here at all.
+    let files = try appLayerSources()
+    let main = try #require(files.first { $0.lastPathComponent == "main.swift" },
+                            "the app layer no longer compiles a main.swift")
+    let code = swiftCodeWithoutComments(try String(contentsOf: main, encoding: .utf8))
+
+    #expect(code.contains("ProcessGovernance("), """
+        main.swift builds no ProcessGovernance, so ProcGovernor has no \
+        production caller and the app demotes nothing whatever the user sets.
+        """)
+    #expect(code.contains("governance:"), """
+        main.swift builds a ProcessGovernance and never hands it to the model. \
+        ServingModel defaults that seam to nil, so refresh() reconciles nothing.
+        """)
+    // The terminate block, cut out of the file so the two call sites cannot
+    // stand in for one another.
+    let split = try #require(
+        braceBlock(after: "NSApplication.willTerminateNotification", in: code), """
+            main.swift registers no block on NSApplication.willTerminateNotification, \
+            so a clean quit leaves every demoted process on the E-cores until the \
+            next launch.
+            """)
+
+    #expect(split.block.contains("restoreDemotedProcesses()"), """
+        main.swift observes willTerminateNotification and does not restore inside \
+        that block. The Quit button calls NSApplication.shared.terminate, so a user \
+        who quits cleanly keeps their applications on the E-cores until they launch \
+        coffee-bar again.
+        """)
+
+    #expect(split.rest.contains("restoreDemotedProcesses()"), """
+        main.swift restores ONLY from the willTerminateNotification block, and \
+        never at launch. A run that ends by SIGKILL posts no such notification, so \
+        the processes it was holding down stay there and the journal it wrote is \
+        the only record naming them. docs/ACCEPTED-RISKS.md says the launch \
+        recovery is what closes that window.
+        """)
+}
+
+// MARK: - What the app layer must SAY when it builds a demotion policy
+
+@Test func theAppLayerSuppliesEveryOptionalProtectionToDemotionPolicy() throws {
+    // STRUCTURAL. Named bug this catches, and it is the single most
+    // user-visible way issue #14 can go wrong: a `DemotionPolicy` built in the
+    // app layer that leaves `frontmostPID` at its `nil` default. The rule in
+    // `verdict(for:)` refuses `.frontmostApplication` ONLY when the value is
+    // non-nil, so the omission makes the application the user is looking at
+    // demotable the moment they name it — and every behavioural check in this
+    // package still passes, because none of them can see an argument that was
+    // never written.
+    //
+    // `agentPIDs`, `ancestorPIDs` and `extraProtectedNames` default to empty
+    // for the same reason and carry the same hazard. FOUR of the nine deny
+    // rules are off by default, and only the composition root can fill any of
+    // them, so all four are held here rather than the one that prompted this.
+    //
+    // COMMENT-STRIPPED, and that is load bearing rather than tidy.
+    // `ProcessGovernance.swift`'s doc comment names all four labels while
+    // explaining why they matter, so a raw read would be satisfied by the
+    // prose alone and would pass over a construction that supplied none of
+    // them — the exact defect, certified sound by its own documentation.
+    //
+    // The HARNESS is deliberately out of scope. `CoffeeBarGovernorHarness`
+    // passes `frontmostPID: nil` on purpose, to measure that the rule does
+    // nothing when it is not told; it ships in no product and this scan does
+    // not reach it.
+    let files = try appLayerSources()
+    #expect(files.count == expectedSourceCount,
+            "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
+
+    var sites: [(file: String, arguments: String)] = []
+    for file in files {
+        let code = swiftCodeWithoutComments(try String(contentsOf: file, encoding: .utf8))
+        for span in argumentSpans(of: "DemotionPolicy(", in: code) {
+            sites.append((file.lastPathComponent, span))
+        }
+    }
+
+    // Anti-vacuity, and this one is not a formality. The app layer built no
+    // policy at all until issue #14 wired the governor, so a scan that found
+    // nothing is indistinguishable from the state this check was written to
+    // leave behind — and every assertion below it would pass over an empty
+    // list for ever.
+    #expect(sites.isEmpty == false, """
+        no app-layer file constructs a DemotionPolicy. Either the governor lost \
+        its production caller, or this scan is reading the wrong files.
+        """)
+
+    for site in sites {
+        for label in optionalProtections {
+            #expect(site.arguments.contains(label), """
+                \(site.file) builds a DemotionPolicy without naming \(label). \
+                That argument defaults to empty, which switches its deny rule \
+                OFF — the frontmost application, a tracked agent, coffee-bar's \
+                own parent shell or coffee-bar's own hook then becomes demotable \
+                the moment a user names it. Only this layer can measure any of \
+                them, so a default here is a protection removed and not a \
+                feature missing.
+                """)
+        }
+    }
+}
+
+@Test func theAppLayerNeverMatchesTheDemotableSetAgainstADisplayName() throws {
+    // DENYLIST, and the rule is "must not DO", so comments are stripped.
+    //
+    // The demotable set is matched against the name the KERNEL reports —
+    // `ProcSnapshot.name`, read through `proc_pidinfo`. AppKit's own names for
+    // the same process are different strings: a user who writes
+    // "Visual Studio Code" is naming what `localizedName` answers, while the
+    // kernel calls that process "Code".
+    //
+    // Named bug this catches: an enumeration that carries the display name
+    // forward and matches on it. `DemotionPolicy` matches EXACTLY, so the miss
+    // is silent and total — nothing is demoted, nothing is logged, and the
+    // user sees a setting they configured doing nothing whatever. A feature
+    // that appears configured and does nothing is worse than one that fails
+    // loudly, because there is no thread to pull.
+    //
+    // Comment stripping is proven LIVE here rather than argued:
+    // `ProcessGovernance.swift`'s own doc comment names `localizedName` while
+    // explaining this trap, so this check reads red on correct code the moment
+    // it stops stripping.
+    let files = try appLayerSources()
+    #expect(files.count == expectedSourceCount,
+            "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
+
+    // Anchor on the file the rule is about. A mis-resolved root scans nothing
+    // and passes every `contains` below.
+    #expect(files.contains { $0.lastPathComponent == "ProcessGovernance.swift" }, """
+        the app-layer scan never reached ProcessGovernance.swift, the one file \
+        that enumerates running applications; it read \(files.count) files
+        """)
+
+    // Every AppKit route to a name that is not the kernel's.
+    // `NSRunningApplication` is the type itself: holding one is what makes the
+    // other two reachable, so the provider hands back pids and stops there.
+    let forbidden = ["localizedName", "bundleIdentifier", "NSRunningApplication"]
+
+    for file in files {
+        let code = swiftCodeWithoutComments(try String(contentsOf: file, encoding: .utf8))
+        for name in forbidden {
+            #expect(!code.contains(name), """
+                \(file.lastPathComponent) names \(name) in CODE. The demotable \
+                set is matched against the name the kernel reports, never a \
+                display name: the two differ ("Code" against "Visual Studio \
+                Code"), the match is exact, and a miss demotes nothing and says \
+                nothing.
+                """)
         }
     }
 }
