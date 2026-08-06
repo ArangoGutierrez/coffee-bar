@@ -91,11 +91,27 @@ body:
         maintainer's username, and a release issue is public.
 
         - [ ] `main` is clean and pushed — `git status -sb` shows no divergence.
-        - [ ] The suite is green against the FINAL commit, not an earlier one:
+        - [ ] The suite is green against the FINAL commit, not an earlier one.
+              Check the exit code, and check the suite count against THIS tree:
               ```
-              swift test
-              # expect: Test run with N tests in 4 suites passed
+              swift test; echo "rc=$?"                    # expect: rc=0
+              grep -rhoE '^@Suite' Tests --include='*.swift' | wc -l
               ```
+              The second command counts the suites the tree declares now, and
+              the `Test run with N tests in M suites passed` line must report the
+              same M. Do NOT compare against a count written into this template.
+              An earlier draft expected 4 suites; #14 took the tree to 11 and the
+              expectation was stale for every release after it.
+        - [ ] The tree compiles from a CLEAN scratch path. Report this
+              separately from the run above — it is a different claim:
+              ```
+              swift build --scratch-path "/tmp/cb-clean-$(date +%s)-$$" --build-tests
+              ```
+              A warm `.build` hid five compile errors during v0.2 while a review
+              certified the tree green six times over. The scratch path carries a
+              timestamp and a PID on purpose: a fixed name lets an earlier run's
+              artifacts be picked up silently, which is the warm-cache failure
+              again under a different directory.
         - [ ] Record the code delta against the previous tag:
               ```
               git diff --name-status vPREV..HEAD -- Sources Package.swift Package.resolved Tests
