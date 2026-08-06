@@ -82,6 +82,25 @@ private func surfaceCode(named name: String) throws -> String {
 /// no version and correctly never should. Scoping that way makes the check fail
 /// on a CORRECT tree, which is worse than not scoping at all: a guard that is
 /// wrong when the code is right teaches people to silence it.
+///
+/// THIS LIST IS THE DESIGNED UPDATE POINT, the same shape as
+/// `expectedAppLayerEntries`. Naming the type buys the scoping above and costs
+/// a maintenance step: a version rendered by a type not listed here reads as
+/// absent.
+///
+/// The concrete case, and it compiles — extract the line into a sibling
+/// top-level `struct VersionFooter: View` in `PreferencesView.swift` and render
+/// `VersionFooter()` from `PreferencesView.body`. The window SHOWS the version
+/// and this guard goes RED, because `PreferencesView.body` no longer names the
+/// seam. That is not exotic: `PanelView.swift` already declares two Views this
+/// way, and Task 5 breaks this window into sections, which is exactly when
+/// somebody extracts one.
+///
+/// THE RIGHT FIX IS TO ADD THE PAIR, never to loosen the assertion. Adding
+/// `(file: "PreferencesView.swift", type: "VersionFooter")` keeps every surface
+/// covered. Widening the check back to the whole file to make the red go away
+/// restores the D3 hole this scoping exists to close — a helper that names the
+/// seam while `body` renders nothing.
 private let versionSurfaces = [(file: "PanelView.swift", type: "PanelView"),
                                (file: "PreferencesView.swift", type: "PreferencesView")]
 
@@ -113,10 +132,24 @@ private let versionSurfaces = [(file: "PanelView.swift", type: "PanelView"),
             version.
             """)
 
+        // The message names the REMEDY, because this check has a legitimate red
+        // that is not a bug in the product: the version moved into another View
+        // in the same file. Someone meeting that red without being told what to
+        // do reaches for the assertion, and deleting it reopens D3.
         #expect(body.block.contains("versionLine(from:"), """
             \(surface.type).body does not render the running version. A helper \
             that names the seam is not enough — the user reads the window, not \
             the file.
+
+            If the version is now rendered by ANOTHER View in \(surface.file) — \
+            a sibling `struct VersionFooter: View`, say — then add that pair to \
+            `versionSurfaces` above: (file: "\(surface.file)", type: "<that \
+            type>"). That is the fix.
+
+            Do NOT delete this expectation and do NOT widen it back to the whole \
+            file. The file-wide form is what an orphaned helper defeats: it names \
+            the seam while `body` renders nothing, and the window shows no \
+            version with the suite green.
             """)
 
         // FILE-WIDE, deliberately, unlike the check above. This one asks whether
@@ -124,6 +157,22 @@ private let versionSurfaces = [(file: "PanelView.swift", type: "PanelView"),
         // `CFBundleShortVersionString` directly is exactly as wrong as `body`
         // doing it — worse, since it is further from the eye. Narrowing this to
         // `body` would lose that and fix nothing.
+        //
+        // A SECOND LATENT INVERSION lives here, and it is worth knowing before
+        // it fires rather than after. This passes today only because the key
+        // sits in exactly one place — `AppVersion.swift:16`,
+        // `static let bundleKey = "CFBundleShortVersionString"` — and neither
+        // scanned file is that one. Fold `AppVersion.display(from:)` into
+        // `PanelView.swift` and this expectation goes RED over a correct tree,
+        // because the surface would then legitimately contain the key it is
+        // being told not to name.
+        //
+        // The remedy then is to keep the key's OWNER out of the scanned
+        // surfaces — that is the invariant, one reader of the stamp — not to
+        // drop this expectation. Same trap as the selector guard in
+        // `AppLayerBoundary_test.swift`: a guard that is wrong on a correct tree
+        // teaches people to silence it, so the reason is recorded here instead
+        // of being rediscovered.
         #expect(!code.contains("CFBundleShortVersionString"), """
             \(surface.file) reads the version key directly instead of using the \
             one seam. Two readings of the stamp can disagree, and \
