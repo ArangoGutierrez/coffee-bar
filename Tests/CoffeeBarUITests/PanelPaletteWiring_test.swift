@@ -58,6 +58,18 @@ func tintIsConfinedToTheHeldSegments() throws {
     let tints = source.components(separatedBy: ".tint(brand(.state))").count - 1
     let pickers = source.components(separatedBy: ".pickerStyle(.segmented)").count - 1
 
+    // The DECLARATIONS, counted separately from the style modifier, and this
+    // pair closes a hole that comment-stripping alone does not.
+    //
+    // `pickers` counts `.pickerStyle(.segmented)`, which is a MODIFIER and not
+    // a control. Comment out a `Picker`'s body and leave its modifiers behind
+    // and they simply chain onto whatever view precedes them — `Text` accepts
+    // `.pickerStyle` and `.labelsHidden()` happily, and it all compiles. Every
+    // other assertion here then holds over a panel with no Serving control at
+    // all: measured GREEN, and still GREEN after the stripping fix, which is
+    // why this is here and not left to the reader.
+    let declared = source.components(separatedBy: "Picker(").count - 1
+
     // A COUNT, not a presence check. One `.tint` on the enclosing VStack would
     // satisfy a `contains` assertion while painting the Quit button and every
     // focus ring roast — the exact regression this replaces.
@@ -79,6 +91,16 @@ func tintIsConfinedToTheHeldSegments() throws {
     #expect(pickers == 1, "expected 1 segmented picker, found \(pickers)")
     #expect(tints == pickers,
             "expected one .tint per segmented picker: \(pickers) pickers, \(tints) tints")
+
+    // Every segmented style must belong to a Picker that is actually declared.
+    // Named bug this catches: the control removed while its modifiers stay,
+    // which every other assertion here reads as a healthy panel.
+    #expect(declared == pickers, """
+        \(pickers) .pickerStyle(.segmented) modifiers but \(declared) Picker( \
+        declarations. A segmented style with no picker under it is a modifier \
+        chained onto whatever view precedes it — the control is gone and the \
+        counts still balance.
+        """)
 
     // The count ALONE is still theater, and this was measured, not reasoned:
     // moving one picker's `.tint` up to the enclosing VStack leaves the
