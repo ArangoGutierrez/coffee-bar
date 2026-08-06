@@ -407,12 +407,12 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
 @MainActor
 @Test func theSuppressionLineSurvivesARecoveryToExactlyTheFloor() {
     // The filter compares the NEWEST reading against the FLOOR. Every other
-    // filter test here latches at 19 with floor 20, or at 20 with floor 20, so
+    // filter test here latches at 14 with floor 15, or at 15 with floor 15, so
     // the latched percent and the floor are either equal or one apart and no
     // reading ever lands between them. That leaves the region
-    // `latched < reading <= floor` — here the single value 20 after a release
-    // at 14 — untested, and it is the only region where the two operands
-    // disagree.
+    // `latched < reading <= floor` — here the single value 15, reached by
+    // recovering from a release at 14 — untested, and it is the only region
+    // where the two operands disagree.
     //
     // Named bug this catches: `percent <= latched` in place of
     // `percent <= floor`. The hold releases at 14%, the battery recovers a
@@ -1910,10 +1910,15 @@ private struct DisagreeingHealth: HookHealthProviding {
     // ever wrote, and 0 is a legitimate percentage — so a fresh install would
     // silently run with no floor at all.
     //
-    // The DISCRIMINATING pair, both read at 10% on battery:
-    //   unset  -> 20, so 10% is at or below the floor and the hold is refused;
+    // The DISCRIMINATING pair, both read at 11% on battery:
+    //   unset    -> 15, so 11% is at or below the floor and the hold is refused;
     //   stored 0 -> bounded to 10, so 11% clears it and the hold stands.
     // A model that folded the two together cannot satisfy both lines.
+    //
+    // The reading is 11 and not 10 BY NECESSITY: the bounded minimum IS 10, so
+    // at a 10% reading `10 <= 10` suppresses under both branches and the pair
+    // collapses into two identical refusals that would pass for a model with no
+    // distinction at all.
     let unset = ServingModel(holder: SpyHolder(),
                              reader: FakeReader(source: .battery, percent: 11),
                              health: fixtureHealth(), settings: FakeSettings())
@@ -2008,21 +2013,38 @@ private struct DisagreeingHealth: HookHealthProviding {
 
 @MainActor
 @Test func everyOfferedFloorSitsInsideThePermittedRange() {
-    // The picker's segments come from `BatteryFloor.choices`, and a choice
-    // outside `BatteryFloor.permitted` is a control position the decision would
-    // silently change under the user: they pick 120, the floor becomes 100, and
-    // the picker then matches no value at all.
+    // What this guard can no longer do, stated so nobody over-trusts it.
+    //
+    // It used to sweep `choices` asserting `permitted.contains(choice)` and
+    // `bounded(choice) == choice`. Those were real while `choices` was the
+    // hand-written literal [10, 20, 30, 40, 50] — the literal could name 120.
+    // `choices` is now DERIVED, `stride` from `permitted.lowerBound` through
+    // `permitted.upperBound`, so both hold BY CONSTRUCTION for every value of
+    // `step` and neither can ever fail. Keeping them would be theater: they
+    // would report coverage this test no longer has. They are deleted rather
+    // than left green, and this paragraph is why their absence is not a gap.
+    //
+    // What the derivation does NOT give for free is below.
     #expect(BatteryFloor.choices.isEmpty == false, "the picker would render no segments")
-    for choice in BatteryFloor.choices {
-        #expect(BatteryFloor.permitted.contains(choice),
-                "\(choice) is offered but not permitted")
-        #expect(BatteryFloor.bounded(choice) == choice,
-                "\(choice) is offered but the decision would change it")
-    }
 
-    // The shipped default has to be reachable from the control, or a user who
-    // moves off it can never get back.
-    #expect(BatteryFloor.choices.contains(BatteryFloor.default))
+    // 1. The most conservative floor must be REACHABLE. `stride(through:)`
+    //    stops short whenever `step` does not divide the range: a step of 7
+    //    offers 10…45, so the user can never pick 50 while the app goes on
+    //    accepting 50 from `defaults write`. The control would then be unable
+    //    to express a floor the product honours, which is the same class of
+    //    defect as a default outside the offered set.
+    #expect(BatteryFloor.choices.last == BatteryFloor.permitted.upperBound,
+            """
+            the control tops out at \
+            \(BatteryFloor.choices.last.map(String.init(describing:)) ?? "nothing"), \
+            but the app accepts floors up to \(BatteryFloor.permitted.upperBound). \
+            `step` (\(BatteryFloor.step)) does not divide the permitted range.
+            """)
+
+    // 2. The shipped default has to be reachable from the control, or a user who
+    //    moves off it can never get back.
+    #expect(BatteryFloor.choices.contains(BatteryFloor.default),
+            "the default \(BatteryFloor.default) is not offered: \(BatteryFloor.choices)")
 }
 
 @MainActor
