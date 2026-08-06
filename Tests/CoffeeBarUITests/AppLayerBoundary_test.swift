@@ -1013,6 +1013,62 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
         """)
 }
 
+@Test func theAppDeclaresTheSettingsSceneThePanelLinksTo() throws {
+    // PRESENCE, the same tripwire shape as the panel affordances below, and the
+    // one thing no other check in this repository can see: the Preferences
+    // window has to be REACHABLE.
+    //
+    // Deleting the `Settings` block still COMPILES. `MenuBarExtra` alone
+    // satisfies `some Scene`, and `main.swift` is top-level code no test target
+    // can import, so nothing else in this package would notice. Measured: the
+    // whole suite stays green while `SettingsLink` goes inert, `⌘,` does
+    // nothing, and the window cannot be opened at all — a window nobody can
+    // open is a window that does not exist, which is the shape issue #13
+    // complains about and the shape `ProcGovernor` shipped in.
+    //
+    // Here rather than in the task that fills the window. Task 5 moves the
+    // panel's controls INTO `PreferencesView`, and its own source scans read
+    // `PreferencesView.swift` — so a scene deleted before then leaves those
+    // scans green over controls sitting in a window nobody can reach. A
+    // tripwire added later lands behind the work it protects.
+    //
+    // COMMENT-STRIPPED, for the reason `thePanelOffersTheQuietOthersControl`
+    // gives: commenting the scene out is the likeliest way it disappears, and
+    // the prose around it in `main.swift` explains the scene at length. A
+    // presence guard that a comment satisfies passes over the deletion it
+    // exists to catch.
+    //
+    // LIMIT, stated rather than hidden: this proves `main.swift` NAMES the
+    // scene in code, never that macOS opens a window. Design §5.4 rules out
+    // asserting on rendered AppKit anything, and the z-order question — whether
+    // the window comes to the front for an `LSUIElement` app — is not visible
+    // to any check in this package.
+    let files = try appLayerSources()
+    #expect(files.count == expectedSourceCount,
+            "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
+
+    let main = try #require(files.first { $0.lastPathComponent == "main.swift" },
+                            "the app layer no longer compiles a main.swift")
+    let code = swiftCodeWithoutComments(try String(contentsOf: main, encoding: .utf8))
+
+    #expect(code.contains("Settings {"), """
+        main.swift declares no Settings scene, so SettingsLink in the panel is \
+        inert and ⌘, does nothing. The Preferences window cannot be opened by \
+        any route. This still compiles: MenuBarExtra alone satisfies some Scene.
+        """)
+
+    // The app's OWN model, not a second one. `PreferencesView(model:)` alone
+    // would be satisfied by `Settings { PreferencesView(model: ServingModel()) }`,
+    // and a second model owns a second listener and a second ticker: a setting
+    // changed in the window would never reach the model enforcing the battery
+    // floor, and the window would show state the panel does not have.
+    #expect(code.contains("PreferencesView(model: model)"), """
+        main.swift's Settings scene does not build PreferencesView from the app's \
+        own model. A second ServingModel owns a second listener and ticker, so \
+        settings changed in the window never reach the model that enforces them.
+        """)
+}
+
 // MARK: - What the app layer must SAY when it builds a demotion policy
 
 @Test func theAppLayerSuppliesEveryOptionalProtectionToDemotionPolicy() throws {
@@ -1942,5 +1998,62 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
         PanelView.swift never reads model.servingSummary in code, so the line \
         telling the user what is held is composed in the view where no check \
         reads it.
+        """)
+}
+
+@Test func thePanelOffersTheRouteToThePreferencesWindow() throws {
+    // PRESENCE, the same tripwire shape as the two checks above and for the
+    // same stated reason: the user has to be able to FIND the setting. The
+    // scene can be declared, the window can be built and every check can be
+    // green while the panel offers no way in — and this panel is the only route
+    // the product ships. An `LSUIElement` app has no Dock icon and no menu bar
+    // of its own, so a user who cannot reach Preferences from here has ⌘, and
+    // nothing else, and nothing tells them that.
+    //
+    // `theAppDeclaresTheSettingsSceneThePanelLinksTo` holds the other half.
+    // Either one alone leaves the feature unreachable: a scene with no link, or
+    // a link with no scene.
+    //
+    // COMMENT-STRIPPED, for the reason `thePanelOffersTheQuietOthersControl`
+    // gives, and this file is the case that proves the need — the block above
+    // records a mutation where a deleted control left a raw-text guard GREEN
+    // because a comment still named it. `PanelView.swift` explains this route
+    // in a comment that names both the API used and the one refused.
+    //
+    // LIMIT, stated rather than hidden: this proves the panel NAMES the link in
+    // code, not that it draws a usable control, and not that the window comes to
+    // the front when clicked. Design §5.4 rules out asserting on rendered AppKit
+    // text; the z-order behaviour is verifiable only by hand.
+    let files = try appLayerSources()
+    #expect(files.count == expectedSourceCount,
+            "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
+
+    let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
+                             "the app layer no longer compiles a PanelView.swift")
+    let code = swiftCodeWithoutComments(try String(contentsOf: panel, encoding: .utf8))
+
+    #expect(code.contains("SettingsLink"), """
+        PanelView.swift offers no SettingsLink, so the panel has no route to the \
+        Preferences window. The scene can be declared and the view built with \
+        every check green while the only affordance the product ships is gone.
+        """)
+
+    // The MECHANISM, not only the presence, because the wrong one fails at
+    // runtime on some releases and compiles on all of them. AppKit's selector
+    // for this window has changed spelling across macOS releases, so
+    // `NSApp.sendAction(Selector(("showSettingsWindow:")))` is a string that
+    // always builds and sometimes works — a silent failure on exactly the
+    // machines the maintainer is not sitting at. `SettingsLink` is the typed
+    // equivalent and needs macOS 14, which is already this package's target.
+    //
+    // This is the assertion that most needs the comment stripping: the refused
+    // selector is spelled out in `PanelView.swift`, in the comment explaining
+    // why it is not used. Over the raw file this expectation would fail on a
+    // correct tree.
+    #expect(!code.contains("showSettingsWindow:"), """
+        PanelView.swift reaches the Preferences window through the string \
+        selector showSettingsWindow:. That spelling has changed across macOS \
+        releases, so it compiles everywhere and works somewhere. SettingsLink is \
+        the typed route and macOS 14 is already the deployment target.
         """)
 }
