@@ -17,11 +17,6 @@
 # WHAT THIS FILE IS FOR. v0.1.1 pushed a tag, then stopped: no release object,
 # the tap left on v0.1.0, and the site still advertising the older version. Each
 # phase below ends with the check that would have caught that.
-#
-# ONE-TIME SETUP STILL NEEDED: the `release` label below does not exist in this
-# repository yet. GitHub applies only labels that already exist, so create it
-# once or the issues open unlabelled:
-#     gh label create release --description "Cutting a release" --color 0E8A16
 
 name: Release checklist
 description: Cut a release without forgetting the release object, the tap, or the site.
@@ -86,16 +81,37 @@ body:
         ```
         git ls-remote --tags origin | grep vX.Y.Z                      # tag pushed?
         gh api repos/ArangoGutierrez/coffee-bar/releases --jq 'length' # release exists?
-        grep 'tags/v' <tap>/Formula/coffee-bar.rb                      # tap version
+        grep 'tags/v' "$(brew --repository ArangoGutierrez/coffee-bar)/Formula/coffee-bar.rb"
         curl -sS https://arangogutierrez.github.io/coffee-bar/ | grep -o '0\.[0-9]*\.[0-9]*'
         ```
 
+        The third line reads the tap through `brew --repository`, which resolves
+        the checkout by name. Never write the absolute path to a local clone into
+        this issue: `noTrackedFileCarriesLiveSessionProse` fails the suite on the
+        maintainer's username, and a release issue is public.
+
         - [ ] `main` is clean and pushed — `git status -sb` shows no divergence.
-        - [ ] The suite is green against the FINAL commit, not an earlier one:
+        - [ ] The suite is green against the FINAL commit, not an earlier one.
+              Check the exit code, and check the suite count against THIS tree:
               ```
-              swift test
-              # expect: Test run with N tests in 4 suites passed
+              swift test; echo "rc=$?"                    # expect: rc=0
+              grep -rhoE '^@Suite' Tests --include='*.swift' | wc -l
               ```
+              The second command counts the suites the tree declares now, and
+              the `Test run with N tests in M suites passed` line must report the
+              same M. Do NOT compare against a count written into this template.
+              An earlier draft expected 4 suites; #14 took the tree to 11 and the
+              expectation was stale for every release after it.
+        - [ ] The tree compiles from a CLEAN scratch path. Report this
+              separately from the run above — it is a different claim:
+              ```
+              swift build --scratch-path "/tmp/cb-clean-$(date +%s)-$$" --build-tests
+              ```
+              A warm `.build` hid five compile errors during v0.2 while a review
+              certified the tree green six times over. The scratch path carries a
+              timestamp and a PID on purpose: a fixed name lets an earlier run's
+              artifacts be picked up silently, which is the warm-cache failure
+              again under a different directory.
         - [ ] Record the code delta against the previous tag:
               ```
               git diff --name-status vPREV..HEAD -- Sources Package.swift Package.resolved Tests
@@ -218,6 +234,11 @@ body:
         Release object. A pushed tag with no release is the worst resting state:
         it is public, and nothing downstream can use it.
 
+        **WARNING — the tag push below turns `main` RED.** The site guard reads
+        the newest tag, so the sidebar becomes wrong the moment the tag lands and
+        stays wrong until phase 5 merges. Have the phase 5 commit written and
+        reviewed BEFORE you tick the push step.
+
         - [ ] Create the signed, annotated tag:
               ```
               git tag -s vX.Y.Z -m "vX.Y.Z — <summary>"
@@ -295,12 +316,40 @@ body:
   - type: textarea
     id: phase5
     attributes:
-      label: Phase 5 — the site
+      label: Phase 5 — the CHANGELOG and the site
       value: |
         The release must exist BEFORE the page advertises it. A download button
         pointing at a release that is not published is a broken promise.
 
-        - [ ] Update the displayed version to `X.Y.Z`.
+        **This phase cannot start before phase 3.** The CHANGELOG header states
+        the rule plainly: a version heading there means a tag exists. So the
+        order is not a preference, it is the file's own contract.
+
+        **WARNING — the tag opens a RED WINDOW on `main`.**
+        `everyPageShowsTheNewestReleasedVersion` compares every page's
+        `<p class="sidebar-version">` against `git tag --sort=-v:refname`. The
+        sidebar may therefore name `vX.Y.Z` only after the tag exists, and until
+        this phase merges the suite FAILS on `main`. Prepare the whole commit —
+        both changelog files, the sidebar version and the download link — BEFORE
+        the tag is pushed in phase 3. Then push the tag and merge this commit
+        back to back, so the window lasts seconds.
+
+        **WARNING — `CHANGELOG.md` and `site/changelog.html` move in ONE commit.**
+        `everyReleaseInTheChangelogIsOnTheChangelogPage` compares the release
+        count in BOTH directions, so a version heading added to one file alone
+        turns the suite RED. The guard keys on the version AND the date, so the
+        two dates must be identical. The pair for 0.1.1 is exactly:
+        ```
+        CHANGELOG.md          ## [0.1.1] — 2026-08-04
+        site/changelog.html   <h2>0.1.1 — 2026-08-04</h2>
+        ```
+
+        - [ ] Add the release to `CHANGELOG.md` AND to `site/changelog.html` in
+              the same commit, carrying the same date on both sides.
+        - [ ] Update `<p class="sidebar-version">` to `vX.Y.Z` on EVERY page, not
+              just the one you were looking at. `everyPageCarriesTheSameSidebar`
+              requires the sidebar to be byte-identical everywhere, so a partial
+              edit fails that guard as well as the version guard above.
         - [ ] Update or add the DMG download link.
         - [ ] **Run the suite by hand before merging the site change.**
               `.github/workflows/pages.yml` checks only that `site/index.html` is
@@ -338,9 +387,12 @@ body:
               ```
               git describe --tags --abbrev=0                                  # vX.Y.Z
               # DMG stamp, from the mounted image in phase 2                   # X.Y.Z
-              grep 'tags/v' <tap>/Formula/coffee-bar.rb                        # tags/vX.Y.Z.tar.gz
+              grep 'tags/v' "$(brew --repository ArangoGutierrez/coffee-bar)/Formula/coffee-bar.rb"
               curl -sS https://arangogutierrez.github.io/coffee-bar/ | grep -o 'X\.Y\.Z'
               ```
+              The tap line expects `tags/vX.Y.Z.tar.gz`. It reads the checkout
+              that `brew` resolves, so run it AFTER the `brew update` in phase 4
+              or it reports the version brew last fetched.
         - [ ] The release object exists and carries the DMG:
               ```
               gh release view vX.Y.Z --repo ArangoGutierrez/coffee-bar --json assets,isDraft \
