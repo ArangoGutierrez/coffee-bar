@@ -167,6 +167,7 @@ private let expectedAppLayerEntries = [
     "Sources/CoffeeBarUI/HookHealthReader.swift",
     "Sources/CoffeeBarUI/MenuBarGlyphs.swift",
     "Sources/CoffeeBarUI/PanelView.swift",
+    "Sources/CoffeeBarUI/PreferencesView.swift",
     "Sources/CoffeeBarUI/ProcessGovernance.swift",
     "Sources/CoffeeBarUI/ServingModel.swift",
 ]
@@ -420,7 +421,13 @@ private func describePackage() throws -> ResolvedPackage {
 /// `#"…"#` strings, all of which are what the scanned targets contain today. A
 /// BARE REGEX LITERAL (`/…/`) would confuse it; the package uses none, and
 /// `swiftCodeWithoutCommentsKeepsCodeAndDropsComments` pins the behaviour.
-private func swiftCodeWithoutComments(_ source: String) -> String {
+///
+/// Internal rather than `private`, which in Swift is scoped to this file.
+/// `PreferencesView_test.swift` needs the same discriminator for the same
+/// reason: the surfaces it scans explain the version seam in prose, so a raw
+/// `contains` there is satisfied by the comment describing the render it
+/// deleted. One tested stripper in this target, not two.
+func swiftCodeWithoutComments(_ source: String) -> String {
     let characters = Array(source)
     var kept: [Character] = []
     kept.reserveCapacity(characters.count)

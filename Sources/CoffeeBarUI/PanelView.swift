@@ -382,6 +382,19 @@ public struct PanelView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+            // The route to the Preferences window, and the only one this panel
+            // offers.
+            //
+            // `SettingsLink` rather than a `Button` that sends an action:
+            // AppKit's selector for this has changed spelling across releases,
+            // so `NSApp.sendAction(Selector(("showSettingsWindow:")))` is a
+            // string that compiles on every OS and works on some. This is the
+            // typed equivalent, and it needs macOS 14 — which is already this
+            // package's deployment target.
+            SettingsLink {
+                Text("Preferences…")
+            }
+
             Button("Quit coffee-bar") { NSApplication.shared.terminate(nil) }
                 .keyboardShortcut("q")
         }

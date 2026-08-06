@@ -119,6 +119,21 @@ struct CoffeeBarMenuBarApp: App {
             MenuBarLabel(isServing: model.isServing)
         }
         .menuBarExtraStyle(.window)
+
+        // The Preferences window, as a `Settings` scene rather than a window
+        // this app opens for itself.
+        //
+        // `Settings` is what puts the standard ⌘, on it and what makes
+        // `SettingsLink` in the panel work at all; it also gives the window one
+        // identity, so the keyboard route and the panel button raise the SAME
+        // window instead of a second copy.
+        //
+        // The same `model` the panel holds, not a second one. Two models would
+        // each own a listener and a ticker, and a setting changed in this
+        // window would not reach the one enforcing the battery floor.
+        Settings {
+            PreferencesView(model: model)
+        }
     }
 }
 
