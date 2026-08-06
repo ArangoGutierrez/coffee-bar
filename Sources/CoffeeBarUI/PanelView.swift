@@ -315,6 +315,21 @@ public struct PanelView: View {
             // carry — a control nobody can find is a control that does not
             // exist, and this one link now stands for all three.
             //
+            // Named precisely, because "they moved" without saying what moved
+            // sends the next reader back to the diff: `holdDisplayAwake`,
+            // `batteryFloorPercent` and `quietEverythingElse` are bound in
+            // `PreferencesView.swift`, not here.
+            //
+            // That sentence is also a FIXTURE, and deliberately so. This file
+            // must not NAME those three in code, and
+            // `eachMovedControlLivesInExactlyOneSurface` holds that by reading
+            // this file COMMENT-STRIPPED. Written raw, its negative half would
+            // fail on this correct tree — the paragraph you are reading is what
+            // would fail it. So this prose is load-bearing twice over: it tells
+            // a reader where the controls went, and it keeps that guard honest,
+            // because swapping the stripped read for a raw one turns the guard
+            // RED instead of quietly widening it.
+            //
             // `SettingsLink` rather than a `Button` that sends an action:
             // AppKit's selector for this has changed spelling across releases,
             // so `NSApp.sendAction(Selector(("showSettingsWindow:")))` is a

@@ -186,11 +186,28 @@ private let versionSurfaces = [(file: "PanelView.swift", type: "PanelView"),
 ///
 /// Read through `surfaceCode(named:)`, so COMMENT-STRIPPED, and that is
 /// load-bearing rather than incidental — the same discriminator the version
-/// guard above rests on. `PanelView.swift` explains each of these controls in
-/// prose several lines long, and the deletion takes the control's comment with
-/// it only if whoever deletes it remembers to. Against raw file text the
-/// negative half would then be satisfied by the explanation of a control that
-/// is gone, or fail over one that is only discussed.
+/// guard above rests on, pointed the other way.
+///
+/// THE INVERSION THIS AVOIDS, which is the third instance of the pattern in
+/// this file's neighbourhood. The version guard was BLIND when read raw: a
+/// comment naming the seam satisfied it while `body` rendered nothing. The
+/// selector guard in `AppLayerBoundary_test.swift` was INVERTED when read raw:
+/// prose describing the thing it forbade turned it red on a correct tree. The
+/// negative half below — `!panel.contains(control)` — is inverted the same way,
+/// because moving a control is exactly when somebody writes a comment in the
+/// old surface saying where it went.
+///
+/// That comment is not hypothetical and this guard is not merely protected from
+/// it — it is PINNED BY IT. `PanelView.swift` names all three of these
+/// properties in the prose beside its `SettingsLink`, deliberately, so that a
+/// raw read here fails. Swap `surfaceCode` for `String(contentsOf:)` and this
+/// guard goes RED on a correct tree rather than silently widening, which is the
+/// difference between a guard that defends the invariant and one that merely
+/// happens to hold today. Measured, not reasoned: that mutation is run in
+/// `.superpowers/sdd/2026-08-06-preferences-window/task-5-report.md` §6.
+///
+/// So the negative half discriminates CODE from PROSE, and both directions are
+/// proven: prose naming the control keeps it green, a real binding turns it red.
 @Test func eachMovedControlLivesInExactlyOneSurface() throws {
     // Named bug this catches: a control left behind in the panel during the
     // move, so the user has two of them and they disagree — or a refactor that
