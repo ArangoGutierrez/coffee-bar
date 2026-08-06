@@ -36,6 +36,7 @@ private final class FakeKernel: ProcessInspecting, DarwinBackgroundSetting, @unc
     private var table: [pid_t: ProcSnapshot]
     private var identities: [pid_t: ProcIdentity]
     private var _calls: [(on: Bool, pid: pid_t)] = []
+    private var _snapshotQueries = 0
     private let result: Int32
 
     init(table: [pid_t: ProcSnapshot], identities: [pid_t: ProcIdentity], result: Int32 = 0) {
@@ -48,7 +49,18 @@ private final class FakeKernel: ProcessInspecting, DarwinBackgroundSetting, @unc
     var demoted: [pid_t] { calls.filter(\.on).map(\.pid) }
     var restored: [pid_t] { calls.filter { !$0.on }.map(\.pid) }
 
-    func snapshot(of pid: pid_t) -> ProcSnapshot? { lock.withLock { table[pid] } }
+    /// How many times the kernel was asked about a process.
+    ///
+    /// `ancestors(of:)` walks the parent chain through this method, so this is
+    /// the number that says whether a tick walked the chain at all.
+    var snapshotQueries: Int { lock.withLock { _snapshotQueries } }
+
+    func snapshot(of pid: pid_t) -> ProcSnapshot? {
+        lock.withLock {
+            _snapshotQueries += 1
+            return table[pid]
+        }
+    }
 
     func identity(of pid: pid_t) -> ProcIdentity? { lock.withLock { identities[pid] } }
 
@@ -79,6 +91,29 @@ private struct FakeApplications: RunningApplicationsProviding {
 
     func runningApplicationPIDs() -> [pid_t] { pids }
     func frontmostApplicationPID() -> pid_t? { frontmost }
+}
+
+/// The same thing, counting what a tick asks the workspace for.
+///
+/// `frontmostApplicationPID()` is the expensive one on a real machine: it is a
+/// call into `NSWorkspace`, and it runs on the 30-second ticker. Counting it is
+/// how `aTickThatRestoresNothingMeasuresNothing` states its rule as a number
+/// rather than as an opinion about cost.
+private final class CountingApplications: RunningApplicationsProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _frontmostQueries = 0
+    private let pids: [pid_t]
+
+    init(pids: [pid_t]) { self.pids = pids }
+
+    var frontmostQueries: Int { lock.withLock { _frontmostQueries } }
+
+    func runningApplicationPIDs() -> [pid_t] { pids }
+
+    func frontmostApplicationPID() -> pid_t? {
+        lock.withLock { _frontmostQueries += 1 }
+        return nil
+    }
 }
 
 // MARK: - The machine every check below runs on
@@ -134,7 +169,12 @@ private struct Fixture {
     ///   - running: what the workspace reports, by pid.
     ///   - frontmost: the application the user is looking at.
     ///   - table: what the kernel says about each pid.
-    init(running: [pid_t], frontmost: pid_t? = nil, table: [ProcSnapshot]) {
+    ///   - applications: supplied only when a check counts what the tick asks
+    ///     the workspace for. `nil` builds the plain `FakeApplications`.
+    ///   - report: where a failure the governance cannot rethrow goes.
+    init(running: [pid_t], frontmost: pid_t? = nil, table: [ProcSnapshot],
+         applications: (any RunningApplicationsProviding)? = nil,
+         report: (@Sendable (String) -> Void)? = nil) {
         var byPID = Dictionary(uniqueKeysWithValues: table.map { ($0.pid, $0) })
         byPID[selfPID] = snapshot(selfPID, "coffee-bar", ppid: parentPID, pgid: selfPGID)
         byPID[parentPID] = snapshot(parentPID, "zsh", ppid: 0, pgid: parentPGID)
@@ -145,18 +185,43 @@ private struct Fixture {
         journalURL = journalPath()
         journal = FileDemotionJournalStore(url: journalURL)
         governance = ProcessGovernance(
-            applications: FakeApplications(pids: running, frontmost: frontmost),
+            applications: applications ?? FakeApplications(pids: running, frontmost: frontmost),
             inspector: kernel,
             journal: journal,
             setter: kernel,
             selfPID: selfPID,
             selfUID: getuid(),
-            selfPGID: selfPGID)
+            selfPGID: selfPGID,
+            report: report ?? { _ in })
     }
 
     func removeJournal() {
         try? FileManager.default.removeItem(at: journalURL.deletingLastPathComponent())
     }
+
+    /// Bytes on the journal path that are not a journal.
+    ///
+    /// `FileDemotionJournalStore.load()` throws `.corrupt` rather than reporting
+    /// "nothing was demoted", deliberately: a record that will not decode still
+    /// proves a run demoted something.
+    func writeCorruptJournal() throws {
+        try FileManager.default.createDirectory(at: journalURL.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try Data("this is not a journal".utf8).write(to: journalURL)
+    }
+}
+
+/// Every line the governance reported, in order.
+///
+/// The shipping default writes to `NSLog`, which no check can read. This is the
+/// seam that makes "reported once" a number instead of a claim.
+private final class Reports: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _messages: [String] = []
+
+    var messages: [String] { lock.withLock { _messages } }
+
+    func append(_ message: String) { lock.withLock { _messages.append(message) } }
 }
 
 /// The demotable process every check below points at.
@@ -536,6 +601,121 @@ private func slackRunning(frontmost: pid_t? = nil) -> Fixture {
         #expect(decision == .quiet)
         #expect(fixture.kernel.demoted == [slackPID],
                 "a working session with no pid did not meet the agent condition")
+    }
+
+    @Test func aTickThatRestoresNothingMeasuresNothing() throws {
+        // The state of EVERY user who never opted in, and it is the state the
+        // ticker is in ~2900 times a day. The demotable set is empty by
+        // default, so `decision` answers `.restore` on every tick and
+        // `reconcile` takes the restore path.
+        //
+        // Named bug this catches: a restore path that builds a `DemotionPolicy`
+        // before it knows whether there is anything to restore. Building one
+        // asks `NSWorkspace` for the frontmost application and walks this
+        // process's parent chain through the kernel — twice the live-state
+        // measurement, every 30 seconds, for a feature nobody switched on.
+        //
+        // The numbers are LITERAL zeroes rather than a comparison with some
+        // other run: the journal is empty, so the correct amount of work is
+        // none. Measured before the guard clause landed: 3 ticks asked
+        // NSWorkspace 3 times and the kernel 6 times — two snapshots per tick,
+        // because the parent-chain walk reads this process and then its parent.
+        let applications = CountingApplications(pids: [slackPID])
+        let fixture = Fixture(running: [slackPID], table: [snapshot(slackPID, "Slack")],
+                              applications: applications)
+        defer { fixture.removeJournal() }
+
+        for _ in 0..<3 {
+            _ = fixture.governance.reconcile(
+                onBattery: true, workingAgentCount: 1, protectedAgentPIDs: [777],
+                demotableNames: [], quietEverythingElse: true)
+        }
+
+        #expect(fixture.kernel.calls.isEmpty,
+                "precondition: the trigger is false, so this tick demotes and restores nothing")
+        #expect(applications.frontmostQueries == 0, """
+            a tick that restores nothing asked NSWorkspace for the frontmost \
+            application. The journal is empty, so there is nothing to undo and \
+            nothing the answer could change.
+            """)
+        #expect(fixture.kernel.snapshotQueries == 0, """
+            a tick that restores nothing walked this process's parent chain. \
+            The chain is only needed to build a policy, and no policy is needed \
+            to undo an empty journal.
+            """)
+    }
+
+    @Test func aJournalThatWillNotDecodeIsReportedOnceAndNotOnEveryTick() throws {
+        // `recover()` throws on a journal it cannot decode, and that is right:
+        // a record that will not decode still proves an earlier run demoted
+        // something, so reading it as "nothing was demoted" would strand those
+        // processes silently. The report cannot be rethrown either — this runs
+        // at launch and on the ticker, and an unreadable journal must not stop
+        // the app.
+        //
+        // Named bug this catches: the report going out on EVERY tick. One
+        // corrupt file then writes the same line about 2900 times a day, for
+        // ever, and the repetition buries every other line in the log —
+        // including the second, different failure a reader needs to see.
+        let reports = Reports()
+        let fixture = Fixture(running: [], table: [],
+                              report: { message in reports.append(message) })
+        defer { fixture.removeJournal() }
+        try fixture.writeCorruptJournal()
+
+        for _ in 0..<5 { fixture.governance.restoreEverythingDemoted() }
+
+        #expect(reports.messages.count == 1, """
+            an unreadable journal was reported \(reports.messages.count) times \
+            for 5 ticks. It is one failure and it is reported once. \
+            The lines were: \(reports.messages)
+            """)
+        #expect(reports.messages.first?.contains("could not restore") == true, """
+            the report does not say what failed: \(reports.messages)
+            """)
+
+        // The entries stay on disk, so the failure is not swallowed along with
+        // its report. `load()` refuses rather than overwriting.
+        #expect(FileManager.default.fileExists(atPath: fixture.journalURL.path),
+                "the unreadable journal was removed, so the evidence is gone")
+    }
+
+    @Test func aFailureThatReturnsAfterAGoodRunIsReportedAgain() throws {
+        // The other half, and without it the fix above is a switch that turns
+        // reporting OFF for the life of the process. A user who repairs the
+        // journal and hits the same trouble a week later would get silence.
+        //
+        // The suppression is EDGE-TRIGGERED on the attempt and reads no message
+        // text. That is a measurement rather than a preference: the first draft
+        // compared the whole message and it did not hold, because
+        // `String(describing:)` of a DecodingError prints the underlying
+        // NSError's UserInfo DICTIONARY and its keys come out in hash order.
+        // Five ticks over ONE unchanged corrupt file reported five times, the
+        // two key orders alternating. `FailureEdge` states the limit that buys.
+        let reports = Reports()
+        let fixture = Fixture(running: [], table: [],
+                              report: { message in reports.append(message) })
+        defer { fixture.removeJournal() }
+
+        try fixture.writeCorruptJournal()
+        fixture.governance.restoreEverythingDemoted()
+        fixture.governance.restoreEverythingDemoted()
+        #expect(reports.messages.count == 1, "precondition: the repeat was suppressed")
+
+        // The user repairs it, and a tick passes with nothing to do.
+        try FileManager.default.removeItem(at: fixture.journalURL)
+        fixture.governance.restoreEverythingDemoted()
+        #expect(reports.messages.count == 1, "a run with nothing to do reported something")
+
+        // And it breaks again.
+        try fixture.writeCorruptJournal()
+        fixture.governance.restoreEverythingDemoted()
+
+        #expect(reports.messages.count == 2, """
+            a failure that came back after a good run was not reported. \
+            Suppressing a REPEAT is not the same as reporting once for ever.
+            The lines were: \(reports.messages)
+            """)
     }
 
     @Test func restoringPromotesNothingTheJournalDoesNotName() throws {

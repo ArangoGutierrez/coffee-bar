@@ -76,6 +76,50 @@ public enum QuietOthersDecision: Equatable, Sendable {
     case restore
 }
 
+/// Reports the FIRST failure of a run of failures, and stays quiet after it.
+///
+/// `ProcessGovernance.restoreEverythingDemoted()` runs on the 30-second ticker,
+/// so a journal file it cannot read reports the same failure about 2900 times a
+/// day for as long as the app runs. Measured at 5 lines for 5 ticks. The signal
+/// is in the FIRST line; every line after it is noise, and the noise buries
+/// whatever is reported next.
+///
+/// **Edge-triggered on the attempt, and NEVER on the message text.** The first
+/// draft compared the whole message and it did not work: `String(describing:)`
+/// of a `DecodingError` prints the underlying `NSError`'s `UserInfo`, which is a
+/// DICTIONARY, so its keys come out in hash order and two reports of one
+/// unchanged file differ. Measured — five ticks over one corrupt file produced
+/// `UserInfo={NSJSONSerializationErrorIndex=1, NSDebugDescription=…}` and
+/// `UserInfo={NSDebugDescription=…, NSJSONSerializationErrorIndex=1}`,
+/// alternating. Any rule keyed on that text is a rule keyed on a hash seed.
+///
+/// LIMIT, stated rather than hidden: two DIFFERENT failures with no successful
+/// attempt between them report once, not twice. That is the price of not keying
+/// on the text. `succeeded()` runs after every attempt that does not throw, so a
+/// failure that returns after a good run is reported again — without it this
+/// would be a switch that turns reporting off for ever.
+/// `aFailureThatReturnsAfterAGoodRunIsReportedAgain` holds that half.
+///
+/// A class inside a `Sendable` struct on purpose. Every copy of a
+/// `ProcessGovernance` then shares ONE box, which is what makes "once" mean once
+/// for the process rather than once per copy — and the struct is copied on every
+/// call, because that is what passing a struct does.
+final class FailureEdge: @unchecked Sendable {
+    private let lock = NSLock()
+    private var failing = false
+
+    /// True when the previous attempt did NOT fail, so this failure is news.
+    func isNews() -> Bool {
+        lock.withLock {
+            defer { failing = true }
+            return failing == false
+        }
+    }
+
+    /// Records an attempt that did not throw, so the next failure is reported.
+    func succeeded() { lock.withLock { failing = false } }
+}
+
 /// The composition root for process demotion.
 ///
 /// **This is the type that makes `ProcGovernor` reachable.** It is in
@@ -122,18 +166,31 @@ public struct ProcessGovernance: Sendable {
     private let selfPID: pid_t
     private let selfUID: uid_t
     private let selfPGID: pid_t
+    private let report: @Sendable (String) -> Void
+
+    /// Shared by every copy of this struct, which is what makes "reported once"
+    /// mean once for the process. Built here rather than injected: it is state
+    /// this type owns, and no caller has anything to say about it.
+    private let reported = FailureEdge()
 
     /// Every default is the REAL implementation, for the reason `ServingModel`'s
     /// listener default is: a null default lets a missing wire ship silently.
     /// The identity values are read once at construction, because none of them
     /// can change for the life of a process.
+    ///
+    /// - Parameter report: where a failure this type cannot rethrow goes. A seam
+    ///   because the alternative is a check that reads Console.app. The message
+    ///   is passed as an ARGUMENT and never as the format string: an error
+    ///   description is text this process did not write, and a `%s` in it would
+    ///   send `NSLog` reading from a pointer that is not there.
     public init(applications: any RunningApplicationsProviding = WorkspaceApplications(),
                 inspector: any ProcessInspecting = SystemProcessInspector(),
                 journal: any DemotionJournalStoring = FileDemotionJournalStore(),
                 setter: any DarwinBackgroundSetting = SystemDarwinBackground(),
                 selfPID: pid_t = getpid(),
                 selfUID: uid_t = getuid(),
-                selfPGID: pid_t = pid_t(getpgrp())) {
+                selfPGID: pid_t = pid_t(getpgrp()),
+                report: @escaping @Sendable (String) -> Void = { NSLog("%@", $0) }) {
         self.applications = applications
         self.inspector = inspector
         self.journal = journal
@@ -141,6 +198,7 @@ public struct ProcessGovernance: Sendable {
         self.selfPID = selfPID
         self.selfUID = selfUID
         self.selfPGID = selfPGID
+        self.report = report
     }
 
     /// Whether to quiet anything right now. Carlos settled these four, and they
@@ -233,13 +291,42 @@ public struct ProcessGovernance: Sendable {
     /// E-cores. `restoringPromotesNothingTheJournalDoesNotName` holds it.
     public func restoreEverythingDemoted() {
         do {
+            // Nothing is recorded, so there is nothing to undo. Deciding that
+            // costs one read of a file that usually does not exist, and it is
+            // the ORDINARY answer: the demotable set is empty by default, so
+            // `reconcile` lands on `.restore` on every one of the ~2900 ticks a
+            // day that every user who never opted in runs.
+            //
+            // Without it, this path builds a `DemotionPolicy` first — which
+            // asks `NSWorkspace` for the frontmost application AND walks this
+            // process's parent chain through the kernel. Measured over 3 idle
+            // ticks before this line existed: 3 workspace queries and 6 kernel
+            // queries, all of them about a journal with nothing in it.
+            // `aTickThatRestoresNothingMeasuresNothing` holds the zeroes.
+            //
+            // `try` and never `try?`. A journal that will not decode must not
+            // read as "nothing was demoted": `FileDemotionJournalStore.load()`
+            // states that rule, and `try?` here would strand every process the
+            // unreadable record names.
+            guard try journal.load()?.entries.isEmpty == false else {
+                reported.succeeded()
+                return
+            }
             try makeGovernor(demotableNames: [], protectedAgentPIDs: []).recover()
+            reported.succeeded()
         } catch {
             // Reported and not rethrown, for the reason `main.swift` catches a
             // refused socket: this runs at launch and on the ticker, and an
             // unreadable journal must not stop the app. The entries stay on
             // disk, so the next run tries again.
-            NSLog("coffee-bar: could not restore demoted processes: \(error)")
+            //
+            // ONCE per distinct failure, and that is why `reported` exists.
+            // This runs on the ticker, so a corrupt journal wrote the same line
+            // every 30 seconds for as long as the app ran — measured at 5 lines
+            // for 5 ticks — and the repetition buries the next, DIFFERENT
+            // failure a reader needs to see.
+            let message = "coffee-bar: could not restore demoted processes: \(error)"
+            if reported.isNews() { report(message) }
         }
     }
 
