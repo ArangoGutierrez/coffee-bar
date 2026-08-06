@@ -190,6 +190,15 @@ policy:
   `batteryFloorPercent` setting**. A root process reading an unprivileged user's
   preferences is a new data flow into a privileged process, and it deserves its
   own review before it exists rather than after.
+- **A thermal or battery abort restores the setting you had, not a safe one.**
+  The revert writes the journal's recorded `priorValue`, which is deliberate:
+  the daemon undoes what it did and never overrides a choice it did not make.
+  The consequence is worth stating plainly, because §8.1 calls thermal pressure
+  the real risk. If you had already set `SleepDisabled` yourself before arming,
+  the abort hands that value back and the machine still refuses to sleep. The
+  abort ends coffee-bar's hold; it is not a thermal safety cutout for the
+  machine, and it is the one case where aborting does not reduce the risk.
+  Clear your own `SleepDisabled` if you want the machine to sleep on heat.
 
 #### Why there is no XPC helper, and what would bring one back
 
