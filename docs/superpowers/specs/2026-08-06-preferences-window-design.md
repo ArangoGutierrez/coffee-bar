@@ -2,7 +2,8 @@
 
 **Date:** 2026-08-06
 **Milestone:** v0.2.1
-**Issues:** #50 (the window and what moves into it), #37 phase 1 (copy the hook snippet)
+**Issues:** #50 (the window and what moves into it), #37 phase 1 (copy the hook
+snippet), #31 (battery floor slider)
 **Base:** `709715d`, measured against `origin/main` on the date above.
 
 ## 1. The problem
@@ -26,6 +27,8 @@ that width with the one thing the panel exists to show.
 | D4 | One scrolling page inside the window, not tabs | Carlos, 2026-08-06 |
 | D5 | The running version appears on EVERY surface, panel and window alike | Carlos, 2026-08-06 |
 | D6 | Tool selection (#51) and the first-run wizard (#52) are v0.2.2, NOT this spec | Carlos, 2026-08-06 |
+| D7 | The battery floor becomes a 10–50 slider in 5% steps, default 15% (#31) | Carlos, 2026-08-06 |
+| D8 | `BatteryFloor.permitted` narrows to `10...50` — the policy meets the control | Carlos, 2026-08-06 |
 
 D1 replaces an earlier proposal for a `TabView` inside the panel. Tab chrome costs
 roughly 28pt of vertical budget and centres itself in 260pt, which argued for
@@ -77,7 +80,7 @@ The panel keeps its 260pt frame. This spec changes no width.
 
 `PreferencesView` is a single scrolling page with four headed sections:
 
-1. **Power** — display hold, battery floor
+1. **Power** — display hold, battery floor (as a slider, §8)
 2. **Focus** — quiet everything else
 3. **Agent tools** — hook health per tool, and the §7 actions
 4. **About** — the version line
@@ -136,7 +139,53 @@ is explicitly out of scope here; #37 records why that decision deserves its own
 scrutiny, having originally been made over a panel HARD-DISSENT that was partly
 upheld.
 
-## 8. What this spec does NOT do
+## 8. Battery floor — a slider, and a narrower policy (#31)
+
+The battery floor control is moving into the Preferences window anyway, so it is
+rebuilt in the same pass rather than moved and then replaced.
+
+| | Today | This release |
+|---|---|---|
+| Control | 5-position segmented picker | slider with a live numeric readout |
+| Offered values | `choices = [10, 20, 30, 40, 50]` | derived, `10...50` by 5 |
+| `BatteryFloor.permitted` | `5...100` | `10...50` |
+| `BatteryFloor.default` | `20` | `15` |
+
+**The policy narrows to meet the control, not the reverse.** #31 was filed on the
+opposite premise — that `PowerBroker.decide` honours a 75% floor no user can ask
+for, so the UI should widen. Carlos decided on 2026-08-06 to close that same gap
+from the other side. A floor above 50% refuses holds through most of a normal
+battery; a floor below 10% fires only once the machine is nearly dead.
+`BatteryFloor.permitted`'s own comment already reasons this way about 0 and 100.
+
+**The step and the default are ONE decision.**
+`everyOfferedFloorSitsInsideThePermittedRange` holds `default` inside `choices`,
+because "a default a user cannot get back to is a setting with no undo". 15 is
+not in `[10, 20, 30, 40, 50]`. A default of 15 without a 5% step turns that guard
+RED. Neither half ships alone.
+
+`choices` is therefore DERIVED from `permitted` and a new `step`, not restated
+beside them. The existing guard then cannot be satisfied by a hand-edited list
+that disagrees with the range.
+
+**Bounding stays where it is — in two places, not one.** `BatteryFloor.bounded`
+is called from `PowerBroker.swift` (`PowerInputs.init`, commented "The ONE place
+a user-supplied floor is bounded") and from `WatchdogDecision.swift`, the #13
+launchd watchdog's own entry path. Narrowing `permitted` changes behaviour at
+both. **The slider adds no third bounding site**: it is constructed over
+`permitted`, so an out-of-range position is unreachable rather than corrected.
+
+**A stored floor above 50 is silently clamped** to 50 on next launch, at both
+entry paths. That is the existing documented behaviour for out-of-range values,
+but it is a migration and the PR body states it rather than letting a user
+discover it.
+
+**Six sites pin the default and all must agree**, or
+`theBatteryFloorStatedIsTheRealDefault` and the site suite go RED:
+`BatteryFloor.swift`, `site/assets/bench.test.js`, `site/index.html`,
+`README.md`, and two lines of `docs/QUICKSTART.md`.
+
+## 9. What this spec does NOT do
 
 Named so a reader cannot infer them from the direction of travel:
 
@@ -147,7 +196,7 @@ Named so a reader cannot infer them from the direction of travel:
 - It does not add update checking. That is #29, v0.2.2.
 - It does not write to any agent tool's settings file.
 
-## 9. Testing
+## 10. Testing
 
 **The constraint that shapes every check here:** M1 design §5.4 rules out
 asserting on rendered AppKit text, and the same limit covers rendered geometry.
@@ -168,7 +217,7 @@ Every guard is mutation-checked before it is trusted: delete the behaviour it
 guards and confirm it goes RED. A guard that stays green when its subject is
 removed is theater and gets rewritten.
 
-## 10. The risk a green suite cannot see
+## 11. The risk a green suite cannot see
 
 `SettingsLink` fires from inside a `MenuBarExtra(.window)` popover, in an app with
 `LSUIElement` set to true — no Dock icon, `.accessory` activation. Two failures
@@ -183,7 +232,7 @@ the result is observed. This project has already paid for that lesson: a demo
 image built 21 hours before the feature commits returned 404 while every unit
 test passed.
 
-## 11. Acceptance
+## 12. Acceptance
 
 - [ ] `Preferences…` appears directly above `Quit coffee-bar` in the panel
 - [ ] `⌘,` opens the same window
@@ -194,4 +243,11 @@ test passed.
 - [ ] Both surfaces show the running version, from one function
 - [ ] Copy and Reveal appear for each unwired tool, and the snippet is derived from `requiredEvents(for:)`
 - [ ] No source file that knows a settings path can write to it
+- [ ] The battery floor is a slider over `10...50` in 5% steps with a live readout
+- [ ] `BatteryFloor.default` is 15 and `choices` is derived from `permitted` and `step`
+- [ ] `everyOfferedFloorSitsInsideThePermittedRange` passes, and still goes RED
+      when the default is moved outside the offered set
+- [ ] All six sites pinning the default agree; `theBatteryFloorStatedIsTheRealDefault` passes
+- [ ] No bounding call is added at the UI layer
+- [ ] The PR body states that a stored floor above 50 is silently clamped
 - [ ] Clean build from a fresh run-scoped scratch path: 0 errors, 0 warnings
