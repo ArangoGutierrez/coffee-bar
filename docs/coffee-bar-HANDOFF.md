@@ -180,10 +180,10 @@ not in it is not available.
 │  │ ProcSampler (2 Hz) │  libproc fallback discovery              │
 │  └────────────────────┘                                          │
 └────────┬──────────────────────────────┬──────────────────────────┘
-         │ XPC (Mach service)           │ writes config
+         │ sudo (root CLI)              │ writes config
          ▼                              ▼
 ┌────────────────────────┐   ┌────────────────────────────────────┐
-│ com.coffeebar.helper   │   │ ~/.claude/settings.json (http hook)│
+│ probewatchdog (root)   │   │ ~/.claude/settings.json (http hook)│
 │ launchd daemon, root   │   │ ~/.codex/hooks.json      (command) │
 │  · SleepDisabled       │   │ ~/.cursor/hooks.json     (command) │
 │  · mdutil / tmutil     │   └────────────────────────────────────┘
@@ -277,7 +277,18 @@ Profiles:
 
 `Aggressive` requires an explicit per-session confirmation, never sticky.
 
-### 5.3 PrivilegedHelper — `com.coffeebar.helper`
+### 5.3 PrivilegedHelper — `com.coffeebar.helper` — SUPERSEDED
+
+> **None of this section shipped. It records the design M5 did NOT build.**
+> Carlos decided on 2026-08-05 that M5 ships as a root CLI (`sudo
+> coffee-bar-probe arm`) plus the launchd daemon `com.coffeebar.probewatchdog`,
+> with no XPC and no `SMAppService`, because the only bundle that ships is
+> ad-hoc signed and the peer pinning below cannot be satisfied on it.
+> `SECURITY.md` is the authoritative bound on what shipped, and
+> `noTargetOnThePrivilegedPathReachesForXPCOrSMAppService` refuses these APIs in
+> code. This section is kept as the record of a road not taken; the verb list
+> below is superseded by `ProbeVerb`, and `heartbeat` in particular never
+> existed.
 
 - Installed via `SMAppService.daemon(plistName:)` (macOS 13+). Do **not** use the deprecated
   `SMJobBless` path.
@@ -593,15 +604,21 @@ Contract:
 
 1. Before setting `SleepDisabled = 1`, the daemon writes `{intent: "sleepDisabled",
    setAt, ttlSeconds, priorValue}` to the journal and `fsync`s.
-2. The app sends `heartbeat()` every 15 s. The daemon runs a 5 s timer.
-3. If `now - lastHeartbeat > 45 s`, or `now - setAt > ttl`, the daemon reverts to `priorValue`,
-   clears the journal, and posts a user notification.
+2. The daemon runs a 5 s timer. **No heartbeat is sent, because M5 shipped with no
+   channel to send one over.** This item used to read "the app sends `heartbeat()`
+   every 15 s", which assumed the XPC design that was abandoned — see `SECURITY.md`.
+   Supervision on the shipped path is **TTL-only**.
+3. If `now - setAt > ttl`, the daemon reverts to `priorValue`, clears the journal,
+   and posts a user notification. `decide()` still carries a `.heartbeatLost`
+   branch and a `heartbeatTimeout`, so a future channel needs no new policy; today
+   nothing feeds them, and `WatchdogService.evaluate` substitutes `now` rather than
+   reverting every armed run within one tick.
 4. The daemon's launchd plist has `KeepAlive` = true and `RunAtLoad` = true. On boot it reads
    the journal; a non-empty journal means an unclean exit, so it reverts unconditionally.
 5. `ttlSeconds` is hard-capped at 8 h regardless of settings.
 
-Test this by `kill -9`-ing the app in CI-adjacent manual QA. It is the acceptance criterion for
-M3.
+Test this by `kill -9`-ing the arming process in CI-adjacent manual QA. It is the acceptance
+criterion for M5.
 
 ### 8.3 Display safety
 
@@ -619,10 +636,15 @@ awake 5 s after lid close, abort the mode and notify. Do not silently cook the b
 | **M0** | Capability probe CLI (`coffee-bar probe`) | Prints a JSON capability report covering S1–S6 on the target machine. No UI. |
 | **M1** | Menu-bar app, assertion only | Holds/releases `PreventUserIdleSystemSleep`; display sleeps normally; `pmset -g assertions` shows coffee-bar as holder; parity with KeepingYouAwake. |
 | **M2** | Claude Code adapter + SessionHub | HTTP ingest live; sessions appear/transition/disappear correctly across a 20-turn session incl. a permission prompt and a `StopFailure`; assertion auto-releases within 5 s of last `Stop`; killing coffee-bar mid-turn does not stall the agent. |
-| **M3** | Helper + lid-closed mode | `SleepDisabled` set/reverted via XPC; display forced off; `kill -9` of the app reverts within 45 s; reboot with dirty journal reverts at load; all §8.1 aborts fire. |
-| **M4** | Codex + Cursor adapters, shim | Shim exits 0 under **every** failure mode, incl. app not running. Two separate bounds, because one number cannot cover both. **Under 50 ms** on the normal path and on every failure that answers at once — no socket, connection refused, unknown `--tool`, empty stdin — measured 9–11 ms each. **About 1 s** when a listener accepts the connection and then never answers, which is the only case that can block at all: `HookShim.totalTimeout` caps the exchange at 1 s and process start-up adds the rest, measured 1.01 s. That ceiling is a tenth of the listener's own 10 s idle timeout, so a wedged listener cannot hold the agent for its timeout on every tool call. Config diffs shown before write; both tools drive state transitions. |
-| **M5** | Power triage + telemetry | Protected/demotable sets enforced; restore-on-exit verified; measured battery delta reported for `Espresso` vs baseline. |
-| **M6** | Token Tap (§15) | OTLP receiver ingests `claude_code.token.usage` and `codex.*` token metrics; per-session and per-repo totals reconcile with `/cost` and `/status` within 2%; zero content bytes persisted; receiver refuses non-loopback binds. |
+| **M3** | Codex + Cursor adapters, shim | Shim exits 0 under **every** failure mode, incl. app not running. Two separate bounds, because one number cannot cover both. **Under 50 ms** on the normal path and on every failure that answers at once — no socket, connection refused, unknown `--tool`, empty stdin — measured 9–11 ms each. **About 1 s** when a listener accepts the connection and then never answers, which is the only case that can block at all: `HookShim.totalTimeout` caps the exchange at 1 s and process start-up adds the rest, measured 1.01 s. That ceiling is a tenth of the listener's own 10 s idle timeout, so a wedged listener cannot hold the agent for its timeout on every tool call. Config diffs shown before write; both tools drive state transitions. |
+| **M5** | Lid-closed mode (root CLI + launchd watchdog) | `SleepDisabled` set by `sudo coffee-bar-probe arm` and reverted by the `com.coffeebar.probewatchdog` daemon — **not** over XPC, which M5 did not build; display forced off; `kill -9` of the arming process still reverts, because the daemon and the TTL are what supervise it; reboot with a dirty journal reverts at load; all §8.1 aborts fire. |
+| **M6** | Power triage + telemetry | Protected/demotable sets enforced; restore-on-exit verified; measured battery delta reported for `Espresso` vs baseline. |
+| **M7** | Token Tap (§15) | OTLP receiver ingests `claude_code.token.usage` and `codex.*` token metrics; per-session and per-repo totals reconcile with `/cost` and `/status` within 2%; zero content bytes persisted; receiver refuses non-loopback binds. |
+
+**The numbering above is the one the issues and `docs/ROADMAP.md` use: #10 is M3,
+#13 is M5, #14 is M6, #15 is M7.** This table previously called lid-closed mode
+M3 and power triage M5, which disagreed with both. M4 is open-source repo
+hygiene; it is tracked in `docs/ROADMAP.md` and carries no acceptance row here.
 
 Ship M1–M3 as `0.1`. M4–M5 are `0.2`. M6 is `0.3` — it is the first feature that
 justifies opening the app when no agent is running.

@@ -104,8 +104,8 @@ while a coding agent works, and lets it sleep when every agent waits on you.
   `awaitingPermission` and `awaitingInput`.
 - Distribution through Homebrew. The tap builds the app from source.
 
-coffee-bar asks macOS for the same power assertions `caffeinate` uses. It needs
-no root, no password, and no kernel extension.
+coffee-bar asks macOS for the same power assertions `caffeinate` uses. v0.1.0
+needs no root, no password, and no kernel extension.
 
 ### Not in this release
 

@@ -18,7 +18,10 @@ import IOKit
 /// `MaxPowerState` is 1 rather than 4, so the wrangler's scale does not carry
 /// over. Retargeting is a design decision for the spike write-up, not
 /// something to guess at here.
-public struct DisplayStateProbe {
+/// `Sendable` because its whole state is one immutable `String`; the IOKit
+/// handles it opens live inside a single call and never outlive it. M5's
+/// `PmsetDisplaySleeper` holds one across the concurrency boundary.
+public struct DisplayStateProbe: Sendable {
     /// Overridable only so the unreadable-registry path can be exercised
     /// deterministically; every caller uses the default.
     private let serviceName: String

@@ -125,11 +125,30 @@ stop signal to an agent tool, and it never answers a prompt for you. A power
 utility that can block your tool calls is a supply-chain risk, so it does not
 have that power.
 
-### It needs no root in v0.1
+### It never elevates its own privilege
 
 v0.1 holds `PreventUserIdleSystemSleep`, an unprivileged
-`IOPMAssertionCreateWithName` call that any user process may make. There is no
-privileged helper, no `LaunchDaemon`, no `sudo` prompt, and no kernel extension.
+`IOPMAssertionCreateWithName` call that any user process may make. v0.1 needed
+no root at all: no privileged helper, no `LaunchDaemon`, no `sudo` prompt, and
+no kernel extension.
+
+**Three of those four promises change in v0.2, and they are restated here rather
+than quietly dropped.** Lid-closed mode installs a `LaunchDaemon` —
+`com.coffeebar.probewatchdog` — and it needs `sudo`. The kernel-extension
+promise does not change: coffee-bar ships no kernel extension and will not.
+
+The one that matters most is the one that does not change either. **coffee-bar
+never elevates its own privilege.** The root path in v0.2 is opt-in, and *you*
+are the one who takes it: you type `sudo coffee-bar-probe arm` in your own
+shell. The app shows no authorization prompt, installs no privileged helper of
+its own, and has no route to becoming root. It cannot elevate itself, and it
+cannot ask you to elevate it.
+
+The menu bar app itself still holds only the unprivileged assertion. It cannot
+arm lid-closed mode, cannot install that daemon, and cannot revert one. It
+prints the command for you to run — the same posture it already takes with hook
+configuration, where it prints the snippet and refuses to write
+`~/.claude/settings.json` for you.
 
 You can see exactly what it holds, at any time, with:
 
@@ -141,34 +160,99 @@ The app's assertion is named `coffee-bar is serving`. The capability probe's is
 named `coffee-bar probe baseline`. The names are deliberately distinct so a
 stranded assertion can be attributed to the code that stranded it.
 
-### What the privileged helper will be allowed to do, once M5 lands
+### What the privileged path may do, now that M5 has shipped
 
-M5 adds a root helper, `com.coffeebar.helper`, so the Mac can stay awake with
-the lid closed. It is not implemented. This policy is the authoritative bound on
-it, and a shipped helper that exceeds any clause below is a vulnerability under
-this policy:
+M5 adds a root path so the Mac can stay awake with the lid closed. It ships as a
+**root CLI plus a launchd watchdog**: you run `sudo coffee-bar-probe arm`, and
+that installs the daemon `com.coffeebar.probewatchdog`, which supervises the
+setting and puts it back. This policy is the authoritative bound on that path,
+and a shipped binary that exceeds any clause below is a vulnerability under this
+policy:
 
-- It is installed through `SMAppService.daemon(plistName:)` on macOS 13 or
-  later, not the deprecated `SMJobBless` path.
-- It listens on an XPC Mach service through `NSXPCListener(machServiceName:)`
-  and pins the protocol with `setCodeSigningRequirement(_:)` on both ends. It
-  rejects any peer that does not match the app's Team ID and bundle ID.
+- **There is no XPC service and no Mach service.** Nothing on the privileged
+  path listens for callers, so there is no peer to authenticate and no other
+  local process that can ask it for anything.
 - Its verbs are a fixed list, and **none of them takes an arbitrary string**.
-  There is no "run this command" and no user-supplied path to execute. The list
-  is: read the S1 and S2 capability results; set `SleepDisabled`; set Spotlight
-  indexing; set Time Machine; heartbeat; read current state. The last three
-  power-triage verbs belong to M6 and arrive with it, not with M5.
-- Every state-mutating verb takes a TTL. A helper that is left holding a setting
-  after the app dies is the failure mode the watchdog exists to prevent.
+  There is no "run this command" and no user-supplied path to execute.
+  The complete verb list is `run`, `arm`, `report`, `revert` and `watchdog`.
+- The program the daemon executes is resolved inside the installer and is never
+  taken from an argument. Accepting one turned `sudo coffee-bar-probe arm` into
+  a one-line root persistence primitive, measured, and the shipped interface
+  cannot express it at all.
+- Every state-mutating verb takes a TTL. `ProbeVerb.defaultTTLSeconds` gives 30
+  minutes when you name none, and `JournalRecord.maxTTLSeconds` caps it at 8
+  hours however much you ask for. A root process still holding a setting after
+  whatever armed it has gone is the failure the watchdog exists to prevent.
+- Supervision is **TTL-only**. There is no heartbeat channel, because there is
+  no channel at all. Nothing cuts a hold short when the work finishes early, so
+  the 30-minute default is deliberately the worst case rather than the cap.
+- The daemon uses the built-in battery floor of 20% and **does not read your
+  `batteryFloorPercent` setting**. A root process reading an unprivileged user's
+  preferences is a new data flow into a privileged process, and it deserves its
+  own review before it exists rather than after.
+- **A thermal or battery abort restores the setting you had, not a safe one.**
+  The revert writes the journal's recorded `priorValue`, which is deliberate:
+  the daemon undoes what it did and never overrides a choice it did not make.
+  The consequence is worth stating plainly, because §8.1 calls thermal pressure
+  the real risk. If you had already set `SleepDisabled` yourself before arming,
+  the abort hands that value back and the machine still refuses to sleep. The
+  abort ends coffee-bar's hold; it is not a thermal safety cutout for the
+  machine, and it is the one case where aborting does not reduce the risk.
+  Clear your own `SleepDisabled` if you want the machine to sleep on heat.
 
-The helper reads a journal file to know what to restore. That file is an
-instruction to a root process, and it is treated as one. Before M5 ships, all
-four of these must hold, and they are recorded in `docs/ROADMAP.md` under
+#### Why there is no XPC helper, and what would bring one back
+
+This section used to require the opposite, and it was written before anything
+was built. The false premise is replaced rather than deleted: the rule it was
+reaching for still stands, and the reasoning is the record of a decision.
+
+What the shipped code does NOT do — each one refused structurally by
+`noTargetOnThePrivilegedPathReachesForXPCOrSMAppService` in
+`Tests/CoffeeBarUITests/AppLayerBoundary_test.swift`:
+
+- coffee-bar registers no `SMAppService` daemon.
+- It opens no `NSXPCListener`, and it publishes no `machServiceName`.
+- It does not use the deprecated `SMJobBless` path either.
+- It cannot pin a peer with `setCodeSigningRequirement(_:)`, and that is the
+  measurement the whole decision turns on.
+
+The only bundle that ships today is built from source by the Homebrew formula,
+so it carries no team identifier and no certificate chain:
+
+```
+$ codesign -dvvv /opt/homebrew/Cellar/coffee-bar/0.1.1/CoffeeBar.app
+Signature=adhoc          TeamIdentifier=not set
+$ codesign -v -R='anchor apple generic' <that app>   ->  rc=1  FAILS
+```
+
+A peer check that cannot be satisfied is not a weaker helper. It is an
+unauthenticated root service that accepts any local caller, which is strictly
+worse than the CLI that shipped — a command you type has exactly one caller, and
+you are it.
+
+There is no route back to the XPC design until two things change: a Developer ID
+certificate, and a signed bundle to attach it to. Until both exist, the peer
+pinning this policy would otherwise demand cannot be met on the one channel that
+users actually have.
+
+The privileged side reads a journal file to know what to restore. That file is
+an instruction to a root process, and it is treated as one. All four of these
+hold in the shipped code, and they are recorded in `docs/ROADMAP.md` under
 "M5 security precondition":
 
-1. The helper verifies that **every** component of the journal path is owned by
-   root and is not group-writable or other-writable, before it reads anything —
-   not only the final file.
+1. Before it reads a single byte, the reader verifies the journal's whole path,
+   not only the final file. **Two different bars apply**, and
+   `GuardedJournalReader` enforces both:
+   - **Every ancestor** is owned by root and is neither group-writable nor
+     other-writable. An ancestor may be `0755`, and that is deliberate rather
+     than lax: `/`, `/Library` and `/Library/Application Support` are all
+     root-owned `0755` in production, so an owner-only rule applied to ancestors
+     would refuse every journal on every Mac.
+   - **The journal's own directory is exactly `0700`**, and nothing looser
+     passes. The journal file is exactly `0600`, and nothing looser passes. A
+     `0755` directory is refused; so is a `0640` file, which is unwritable by
+     anyone else and still leaks the `armedBy` provenance to every account on
+     the machine.
 2. The helper refuses to act on a journal it did not write, or one whose
    ownership or mode does not match expectation, and quarantines it instead.
 3. The privileged side creates the directory and the file with explicit modes
@@ -185,13 +269,37 @@ file's mode rather than the destination's, so a journal an earlier build left
 `Tests/CoffeeBarPowerTests/JournalStore_test.swift` asserts all of this with
 `stat(2)`, after the create path and after the replace path.
 
-One gap stays open on purpose. The store pins the mode of a directory it
-*creates*; it does not chmod a directory that already exists. An unprivileged
-process that repairs a path another user may control is not a fix, and item 1
-puts that check on the reader instead. So a journal directory an earlier build
-left 0755 keeps that mode, and the M5 helper must refuse it rather than assume
-the writer corrected it. If you are reading this after M5 shipped and item 1 or
-item 3 is not true of the code, that is a vulnerability. Report it.
+One gap stays open on purpose, and the reader is what closes it. The store pins
+the mode of a directory it *creates*; it does not chmod a directory that already
+exists. An unprivileged process that repairs a path another user may control is
+not a fix, and item 1 puts that check on the reader instead. So a journal
+directory an earlier build left 0755 keeps that mode — and `GuardedJournalReader`
+refuses it rather than assume the writer corrected it.
+
+**This document used to contradict itself here, and the shipped code follows the
+stricter reading.** Item 1 asked only that every component be root-owned and not
+group- or other-writable, which a `0755` directory satisfies, while this
+paragraph demanded that the helper refuse exactly that. Item 1 now states the
+rule the code enforces, so the two agree. If item 1 or item 3 is not true of the
+code you are reading, that is a vulnerability. Report it.
+
+#### What refusing a journal costs you
+
+A journal that fails these checks is refused, and refusing it has a price you
+should be able to find before you meet it. The privileged side **discards the
+journal's `priorValue`** — untrusted data cannot be allowed to name the value a
+root process restores — and forces `SleepDisabled` to `false` instead.
+
+**If you had genuinely set `disablesleep` yourself, you lose that setting.**
+That is the deliberate direction. Refusing to trust the file cannot mean leaving
+the machine awake for ever, which is the exact failure the watchdog exists to
+prevent, and an untrusted file cannot tell us which of the two you wanted. Until
+now this cost was recorded only in code comments and in a line on standard error
+that launchd captures, which is not somewhere a user looks.
+
+The refused journal is quarantined rather than deleted. It still proves
+something was armed, and it is the only evidence of why a machine stopped
+sleeping, so it is renamed and left for you to find.
 
 ## Things that are not vulnerabilities
 

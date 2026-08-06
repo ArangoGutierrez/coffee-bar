@@ -1756,7 +1756,7 @@ private struct DisagreeingHealth: HookHealthProviding {
 
     model.intent = .serve
 
-    let decided = try? #require(model.desired)
+    let decided = model.desired
     #expect(decided?.displaySleepAssertion == true)
     #expect(spy.displaySleepRequests.last == decided?.displaySleepAssertion)
 }

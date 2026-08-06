@@ -290,6 +290,60 @@ public final class ServingModel {
         return "\(opening) \(refusal)"
     }
 
+    /// The command that arms lid-closed mode.
+    ///
+    /// The verb comes from `ProbeVerb.arm` rather than being typed here. A
+    /// literal drifts the moment the verb is renamed, and the drift lands on
+    /// the user at the worst possible moment: they have already typed `sudo`,
+    /// and the binary answers with a usage error.
+    public static let lidClosedCommand = "sudo coffee-bar-probe \(ProbeVerb.arm.rawValue)"
+
+    /// The command that prints what is currently armed.
+    ///
+    /// `report` is a root verb for a reason worth repeating here: the journal
+    /// it prints is a root-owned `0600` file inside a `0700` directory, so an
+    /// unprivileged read cannot open it at all.
+    public static let lidClosedReportCommand =
+        "sudo coffee-bar-probe \(ProbeVerb.report.rawValue)"
+
+    /// The paragraph the panel shows about lid-closed mode.
+    ///
+    /// **The panel cannot show whether the mode is armed, and this is measured
+    /// rather than assumed.** `FileJournalStore.systemURL` lives in a directory
+    /// `GuardedJournalReader` requires to be exactly `0700` and root-owned.
+    /// Measured on macOS 26.5.2 as uid 502 against `/var/root`, a root-owned
+    /// directory this process has no execute bit on: `stat(2)` on a path inside
+    /// it fails EACCES, and so does `open(2)`. The app cannot read the journal,
+    /// cannot read its mode, and cannot even learn whether it exists.
+    ///
+    /// Issue #13 asked for a state display. Widening the journal's modes to
+    /// provide one was rejected: those modes are the security property that
+    /// makes a root process safe to hand a file, and they outrank a nicer
+    /// panel. So this states the limit instead of inventing a reading, and
+    /// names the command that CAN answer the question.
+    ///
+    /// **A STATIC, and always shown.** Every other advisory here is optional
+    /// and silent when it has nothing to report — but silence is exactly what
+    /// this one cannot afford. There is no signal to condition it on, and a
+    /// panel that said nothing would read as "lid-closed mode is off", which is
+    /// a claim this app has no evidence for. It is also the only route the user
+    /// has to a capability with no control in this window.
+    ///
+    /// It offers no control, deliberately. coffee-bar never elevates its own
+    /// privilege (SECURITY.md, design §6.3), so the user runs the command in
+    /// their own shell — the same posture the product takes with hooks, where
+    /// it prints the snippet and refuses to write `~/.claude/settings.json`.
+    /// `theAppLayerNeverReachesForPrivilegeEscalation` refuses the alternative
+    /// structurally.
+    public static let lidClosedAdvisory =
+        "Lid-closed mode keeps the Mac awake with the lid shut. It needs root, "
+        + "and coffee-bar never elevates its own privilege, so you run it "
+        + "yourself: \(lidClosedCommand). That holds for "
+        + "\(ProbeVerb.defaultTTLSeconds / 60) minutes by default, and a launchd "
+        + "watchdog puts the setting back. coffee-bar cannot show you whether it "
+        + "is armed — the journal belongs to root and this app runs as you. Run "
+        + "\(lidClosedReportCommand) to find out."
+
     /// The one line the panel shows about the battery floor, or `nil` for no
     /// line.
     ///

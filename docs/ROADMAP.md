@@ -25,7 +25,7 @@ is even viable on current macOS.
 | **M2** | Claude Code adapter + SessionHub. HTTP ingest, session state machine, wake bound to agent state | v0.1 |
 | **M3** | Codex + Cursor adapters + `coffeebar-hook` shim | v0.2 |
 | **M4** | Open-source repo hygiene — see M4 scope below | **v0.1 — cut here** |
-| **M5** | Privileged helper + lid-closed mode (`SleepDisabled`, XPC, journal watchdog) | v0.2 |
+| **M5** | Lid-closed mode — root CLI (`sudo coffee-bar-probe arm`), `SleepDisabled`, launchd watchdog, guarded journal. No XPC | v0.2 |
 | **M6** | Power triage + telemetry (protected/demotable sets, restore-on-exit) | v0.2 |
 | **M7** | Token Tap — local OTLP token accounting (handoff §15) | v0.3 |
 
@@ -34,8 +34,8 @@ is even viable on current macOS.
 **DECIDED 2026-07-28 — v0.1 is M1 + M2 + M4.** M3 moves to v0.2.
 
 A user can `brew install` it, launch it, and have their Mac stay awake exactly while an
-agent is working — with the screen off — and see which sessions need attention. No
-password prompt, no root, no kernel flags, no App Store.
+agent is working — with the screen off — and see which sessions need attention.
+v0.1 needs no password prompt, no root, no kernel flags, and no App Store.
 
 Concretely:
 
@@ -85,7 +85,7 @@ The release-readiness milestone. v0.1 is cut on its completion.
 | **Issue templates** | `.github/ISSUE_TEMPLATE/` — bug report, feature request, config `blank_issues_enabled: false`. Bug template must collect macOS build, hardware model, coffee-bar version, and which agent tool — the fields every triage otherwise costs a round trip to obtain. |
 | **PR template** | `.github/pull_request_template.md` — problem, approach, testing done, breaking changes, `Closes #N`. |
 | **CONTRIBUTING.md** | Build from source, run tests, TDD expectation, `_test.swift` naming rule and why, DCO sign-off + GPG signing requirement, conventional commit format, how to run the capability probe. |
-| **SECURITY.md** | Private disclosure route, supported versions, explicit scope statement: coffee-bar reads agent metadata only and never transcript contents (handoff §12), makes no network egress, and — once M5 lands — what the privileged helper may do. |
+| **SECURITY.md** | Private disclosure route, supported versions, explicit scope statement: coffee-bar reads agent metadata only and never transcript contents (handoff §12), makes no network egress, never elevates its own privilege, and — now that M5 has landed — what the opt-in root path may do and what refusing a journal costs. |
 | **README** | Optimised for both search and generative-engine retrieval. See below. |
 | **CI** | GitHub Actions, minimal but real: `swift build`, `swift build -c release`, `swift test`. Least-privilege `permissions:`, `timeout-minutes`, `concurrency` with `cancel-in-progress`, actions pinned by SHA rather than moving tags. |
 | **Repo description** | Short GitHub description + topics, consistent with the README's positioning. |
@@ -128,25 +128,32 @@ measurement harness has produced them.
 
 ## M5 security precondition — the journal is an instruction to a root process
 
-Found during M0 Task 5 (2026-07-27) and recorded before M5 inherits it.
+Found during M0 Task 5 (2026-07-27), recorded before M5 inherited it, and
+**satisfied by the code M5 shipped on 2026-08-05**.
 
 `FileJournalStore` writes to `/Library/Application Support/coffee-bar/state/`,
-measured at **0755 directories, 0644 journal**. Nothing currently pins those modes
-or verifies that every component of the path is root-owned.
+measured in M0 at **0755 directories, 0644 journal**, with nothing pinning those
+modes and nothing verifying that every component of the path was root-owned.
 
-That is harmless in M0, where the probe runs as the user and only affects itself.
-It stops being harmless in M5. There, a **root** helper reads that file and acts on
-it: the journal says "restore `SleepDisabled` to `priorValue`", and the helper does
+That was harmless in M0, where the probe runs as the user and only affects itself.
+It stops being harmless in M5. There, a **root** process reads that file and acts on
+it: the journal says "restore `SleepDisabled` to `priorValue`", and the daemon does
 it. A file a non-root process can create or modify is therefore an instruction
 channel into a privileged process.
 
 Concrete failure: if the directory does not exist and an unprivileged process
-creates the path first, it owns the file the root helper will later trust.
+creates the path first, it owns the file the root daemon will later trust.
 
-Binding requirements for M5, none of which are satisfied today:
+Binding requirements for M5. All four are now enforced — items 1 and 2 by
+`GuardedJournalReader`, item 3 by `FileJournalStore`, item 4 by treating
+`armedBy` as forensics and never as authentication:
 
-1. The helper verifies **every** component of the journal path is owned by root
-   and not group/other-writable, before reading — not just the leaf.
+1. The reader verifies **every** component of the journal path is owned by root
+   and not group/other-writable, before reading — not just the leaf. Ancestors
+   may be `0755`, because `/`, `/Library` and `/Library/Application Support` all
+   are in production. **The journal's own directory is checked to exactly `0700`
+   and the journal file to exactly `0600`**, which is the stricter bar the leaf
+   needs and the ancestors cannot carry.
 2. The helper refuses to act on a journal it did not write, or whose ownership or
    mode does not match expectation, and quarantines it instead.
 3. Directory and file are created by the **privileged** side with explicit modes
@@ -155,9 +162,10 @@ Binding requirements for M5, none of which are satisfied today:
    forensics, not authentication**. It is attacker-controlled data in this threat
    model.
 
-This is a design precondition, not a code review nit: it must be true before the
-helper reads its first journal, because the whole point of the helper is that it
-does something the user cannot.
+This is a design precondition, not a code review nit: it had to be true before the
+privileged side read its first journal, because the whole point of that side is
+that it does something the user cannot. `SECURITY.md` carries the same four items
+as the policy a reader is held to, and states the cost of a refusal.
 
 ## The release job and `main` — DECIDED 2026-07-28
 

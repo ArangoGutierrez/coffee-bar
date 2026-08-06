@@ -114,6 +114,18 @@ private let coreLayerTargets = [
     "CoffeeBarCore",
 ]
 
+/// The privileged CLI. Linked into `coffee-bar-probe`, never into `coffee-bar`.
+///
+/// It is deliberately NOT added to the three lists above. Those are unioned
+/// into the `linked == scanned` assertion in
+/// `everyTargetLinkedIntoTheBinaryIsContentScanned`, and this target is not in
+/// the app binary's closure — adding it there would turn a correct tree red.
+/// It is scanned by `noTargetOnThePrivilegedPathReachesForXPCOrSMAppService`,
+/// which is the one rule it has to answer for.
+private let probeLayerTargets = [
+    "CoffeeBarProbe",
+]
+
 /// The ONE file entitled to create a display assertion, and the ONE symbol it
 /// may name in code.
 ///
@@ -955,6 +967,129 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     }
 }
 
+// MARK: - The privileged path M5 chose, and the two it did not
+
+@Test func noTargetOnThePrivilegedPathReachesForXPCOrSMAppService() throws {
+    // Carlos's M5 decision, made structural. It is a SECURITY property, not a
+    // preference, and the measurement that forced it is this:
+    //
+    //   codesign -dvvv <the shipped CoffeeBar.app>
+    //     Signature=adhoc          TeamIdentifier=not set
+    //   codesign -v -R='anchor apple generic' <same>   -> rc=1
+    //
+    // SECURITY.md "It cannot pin a peer" requires an XPC helper to pin its peer with
+    // `setCodeSigningRequirement` and to reject any peer that does not match
+    // the app's Team ID and bundle ID. The only bundle that ships today is
+    // built from source by the Homebrew formula and carries no Team ID and no
+    // certificate chain, so that requirement cannot be met on the one channel
+    // that exists. An XPC listener whose peer check cannot be satisfied is not
+    // a weaker helper — it is an unauthenticated root service.
+    //
+    // So M5 ships as a root CLI plus a launchd watchdog, and this refuses the
+    // two constructs that would quietly reintroduce the problem. Named bug it
+    // catches: an `NSXPCListener(machServiceName:)` added to the probe or to
+    // the app, which would compile, run, and accept any local peer.
+    //
+    // `SMJobBless` is here too though nothing has ever used it: it is the
+    // deprecated path SECURITY.md already rules out, and a search for "how do I
+    // install a privileged helper" finds it first.
+    //
+    // Comments are stripped, deliberately. `LidClosedSession.swift`,
+    // `CoffeeBarProbe/main.swift` and `LaunchDaemonInstaller.swift` all NAME
+    // these APIs in prose to explain why they are not used, and that prose is
+    // the reasoning nobody should delete. Naming one in a comment is required;
+    // calling one is what this refuses.
+    let targets = try linkedClosure(fromTarget: "CoffeeBarApp").sorted()
+        + probeLayerTargets
+    let files = try sources(ofTargets: targets)
+
+    // Positive controls. A scan that missed either of these would pass
+    // vacuously — and the probe is the target this rule exists for, so its
+    // absence must fail rather than shrug.
+    #expect(files.contains { $0.path.hasSuffix("Sources/CoffeeBarProbe/main.swift") }, """
+        the scan never reached the privileged CLI's entry point; it read \
+        \(files.count) files across \(targets.count) targets
+        """)
+    #expect(files.contains { $0.lastPathComponent == "LidClosedSession.swift" }, """
+        the scan never reached LidClosedSession.swift, which owns the arm and \
+        watchdog paths
+        """)
+
+    let forbidden = [
+        "SMAppService",
+        "SMJobBless",
+        "NSXPCListener",
+        "NSXPCConnection",
+        "setCodeSigningRequirement",
+        "machServiceName",
+    ]
+
+    for file in files {
+        let code = swiftCodeWithoutComments(try String(contentsOf: file, encoding: .utf8))
+        for name in forbidden {
+            #expect(!code.contains(name), """
+                \(file.lastPathComponent) names \(name) in CODE. M5 ships as a \
+                root CLI plus a launchd watchdog: the shipped bundle is ad-hoc \
+                signed with no Team ID, so the peer pinning SECURITY.md \
+                requires cannot be satisfied and an XPC service would accept \
+                any local peer. A comment may explain the choice; making the \
+                call is what this refuses.
+                """)
+        }
+    }
+}
+
+@Test func theAppLayerNeverReachesForPrivilegeEscalation() throws {
+    // Design §6.3 and SECURITY.md's "It never elevates its own privilege".
+    //
+    // M5 put a root path in this product for the first time, and the whole
+    // safety of it rests on WHO takes that path: the user types
+    // `sudo coffee-bar-probe arm` in their own shell. An app that could elevate
+    // itself would turn an opt-in root action into one a menu bar click
+    // performs, which is the design SECURITY.md rules out — and the policy now
+    // promises it to readers, so this is a commitment rather than a preference.
+    //
+    // Named bug this catches: an "Arm lid-closed mode" button wired to
+    // `AuthorizationExecuteWithPrivileges`, or to a `Process` running
+    // `/usr/bin/sudo`. Both compile, both work, and every other check in this
+    // file stays green — the app layer's existing denylist is about DISPLAY
+    // assertions and knows nothing about privilege.
+    //
+    // The word `sudo` is deliberately ABSENT from the list. `ServingModel`
+    // prints `sudo coffee-bar-probe arm` for the user to run, which is the
+    // shipped design, and `swiftCodeWithoutComments` keeps string literals — so
+    // banning the word would be red on exactly the correct code. What is banned
+    // is EXECUTING with elevated privilege, not naming the command.
+    let files = try appLayerSources()
+    #expect(files.count == expectedSourceCount,
+            "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
+
+    let forbidden = [
+        "AuthorizationCreate",              // and AuthorizationCreateFromExternalForm
+        "AuthorizationExecuteWithPrivileges",
+        "AuthorizationRef",
+        "SMAppService",                     // registers a daemon from the app bundle
+        "SMJobBless",
+        "STPrivilegedTask",
+        "setuid",
+        "seteuid",
+        "launchctl",                        // loading a daemon is the daemon's install path
+        "NSAppleScript",                    // "with administrator privileges"
+    ]
+
+    for file in files {
+        let code = swiftCodeWithoutComments(try String(contentsOf: file, encoding: .utf8))
+        for name in forbidden {
+            #expect(!code.contains(name), """
+                \(file.lastPathComponent) names \(name) in CODE. coffee-bar never \
+                elevates its own privilege: the root path is opt-in and the user \
+                runs it themselves. The app prints the command and does not run \
+                it. A comment may name the API; calling one is what this refuses.
+                """)
+        }
+    }
+}
+
 // MARK: - Network egress
 
 @Test func noLinkedTargetCanReachTheNetworkByAddress() throws {
@@ -1164,21 +1299,27 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // package can watch the panel draw a line.
     //
     // LIMIT, stated rather than hidden: this proves the panel NAMES the
-    // property, not that it renders what it reads. A mention inside a comment
-    // would satisfy it. It is a tripwire against deleting the render, not proof
-    // the render is correct.
+    // property in CODE, not that it renders what it reads. It is a tripwire
+    // against deleting the render, not proof the render is correct.
     let files = try appLayerSources()
     #expect(files.count == expectedSourceCount,
             "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
 
     let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
                              "the app layer no longer compiles a PanelView.swift")
-    let source = try String(contentsOf: panel, encoding: .utf8)
 
-    #expect(source.contains("model.hookAdvisory"), """
-        PanelView.swift never reads model.hookAdvisory, so the hook health \
-        check reaches the user nowhere. Render it, or delete the property and \
-        the checks that assert its text.
+    // CODE, never the raw file, for the reason `2247ae4` records on the
+    // lid-closed check below. Proven here by the same mutation: replacing a
+    // render with a comment that NAMES the property left the raw-file version
+    // of this check green, so the tripwire could be walked past by anyone who
+    // documented what they deleted.
+    let code = swiftCodeWithoutComments(try String(contentsOf: panel, encoding: .utf8))
+
+    #expect(code.contains("model.hookAdvisory"), """
+        PanelView.swift never reads model.hookAdvisory in code, so the hook \
+        health check reaches the user nowhere. Render it, or delete the \
+        property and the checks that assert its text. A comment naming the \
+        property does not satisfy this.
         """)
 }
 
@@ -1195,27 +1336,38 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // which is exactly what commit 5116326 did to the hook advisory.
     //
     // Same LIMIT as above, stated rather than hidden: this proves the panel
-    // NAMES both members, not that it renders them, and not that a click opens
-    // anything. A mention inside a comment would satisfy it. M1 design §5.4
-    // forbids asserting on rendered AppKit text, so no check in this package
-    // can watch the panel draw. A human look is still the only proof of that.
+    // NAMES both members IN CODE, not that it renders them, and not that a
+    // click opens anything. M1 design §5.4 forbids asserting on rendered AppKit
+    // text, so no check in this package can watch the panel draw. A human look
+    // is still the only proof of that.
     let files = try appLayerSources()
     #expect(files.count == expectedSourceCount,
             "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
 
     let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
                              "the app layer no longer compiles a PanelView.swift")
-    let source = try String(contentsOf: panel, encoding: .utf8)
 
-    #expect(source.contains("PanelView.legalLine()"), """
-        PanelView.swift composes legalLine() but renders it nowhere, so the \
-        licence and the no-warranty statement reach the user nowhere. Render \
-        it, or delete the member and the checks that assert its text.
+    // CODE, never the raw file. The raw version of this check said of itself
+    // that "a mention inside a comment would satisfy it", and that was measured
+    // rather than feared: replacing the whole `Link(...)` render with a comment
+    // naming both members left this check GREEN with zero `Link(` in the file.
+    // The legal surface was off the product and the guard reported it present —
+    // the exact hole the three checks above carried, and the one `2247ae4`
+    // first fixed. It matters most here, because this line is the only route
+    // from a DMG install to the terms and the no-warranty statement.
+    let code = swiftCodeWithoutComments(try String(contentsOf: panel, encoding: .utf8))
+
+    #expect(code.contains("PanelView.legalLine()"), """
+        PanelView.swift composes legalLine() but renders it nowhere in code, so \
+        the licence and the no-warranty statement reach the user nowhere. \
+        Render it, or delete the member and the checks that assert its text. A \
+        comment naming the member does not satisfy this.
         """)
-    #expect(source.contains("PanelView.legalURL()"), """
-        PanelView.swift composes legalURL() but renders it nowhere, so the \
-        panel offers no route to the terms page. Render it, or delete the \
-        member and the checks that assert it.
+    #expect(code.contains("PanelView.legalURL()"), """
+        PanelView.swift composes legalURL() but renders it nowhere in code, so \
+        the panel offers no route to the terms page. Render it, or delete the \
+        member and the checks that assert it. A comment naming the member does \
+        not satisfy this.
         """)
 }
 
@@ -1234,23 +1386,76 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // a dead socket ships under a panel that looks healthy.
     //
     // Same LIMIT as above, stated rather than hidden: this proves the panel
-    // NAMES each property, not that it renders it correctly. A mention in a
-    // comment would satisfy it. It is a tripwire against deleting the render.
+    // NAMES each property in CODE, not that it renders it correctly. It is a
+    // tripwire against deleting the render.
     let files = try appLayerSources()
     #expect(files.count == expectedSourceCount,
             "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
 
     let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
                              "the app layer no longer compiles a PanelView.swift")
-    let source = try String(contentsOf: panel, encoding: .utf8)
+
+    // CODE, never the raw file. Same reason as the check above: these three
+    // properties are each named in the prose around their own render, so a raw
+    // read cannot tell a live render from a note about one.
+    let code = swiftCodeWithoutComments(try String(contentsOf: panel, encoding: .utf8))
 
     for property in ["model.attention", "model.workingSummary", "model.ingestAdvisory"] {
-        #expect(source.contains(property), """
-            PanelView.swift never reads \(property), so what the model computes \
-            for it reaches the user nowhere. Render it, or delete the property \
-            and the checks that assert its value.
+        #expect(code.contains(property), """
+            PanelView.swift never reads \(property) in code, so what the model \
+            computes for it reaches the user nowhere. Render it, or delete the \
+            property and the checks that assert its value. A comment naming the \
+            property does not satisfy this.
             """)
     }
+}
+
+@Test func thePanelTellsTheUserHowToArmLidClosedMode() throws {
+    // The same tripwire as the three checks above, for issue #13's panel half.
+    //
+    // Lid-closed mode is the one capability with NO control in this panel, and
+    // that is deliberate: it needs root, and coffee-bar never elevates its own
+    // privilege. What is left is telling the user the command — so if
+    // `PanelView` never reads the property, the feature reaches the user
+    // nowhere at all and the app simply has no lid-closed mode as far as anyone
+    // can tell.
+    //
+    // The property carries the command AND the statement that this app cannot
+    // read whether the mode is armed. Both halves matter and they are one
+    // property for that reason; see
+    // `theLidClosedAdvisoryCarriesBothTheCommandAndWhatTheAppCannotSee`.
+    //
+    // Same LIMIT as the checks above, stated rather than hidden: this proves
+    // the panel NAMES the property, not that it renders it. M1 design §5.4
+    // forbids asserting on rendered AppKit text.
+    let files = try appLayerSources()
+    #expect(files.count == expectedSourceCount,
+            "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
+
+    let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
+                             "the app layer no longer compiles a PanelView.swift")
+
+    // CODE, never the raw file. A mutation caught this: deleting the whole
+    // `Text(ServingModel.lidClosedAdvisory)` render and its modifier chain left
+    // this check GREEN, because the doc comment sitting above that render also
+    // names the property. The guard was reading its own explanation and
+    // reporting the feature present. Stripping comments first is what makes it
+    // discriminate; `swiftCodeWithoutComments` keeps string literals, and the
+    // render is code, so the correct tree stays green.
+    let code = swiftCodeWithoutComments(try String(contentsOf: panel, encoding: .utf8))
+
+    // `ServingModel.lidClosedAdvisory` rather than `model.lidClosedAdvisory`:
+    // the sentence depends on no instance state — only on `ProbeVerb` — so it
+    // is a static, exactly like `ServingModel.displayLabel`. Requiring the
+    // instance spelling would have forced a property that ignores its own
+    // instance, which reads as though the panel were reporting live state. It
+    // is not, and that is the whole point of this surface.
+    #expect(code.contains("ServingModel.lidClosedAdvisory"), """
+        PanelView.swift never reads ServingModel.lidClosedAdvisory in code, so \
+        the only route a user has to lid-closed mode — the command to run — \
+        reaches them nowhere. Render it, or delete the property and the checks \
+        on its text. A comment naming the property does not satisfy this.
+        """)
 }
 
 @Test func thePanelOffersTheDisplayHoldControl() throws {
@@ -1265,31 +1470,41 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // check above this one exists because of it.
     //
     // Same LIMIT as the two checks above, stated rather than hidden: this
-    // proves the panel NAMES the binding, not that it draws a usable control.
-    // M1 design §5.4 forbids asserting on rendered AppKit text, so no check in
-    // this package can watch the picker appear. It is a tripwire against
-    // deleting the control, not proof the control is right.
+    // proves the panel NAMES the binding in CODE, not that it draws a usable
+    // control. M1 design §5.4 forbids asserting on rendered AppKit text, so no
+    // check in this package can watch the picker appear. It is a tripwire
+    // against deleting the control, not proof the control is right.
     let files = try appLayerSources()
     #expect(files.count == expectedSourceCount,
             "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
 
     let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
                              "the app layer no longer compiles a PanelView.swift")
-    let source = try String(contentsOf: panel, encoding: .utf8)
+
+    // CODE, never the raw file, and this check is the one that PROVED the need.
+    // Two mutations were run against the raw-file version: deleting the Display
+    // picker outright turned it red, but replacing that picker with a comment
+    // naming `$model.holdDisplayAwake` left it GREEN. Issue #12's acceptance —
+    // the user has to be able to FIND the setting — was therefore unproven
+    // against anyone who deleted the control and said so in a comment. The
+    // raw-file version was sound only by the accident that no comment in
+    // `PanelView.swift` happened to name the binding.
+    let code = swiftCodeWithoutComments(try String(contentsOf: panel, encoding: .utf8))
 
     // The BINDING, not the property. `model.holdDisplayAwake` would be
     // satisfied by a line that merely displays the value, and a setting the
     // user can read and not change is not a setting.
-    #expect(source.contains("$model.holdDisplayAwake"), """
-        PanelView.swift binds no control to model.holdDisplayAwake, so the \
-        display hold can be stored and honoured and the user can never turn it \
-        on. Issue #12 asks for a control they can see.
+    #expect(code.contains("$model.holdDisplayAwake"), """
+        PanelView.swift binds no control to model.holdDisplayAwake in code, so \
+        the display hold can be stored and honoured and the user can never turn \
+        it on. Issue #12 asks for a control they can see. A comment naming the \
+        binding does not satisfy this.
         """)
 
     // The labels come from the model, for the reason the Serving picker's do:
     // a second list of literals in this view can drift from the sentence
     // `servingSummary` writes, and design §5.4 rules out catching that.
-    #expect(source.contains("ServingModel.displayLabel"), """
+    #expect(code.contains("ServingModel.displayLabel"), """
         PanelView.swift names its own labels for the display control. They \
         belong on ServingModel beside the Serving labels, where a check can \
         read them.
@@ -1298,8 +1513,9 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // And the line that says what is actually held has to be the model's, not
     // a sentence composed here. It reads "the display may still sleep", which
     // is FALSE once the user opts in, and no check could see it in this file.
-    #expect(source.contains("model.servingSummary"), """
-        PanelView.swift never reads model.servingSummary, so the line telling \
-        the user what is held is composed in the view where no check reads it.
+    #expect(code.contains("model.servingSummary"), """
+        PanelView.swift never reads model.servingSummary in code, so the line \
+        telling the user what is held is composed in the view where no check \
+        reads it.
         """)
 }

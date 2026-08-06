@@ -5,15 +5,21 @@ import Foundation
 
 /// Installs and removes whatever supervises the watchdog.
 ///
-/// The M0 conformer writes a plist and shells out to `launchctl`. M5's will
-/// call `SMAppService.daemon(plistName:).register()`, which registers a
-/// static, code-signed plist shipped inside the app bundle *by name*: there is
-/// no path argument, no generated XML and no subprocess on that side. An
-/// `install(binaryPath:)` requirement would therefore have to be dropped at
-/// M5, making the migration an API change at every call site rather than a
-/// swap of one implementation. Resolving and validating the program path
-/// *inside* the M0 conformer is what keeps M5 a second conformer with no
-/// caller churn.
+/// The conformer writes a plist and shells out to `launchctl`.
+///
+/// This comment used to say M5 would replace that with
+/// `SMAppService.daemon(plistName:).register()`. It will not, and the reason is
+/// measured rather than stylistic: that API registers a plist shipped inside a
+/// code-signed app bundle, and the only bundle that ships is built from source
+/// by the Homebrew formula and is ad-hoc signed — `Signature=adhoc`,
+/// `TeamIdentifier=not set`, and `codesign -R='anchor apple generic'` exits 1.
+/// The same absence rules out the XPC peer pinning SECURITY.md "It cannot pin a peer"
+/// requires. M5 therefore ships as a root CLI plus this launchd daemon.
+///
+/// The interface keeps no `install(binaryPath:)` requirement all the same.
+/// Resolving and validating the program path *inside* the conformer is what
+/// keeps a caller-supplied path unrepresentable, which is the property
+/// `:63-67` below is about.
 public protocol WatchdogSupervising: Sendable {
     func install() throws
     func uninstall() throws
@@ -43,8 +49,10 @@ public enum WatchdogInstallError: Error, Equatable {
 
 /// Installs the watchdog as a launchd daemon.
 ///
-/// M0 deliberately uses a plain plist plus `launchctl bootstrap system` rather
+/// M0 deliberately used a plain plist plus `launchctl bootstrap system` rather
 /// than `SMAppService`: it needs no app bundle, no code signing and no Xcode.
+/// That property is exactly why M5 keeps it — see the note above on the ad-hoc
+/// signature — so this is the shipped mechanism, not an interim one.
 ///
 /// The daemon exists because the app cannot supervise its own death. Handoff
 /// §8.2(4): a boot with a dirty journal must revert unconditionally, which is
@@ -133,55 +141,25 @@ public struct LaunchDaemonInstaller: WatchdogSupervising {
     /// ultimately written. Checking components of a name that still contains a
     /// symlink would validate one object and exec another, which someone else
     /// can repoint between the two.
+    /// The rule itself lives in `PathSecurity`, which the M5 journal reader
+    /// asks the same question. Two copies of a security check drift the moment
+    /// one is edited, so this maps the shared verdict onto this type's error
+    /// vocabulary and adds nothing of its own.
     static func validatedProgramPath(_ path: String) throws -> String {
-        guard path.hasPrefix("/") else {
-            throw WatchdogInstallError.programPathNotAbsolute(path)
-        }
-        guard let buffer = realpath(path, nil) else {
-            throw WatchdogInstallError.programPathUnresolvable(
-                path: path, errno: errno)
-        }
-        defer { free(buffer) }
-        let canonical = String(cString: buffer)
-
-        var insecure: [InsecurePathComponent] = []
-        for component in Self.ancestry(of: canonical) {
-            var info = stat()
-            // `lstat`, not `stat`: `realpath` has already removed every
-            // symlink, so anything still reporting as one appeared after the
-            // resolve and must not be followed.
-            guard lstat(component, &info) == 0 else {
+        do {
+            return try PathSecurity.validate(path)
+        } catch let error as PathSecurityError {
+            switch error {
+            case .notAbsolute(let path):
+                throw WatchdogInstallError.programPathNotAbsolute(path)
+            case .unresolvable(let path, let code):
                 throw WatchdogInstallError.programPathUnresolvable(
-                    path: component, errno: errno)
-            }
-            let notOwnedByRoot = info.st_uid != 0
-            let writable =
-                (info.st_mode & mode_t(S_IWGRP | S_IWOTH)) != 0
-            if notOwnedByRoot || writable {
-                insecure.append(InsecurePathComponent(
-                    path: component,
-                    notOwnedByRoot: notOwnedByRoot,
-                    groupOrOtherWritable: writable))
+                    path: path, errno: code)
+            case .insecure(let path, let components):
+                throw WatchdogInstallError.programPathInsecure(
+                    path: path, components: components)
             }
         }
-        guard insecure.isEmpty else {
-            throw WatchdogInstallError.programPathInsecure(
-                path: canonical, components: insecure)
-        }
-        return canonical
-    }
-
-    /// `/usr/bin/true` -> `["/", "/usr", "/usr/bin", "/usr/bin/true"]`.
-    /// The root directory is included: it is a component like any other and a
-    /// group-writable `/` would compromise everything below it.
-    private static func ancestry(of canonicalPath: String) -> [String] {
-        var components = ["/"]
-        var prefix = ""
-        for part in canonicalPath.split(separator: "/") {
-            prefix += "/" + part
-            components.append(prefix)
-        }
-        return components
     }
 
     /// Validates, writes the plist, then hands it to launchd.

@@ -346,3 +346,89 @@ func aFailedDirectoryBarrierStillLeavesTheWriteSuccessful() throws {
     try store.write(record)          // must not throw
     #expect(try store.load() == record)
 }
+
+// MARK: - §8.2(1)'s other half: the sync
+
+/// The package root, resolved from `#filePath` rather than the working
+/// directory, which under `swift test` is not the package root.
+private var packageRootForSyncCheck: URL {
+    URL(fileURLWithPath: #filePath)     // …/Tests/CoffeeBarPowerTests/JournalStore_test.swift
+        .deletingLastPathComponent()    // …/Tests/CoffeeBarPowerTests
+        .deletingLastPathComponent()    // …/Tests
+        .deletingLastPathComponent()    // the package root
+}
+
+@Test func theJournalIsForcedToStableStorageBeforeItIsRenamedIntoPlace() throws {
+    // §8.2(1) says the journal is written "and `fsync`s", and the ordering
+    // guards in `LidClosedSession_test` cover only the first half: they prove
+    // `write` RETURNS before `pmset` runs, which a `write` that never synced
+    // would also satisfy. The durability is the whole point — a journal still
+    // in the drive cache when the power fails is a journal that was never
+    // written, and the machine comes back holding a setting with no record of
+    // it.
+    //
+    // Plain `fsync(2)` on macOS pushes only to the drive cache. `F_FULLFSYNC`
+    // is the documented durable barrier, so the constant itself is what has to
+    // be there.
+    //
+    // LIMIT, stated rather than hidden: this reads the SOURCE. It proves the
+    // barrier is CALLED and that it precedes the rename; it cannot prove the
+    // call succeeded, and no in-process test can, because forcing `fcntl` to
+    // fail needs a filesystem that refuses `F_FULLFSYNC`. It is a tripwire
+    // against deleting the barrier, not proof of durability.
+    let source = try String(
+        contentsOf: packageRootForSyncCheck
+            .appending(path: "Sources/CoffeeBarPower/JournalStore.swift"),
+        encoding: .utf8)
+
+    // Comments are stripped so the doc comment ABOUT F_FULLFSYNC cannot
+    // satisfy a check that the CALL exists.
+    let code = source
+        .split(separator: "\n", omittingEmptySubsequences: false)
+        .map { line -> Substring in
+            guard let marker = line.range(of: "//") else { return line }
+            return line[line.startIndex ..< marker.lowerBound]
+        }
+        .joined(separator: "\n")
+
+    let rename = try #require(code.range(of: "replaceItemAt"), """
+        JournalStore.swift no longer renames the temp file into place, so this \
+        check can no longer see the ordering it exists to assert.
+        """)
+
+    // BOTH barriers, found separately. `range(of:)` returns only the FIRST
+    // match, so a guard built on one call sees the file barrier and is blind to
+    // the directory barrier entirely — measured: replacing the directory
+    // `F_FULLFSYNC` with a no-op left that shape green.
+    //
+    // They protect different things. The first makes the journal's BYTES
+    // durable; the second (JournalStore.swift:141-150) makes its NAME durable,
+    // because the rename is a directory metadata change and a power failure can
+    // otherwise leave the entry absent while the mutation it describes has
+    // already landed.
+    var barriers: [Range<String.Index>] = []
+    var cursor = code.startIndex
+    while let found = code.range(of: "F_FULLFSYNC", range: cursor ..< code.endIndex) {
+        barriers.append(found)
+        cursor = found.upperBound
+    }
+
+    #expect(barriers.count >= 2, """
+        JournalStore.swift calls F_FULLFSYNC \(barriers.count) time(s) in code. \
+        The write needs two: one for the file's bytes and one for the parent \
+        directory, so the journal's name is durable and not just its contents.
+        """)
+
+    #expect(barriers.contains { $0.lowerBound < rename.lowerBound }, """
+        no F_FULLFSYNC precedes the rename. The name becomes visible while the \
+        bytes behind it are still in the drive cache, which is the window the \
+        barrier exists to close.
+        """)
+
+    #expect(barriers.contains { $0.lowerBound > rename.upperBound }, """
+        no F_FULLFSYNC follows the rename, so the parent directory is never \
+        barriered. After a power failure the journal entry can be absent while \
+        the system mutation it describes has already landed — which is the \
+        state §8.2 exists to make impossible.
+        """)
+}

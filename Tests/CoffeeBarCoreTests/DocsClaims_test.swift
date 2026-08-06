@@ -359,8 +359,55 @@ private let productConstants: [String: Double] = [
 
 private let secondsPerUnit: [String: Double] = ["second": 1, "minute": 60, "hour": 3600]
 
+/// Surfaces the duration sweep below cannot judge, and the reason for each.
+///
+/// `SECURITY.md` states two TTLs that are not `StalePolicy` numbers:
+/// `ProbeVerb.defaultTTLSeconds` (30 minutes) and `JournalRecord.maxTTLSeconds`
+/// (8 hours). The first lives in `CoffeeBarPower`, and `CoffeeBarCoreTests`
+/// depends on `CoffeeBarCore` alone, so this target cannot reach it. Adding 1800
+/// here as a literal would break the one rule this guard exists to enforce —
+/// that a number in prose is a real product constant and not a second copy of
+/// one that can drift from it.
+///
+/// **The coverage is not dropped, it MOVES, and it grows.**
+/// `everyDurationInAPolicyDocumentIsARealProductConstant` in
+/// `Tests/CoffeeBarPowerTests/PolicyDocumentClaims_test.swift` sweeps the same
+/// prose from the one target that reaches all four constants, and it covers MORE
+/// than this guard did: `SECURITY.md` states the 30-minute default a third time
+/// with no symbol beside it, and `theDocumentedTTLBoundsAreTheShippedConstants`
+/// cannot see that one because its anchor cannot cross a line break.
+private let durationSweepExclusions: Set<String> = ["SECURITY.md"]
+
+/// The exclusion list cannot grow silently, and cannot rot into a dead name.
+///
+/// Named bug this catches: somebody excludes a second surface to make a red
+/// sweep green, and the coverage disappears with nothing to say so. Every
+/// exclusion is a coverage hole that another guard must fill, so adding one has
+/// to be a deliberate edit here. The second check is the discriminating half —
+/// a renamed or mistyped surface leaves an exclusion that silently excludes
+/// nothing, which reads like coverage and is not.
+@Test func theDurationSweepExcludesOnlySurfacesAnotherGuardCovers() {
+    #expect(durationSweepExclusions == ["SECURITY.md"], """
+        the duration sweep now skips \(durationSweepExclusions.sorted()). Each \
+        exclusion needs a guard elsewhere that covers it — see \
+        everyDurationInAPolicyDocumentIsARealProductConstant in \
+        CoffeeBarPowerTests — and this check exists so adding one cannot be quiet.
+        """)
+
+    for name in durationSweepExclusions {
+        #expect(documentedSurfaces.contains(name), """
+            \(name) is excluded from the duration sweep but is not a documented \
+            surface, so the exclusion covers nothing and the name has rotted
+            """)
+    }
+}
+
 @Test(arguments: documentedSurfaces)
 func everyDurationStatedIsARealProductConstant(_ name: String) throws {
+    // Swept by CoffeeBarPowerTests instead, from the only target that can reach
+    // every constant these documents state. See `durationSweepExclusions`.
+    guard !durationSweepExclusions.contains(name) else { return }
+
     let prose = try surfaceProse(name)
     let known = Set(productConstants.values)
 
