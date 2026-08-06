@@ -448,8 +448,20 @@ private func readerFacingProse(_ name: String) throws -> String {
                                    options: .regularExpression)
         s = s.replacingOccurrences(of: "<!--[\\s\\S]*?-->", with: " ",
                                    options: .regularExpression)
-        return s.replacingOccurrences(of: "`[^`]*`", with: " ",
-                                      options: .regularExpression)
+        s = s.replacingOccurrences(of: "`[^`]*`", with: " ",
+                                   options: .regularExpression)
+
+        // Markdown has the same merging problem HTML does, and this file found
+        // it: `docs/ROADMAP.md` was judged on a sentence that began with the
+        // heading "## Why this differs from the handoff" and ran straight into
+        // the paragraph below it. A heading, a bullet and a blank line all end a
+        // sentence for a reader, and none of them carries a full stop.
+        for boundary in ["\\n\\s*\\n", "\\n(?=#{1,6}\\s)", "\\n(?=[-*+]\\s)",
+                         "\\n(?=[0-9]+\\.\\s)"] {
+            s = s.replacingOccurrences(of: boundary, with: " . ",
+                                       options: .regularExpression)
+        }
+        return s
     }
 
     let metaPattern = "<meta[^>]*(?:name|property)=\"(?:og:)?description\""
@@ -464,8 +476,38 @@ private func readerFacingProse(_ name: String) throws -> String {
                                options: .regularExpression)
     s = s.replacingOccurrences(of: "<code>[^<]*</code>", with: " ",
                                options: .regularExpression)
+
+    // CHROME GOES WHOLE, before anything else is read. `<nav>` and `<title>`
+    // carry no sentence-ending punctuation, so tag-stripping alone glues them
+    // onto whatever prose follows. That is not hypothetical: an unqualified
+    // "It needs no root." planted at the top of `site/privacy.html` was judged
+    // as the sentence "Privacy — coffee-bar coffee-bar Home Install Docs
+    // Changelog v0.1.1 Privacy It needs no root.", and the nav's version badge
+    // qualified it. Every page's highest-visibility position was unguarded.
+    for element in ["nav", "title", "header", "footer"] {
+        s = s.replacingOccurrences(of: "<\(element)[^>]*>[\\s\\S]*?</\(element)>",
+                                   with: " ", options: .regularExpression)
+    }
+
+    // A BLOCK BOUNDARY ENDS A SENTENCE. Removing the chrome above is not enough
+    // on its own — `<h1>Privacy</h1>` is page content, not chrome, and it merged
+    // into the planted sentence just as the nav did. Closing block tags become a
+    // full stop so a heading, a list item or a table cell cannot lend its words
+    // to the next claim. Inline tags are deliberately absent from this list:
+    // `<strong>` inside a sentence must not split it.
+    let blockElements = ["p", "div", "li", "ul", "ol", "dl", "dd", "dt",
+                         "h1", "h2", "h3", "h4", "h5", "h6", "section",
+                         "article", "aside", "main", "blockquote", "figcaption",
+                         "td", "th", "tr", "table", "form", "fieldset", "legend"]
+    for element in blockElements {
+        s = s.replacingOccurrences(of: "</\(element)>", with: " . ",
+                                   options: [.caseInsensitive])
+    }
+
     s = s.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
-    return (previews + [s]).joined(separator: " ")
+    // Each preview is its own sentence for the same reason: two `<meta>` tags
+    // concatenated would let one description qualify the other.
+    return (previews.map { $0 + " . " } + [s]).joined(separator: " ")
 }
 
 /// Prose cut into sentences, without cutting a version number in half.
@@ -502,9 +544,43 @@ private func sentences(of prose: String) -> [String] {
 /// either the SUBJECT the promise is true of — the menu-bar app — or the VERSION
 /// it was true of. A generous list stops discriminating: "simple", "local" and
 /// "private" all sound reassuring beside "no root" and scope nothing.
-private let rootPromiseQualifiers = ["the app", "menu-bar app", "v0.1", "v0.2",
-                                     "opt-in", "never elevates",
-                                     "sudo coffee-bar-probe"]
+private let rootPromiseQualifiers = ["the app", "menu-bar app", "opt-in",
+                                     "never elevates", "sudo coffee-bar-probe"]
+
+/// An explicit version, matched as a COMPLETE token.
+///
+/// This replaces the literals `v0.1` and `v0.2`, and the reason is a defect that
+/// a partial fix would have hidden. Requiring those two literals to match as
+/// whole tokens is correct — `v0.2` must not be satisfied by `v0.20` — but it
+/// also rejects `v0.1.0`, which is a REAL version and the exact word
+/// `CHANGELOG.md` uses to scope its own claim. Tightening the literals alone
+/// turned a true sentence red.
+///
+/// A version qualifier is therefore a version NUMBER, not a prefix of one. The
+/// patch component is optional so `v0.2` still qualifies, and the token must end
+/// where the pattern does, so `v0.2` never matches inside `v0.20`.
+///
+/// The trailing guard is `(?!\.?\d)` rather than `\b`: a word boundary sits
+/// between the `1` and the `.` in `v0.1.1`, so `\b` would accept a prefix.
+private let versionQualifierPattern =
+    "(?<![\\w.])v[0-9]+\\.[0-9]+(?:\\.[0-9]+)?(?!\\.?\\d)"
+
+/// One qualifier as a pattern that matches the WHOLE token and not a prefix.
+///
+/// `v0.1` is a prefix of `v0.1.1`, and a plain `contains` treated the two as the
+/// same word. The sidebar of every page carries a `v0.1.1` version badge, so a
+/// substring match let that badge qualify a claim — a version the sentence never
+/// mentioned, scoping a promise the author never scoped.
+///
+/// The trailing guard is `(?!\.?\d)` and not `\b`, deliberately. A word boundary
+/// sits between the `1` and the `.` of `v0.1.1`, so `\b` matches there and would
+/// keep the defect. This refuses a following digit, with or without a dot
+/// between, which is what tells `v0.1` from `v0.1.1`. It still allows `v0.1` at
+/// the end of a sentence, where the next character is a full stop and no digit
+/// follows.
+private func qualifierPattern(for qualifier: String) -> String {
+    "(?<![\\w.])" + NSRegularExpression.escapedPattern(for: qualifier) + "(?!\\.?\\d)"
+}
 
 /// A sentence that makes a claim about needing privilege.
 ///
@@ -566,8 +642,10 @@ private let rootPromisePattern = "\\b(?:no|without)\\s+root\\b|\\bprivileged hel
             promisesSeen += 1
 
             let qualified = rootPromiseQualifiers.contains {
-                sentence.range(of: $0, options: .caseInsensitive) != nil
-            }
+                sentence.range(of: qualifierPattern(for: $0),
+                               options: [.regularExpression, .caseInsensitive]) != nil
+            } || sentence.range(of: versionQualifierPattern,
+                                options: [.regularExpression, .caseInsensitive]) != nil
             #expect(qualified, """
                 \(name) makes a claim about privilege without a qualifier, but \
                 coffee-bar-probe ships \(rootVerbs.sorted()) behind uid 0. Say \
