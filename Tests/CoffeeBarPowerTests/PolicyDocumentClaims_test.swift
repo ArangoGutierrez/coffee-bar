@@ -834,6 +834,44 @@ private func citationMatches(_ pattern: String, in text: String) throws -> [[Str
         }
 }
 
+/// Every comment in one Swift file, with the line each one starts on.
+///
+/// BOTH forms, because a citation is invisible to the guard in whichever form it
+/// does not read. The line form was covered first and the block form was not;
+/// today that is latent — the only block comments in this tree are in the
+/// embedded C stand-in and hold no citations — but a guard that reads one of two
+/// comment syntaxes fails open the first time somebody writes the other.
+///
+/// STATED LIMIT. This finds comment SYNTAX, not comments: `/*` or `//` inside a
+/// string literal is read as opening one. That imprecision is not new here — the
+/// line scan already had it, and a URL in a literal contains `//` — and it can
+/// only cause a FALSE POSITIVE, never a missed citation, because the extra text
+/// is scanned rather than skipped. A precise answer needs the tokenizer that
+/// `swiftCodeWithoutComments` has, in a target this one cannot import.
+private func commentFragments(of body: String) throws -> [(Int, String)] {
+    var found: [(Int, String)] = []
+
+    for (index, raw) in body.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+        let line = String(raw)
+        if let start = line.range(of: "//") {
+            found.append((index, String(line[start.upperBound...])))
+        }
+    }
+
+    // Block comments are matched over the whole file, so one spanning ten lines
+    // is one fragment. The line number is counted from the text before it, which
+    // keeps a failure message pointing at something a reader can open.
+    let ns = body as NSString
+    guard let expression = try? NSRegularExpression(pattern: "/\\*[\\s\\S]*?\\*/") else {
+        throw BadMechanismPattern(pattern: "/\\*[\\s\\S]*?\\*/")
+    }
+    for match in expression.matches(in: body, range: NSRange(location: 0, length: ns.length)) {
+        let before = ns.substring(to: match.range.location)
+        found.append((before.filter { $0 == "\n" }.count, ns.substring(with: match.range)))
+    }
+    return found
+}
+
 /// A file named in a citation, resolved to one path or to nothing.
 ///
 /// Exactly one match is required. A basename that resolves to two files would
@@ -897,12 +935,7 @@ private func citedFile(named name: String) -> URL? {
         guard let body = try? String(contentsOf: file, encoding: .utf8) else { continue }
         let short = file.lastPathComponent
 
-        for (index, raw) in body.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
-            let line = String(raw)
-            // Citations live in comments. Anything outside one is code, where a
-            // quoted string after a filename is a literal and not a reference.
-            guard let commentStart = line.range(of: "//") else { continue }
-            let comment = String(line[commentStart.upperBound...])
+        for (index, comment) in try commentFragments(of: body) {
 
             for m in try citationMatches("[A-Za-z0-9_/.]+\\.md:[0-9]+", in: comment) {
                 lineCitations.append("\(short):\(index + 1) cites \(m[0])")
