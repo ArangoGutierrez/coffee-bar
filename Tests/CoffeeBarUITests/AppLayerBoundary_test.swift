@@ -2046,10 +2046,20 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // machines the maintainer is not sitting at. `SettingsLink` is the typed
     // equivalent and needs macOS 14, which is already this package's target.
     //
-    // This is the assertion that most needs the comment stripping: the refused
-    // selector is spelled out in `PanelView.swift`, in the comment explaining
-    // why it is not used. Over the raw file this expectation would fail on a
-    // correct tree.
+    // THE COMMENT STRIPPING IS LOAD-BEARING HERE, NOT STYLISTIC. Read this
+    // before changing `swiftCodeWithoutComments` out of the line above.
+    //
+    // `PanelView.swift` spells this selector out, in the comment explaining why
+    // it is refused. So over the RAW file this expectation is not merely blind
+    // the way the version guard was — it is INVERTED. It reports a CORRECT
+    // implementation as a violation, and the obvious way to make a red build
+    // green again is to delete the comment that documents the decision. The
+    // guard would then have destroyed the record of the reason it exists,
+    // leaving the next person free to reach for the selector with nothing left
+    // to warn them off it.
+    //
+    // A guard that is wrong on a correct tree is worse than no guard: it
+    // teaches people to silence it.
     #expect(!code.contains("showSettingsWindow:"), """
         PanelView.swift reaches the Preferences window through the string \
         selector showSettingsWindow:. That spelling has changed across macOS \
