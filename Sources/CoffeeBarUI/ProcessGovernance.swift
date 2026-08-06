@@ -277,17 +277,33 @@ public struct ProcessGovernance: Sendable {
     ///
     /// One place, so the four optional protections are filled once and cannot
     /// drift between the demote path and the restore path.
+    ///
+    /// **`internal` rather than `private`, so a check can ask THIS root what it
+    /// decides about one process and read the REASON.** `reconcile` cannot
+    /// answer that: it catches `ProcGovernorError.refused(_)` and drops the
+    /// case, deliberately, because reporting every refusal would write one line
+    /// per running application per pass. A check that composed its own policy
+    /// instead would answer about a policy this product never builds — so a
+    /// wrong argument to `ancestors(of:)` here would not appear in it, which is
+    /// exactly the hole `anAncestorOfCoffeeBarIsRefusedEvenWhenTheUserNamedIt`
+    /// had until 2026-08-06.
+    func policy(demotableNames: Set<String>,
+                protectedAgentPIDs: Set<pid_t>) -> DemotionPolicy {
+        DemotionPolicy(demotableNames: demotableNames,
+                       agentPIDs: protectedAgentPIDs,
+                       frontmostPID: applications.frontmostApplicationPID(),
+                       selfPID: selfPID,
+                       selfUID: selfUID,
+                       selfPGID: selfPGID,
+                       ancestorPIDs: inspector.ancestors(of: selfPID),
+                       extraProtectedNames: Self.ownExecutableNames)
+    }
+
     private func makeGovernor(demotableNames: Set<String>,
                               protectedAgentPIDs: Set<pid_t>) -> ProcGovernor {
         ProcGovernor(
-            policy: DemotionPolicy(demotableNames: demotableNames,
-                                   agentPIDs: protectedAgentPIDs,
-                                   frontmostPID: applications.frontmostApplicationPID(),
-                                   selfPID: selfPID,
-                                   selfUID: selfUID,
-                                   selfPGID: selfPGID,
-                                   ancestorPIDs: inspector.ancestors(of: selfPID),
-                                   extraProtectedNames: Self.ownExecutableNames),
+            policy: policy(demotableNames: demotableNames,
+                           protectedAgentPIDs: protectedAgentPIDs),
             journal: journal,
             inspector: inspector,
             setter: setter)

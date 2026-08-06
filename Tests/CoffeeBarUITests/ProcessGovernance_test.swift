@@ -91,6 +91,18 @@ private let selfPID: pid_t = 9_000_100
 private let selfPGID: pid_t = 9_000_200
 private let parentPID: pid_t = 9_000_050
 
+/// The parent shell's process group, and it DIFFERS from `selfPGID`.
+///
+/// It differed on the real machine all along and this fixture said otherwise
+/// until 2026-08-06. A shell puts each job it starts into its OWN process group,
+/// so coffee-bar's group is not its shell's — and `verdict(for:)` refuses
+/// `.ownProcessGroup` BEFORE it consults `ancestorPIDs`. With the two equal, the
+/// ancestor rule never ran and
+/// `anAncestorOfCoffeeBarIsRefusedEvenWhenTheUserNamedIt` passed on a rule it was
+/// not written about: changing the composition root to `ancestors(of: 999999)`
+/// left the entire suite green.
+private let parentPGID: pid_t = 9_000_300
+
 /// The untouched flags word, measured on macOS 26.5.2 (25F84) and recorded in
 /// `ProcessInspector.swift`.
 private let untouchedFlags: UInt32 = 0x140_4010
@@ -125,7 +137,7 @@ private struct Fixture {
     init(running: [pid_t], frontmost: pid_t? = nil, table: [ProcSnapshot]) {
         var byPID = Dictionary(uniqueKeysWithValues: table.map { ($0.pid, $0) })
         byPID[selfPID] = snapshot(selfPID, "coffee-bar", ppid: parentPID, pgid: selfPGID)
-        byPID[parentPID] = snapshot(parentPID, "zsh", ppid: 0, pgid: selfPGID)
+        byPID[parentPID] = snapshot(parentPID, "zsh", ppid: 0, pgid: parentPGID)
 
         kernel = FakeKernel(
             table: byPID,
@@ -149,6 +161,16 @@ private struct Fixture {
 
 /// The demotable process every check below points at.
 private let slackPID: pid_t = 4242
+
+/// A process identical to coffee-bar's parent shell in every field a deny rule
+/// reads, and in NO parent chain.
+///
+/// The control that makes the ancestor check discriminate. Same name, same uid,
+/// same process group, not coffee-bar, not tracked, not frontmost, named by the
+/// user — so the ONE rule that can tell it from `parentPID` is the ancestor
+/// rule. Without it, "the ancestor was not demoted" is satisfied by a wiring
+/// that demotes nothing at all.
+private let twinShellPID: pid_t = 4243
 
 private func slackRunning(frontmost: pid_t? = nil) -> Fixture {
     Fixture(running: [slackPID], frontmost: frontmost, table: [snapshot(slackPID, "Slack")])
@@ -342,17 +364,62 @@ private func slackRunning(frontmost: pid_t? = nil) -> Fixture {
         // shell and the terminal above it, and demoting the terminal an agent
         // is running inside slows the agent this feature exists to serve.
         //
-        // The walk starts at coffee-bar's own pid, so this also proves the
-        // composition root passes its OWN pid to `ancestors(of:)` and not some
-        // other one: `parentPID` is reachable only from `selfPID`.
-        let fixture = Fixture(running: [parentPID], table: [])
+        // TWO processes, and the twin is what makes this discriminate.
+        // `parentPID` and `twinShellPID` carry the same name, the same uid and
+        // the same process group; neither is coffee-bar, neither is tracked,
+        // neither is frontmost, and the user named both. They differ in exactly
+        // one thing — `parentPID` is in coffee-bar's parent chain. So the
+        // ancestor rule is the only rule that can separate them, and "the
+        // ancestor was not demoted" can no longer be satisfied by a wiring that
+        // demotes nothing at all.
+        //
+        // Written this way after a measurement, and the earlier version is the
+        // reason. It gave `parentPID` a `pgid` equal to `selfPGID`, and
+        // `verdict(for:)` refuses `.ownProcessGroup` BEFORE it consults
+        // `ancestorPIDs` — so the ancestor rule never ran. Changing the
+        // composition root to `ancestors(of: 999999)` left the whole 732-test
+        // suite GREEN, and the check claimed in its own comment to prove the
+        // root passes its OWN pid. It did not: it read the argument LABEL and
+        // never the VALUE.
+        let fixture = Fixture(
+            running: [parentPID, twinShellPID],
+            table: [snapshot(twinShellPID, "zsh", ppid: 1, pgid: parentPGID)])
         defer { fixture.removeJournal() }
 
         #expect(fixture.governance.reconcile(
             onBattery: true, workingAgentCount: 1, protectedAgentPIDs: [777],
             demotableNames: ["zsh"], quietEverythingElse: true) == .quiet)
 
-        #expect(fixture.kernel.demoted.isEmpty, "coffee-bar's own parent shell was demoted")
+        #expect(fixture.kernel.demoted == [twinShellPID], """
+            either coffee-bar's own parent shell was demoted, or the twin that is \
+            NOT an ancestor was refused. The ancestor rule is the only rule that \
+            separates the two.
+            """)
+
+        // The REASON, read off the policy the composition root itself builds.
+        // `reconcile` cannot answer it: it catches ProcGovernorError.refused(_)
+        // and drops the case, because reporting every refusal would write one
+        // line per running application per pass.
+        //
+        // The policy comes from `fixture.governance` and is never composed here.
+        // That is what pins the pid the root hands to `ancestors(of:)`: a check
+        // that built its own policy would answer about a policy this product
+        // never builds.
+        let policy = fixture.governance.policy(demotableNames: ["zsh"],
+                                               protectedAgentPIDs: [777])
+
+        let parent = try #require(fixture.kernel.snapshot(of: parentPID))
+        #expect(policy.verdict(for: parent) == .refused(.ancestor), """
+            coffee-bar's parent shell was allowed, or it was refused for some \
+            other reason. A rule that fires ahead of the ancestor rule hides it, \
+            which is how this check passed for a whole milestone.
+            """)
+
+        let twin = try #require(fixture.kernel.snapshot(of: twinShellPID))
+        #expect(policy.verdict(for: twin) == .allowed, """
+            a process the user named, in no parent chain, was refused. The twin \
+            is the control that gives the assertion above its meaning.
+            """)
     }
 
     @Test func coffeeBarsOwnHookIsRefusedEvenWhenTheUserNamedIt() throws {
