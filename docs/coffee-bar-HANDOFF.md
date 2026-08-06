@@ -583,10 +583,14 @@ Remove the setting with
 as writing an empty array to the app, but it is the same to the demotable set: both read as
 empty.
 
-**This command has no effect on the running app today**, because nothing calls the
-governor. It is the interface the wiring work will consume, and it is documented now
-because the acceptance criterion for issue #14 asks for a demotable set that is
-configurable AND documented — and until this paragraph existed no user could set it at all.
+**This command fills the set the running app reads. Run it — nothing else fills that set.**
+`Sources/CoffeeBarApp/main.swift` builds a `ProcessGovernance` and hands it to the model,
+and `ServingModel.refresh()` reads `SettingsKey.demotableProcessNames` out of the store on
+every reconcile rather than caching it at launch. Restart coffee-bar after writing the key
+if you want to be certain the running process has picked the new value up.
+
+The set is EMPTY by default, and an empty set is condition 3 of the four. So **a build
+nobody has configured demotes nothing**, and this command is the whole opt-in.
 `theDocumentedDefaultsCommandNamesTheRealDomainAndTheRealKey` reads the domain back out of
 `scripts/build-app.sh` and the key out of `SettingsKey`, so neither half of the command can
 drift from the code.
@@ -679,12 +683,17 @@ different names, because precondition 1 checks every component of the path.
 
 #### The exposure this leaves
 
-Once the governor is wired, a crash will leave every demoted process demoted **until
-coffee-bar next starts**. Nothing would undo it in between, and for a long-lived process
-such as a browser that can mean days. It is bounded by construction, because darwin
-background state is a process attribute: it dies with the process and never survives a
-reboot. It is **not solved**. Today nothing demotes anything, so nothing is exposed. See
-`docs/ACCEPTED-RISKS.md`.
+The governor is wired, so this exposure is LIVE. A crash leaves every demoted process
+demoted **until coffee-bar next starts**. Nothing undoes it in between, and for a
+long-lived process such as a browser that can mean days. It is bounded by construction,
+because darwin background state is a process attribute: it dies with the process and never
+survives a reboot. It is **not solved**.
+
+What bounds it is the pair of opt-ins and not a missing wire: nothing on the machine is
+demotable until a user names a process AND turns the "Quiet everything else" switch on.
+`main.swift` calls `restoreDemotedProcesses()` at launch and again on
+`NSApplication.willTerminateNotification`, so the window closes at the next start and on a
+clean quit — never in between. See `docs/ACCEPTED-RISKS.md`.
 
 #### Two independent channels
 
