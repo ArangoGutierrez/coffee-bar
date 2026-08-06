@@ -784,12 +784,17 @@ private func citedFile(named name: String) -> URL? {
 /// that rots silently on every edit above it.
 ///
 /// **Scope, stated rather than hidden.** The line-number half refuses `.md`
-/// citations only. A first run of this guard found ELEVEN more citations of
-/// `.swift` files by line — `IngestListener.swift:41`, `ServingModel.swift:91`
-/// and nine others — which rot the same way and are a real finding, but fixing
-/// them is a wider edit than the round that added this guard. They are recorded
-/// as follow-up rather than quietly excluded. The ANCHOR half below already
-/// covers every cited file, `.md` and `.swift` alike.
+/// citations only. A first run of this guard found TEN more citations of Swift
+/// files by line, at NINE distinct targets — one target is cited twice — and
+/// they rot the same way. Fixing them is a wider edit than the round that added
+/// this guard, so they are recorded as follow-up rather than quietly excluded.
+/// The ANCHOR half below already covers every cited file, `.md` and `.swift`
+/// alike.
+///
+/// Both numbers are measured, and no example of the shape is written out here.
+/// An earlier draft named two, and those two then counted themselves: a grep
+/// returned twelve where the tree holds ten. That is the same self-reference
+/// trap described below, met a second time while writing the note about it.
 ///
 /// The line-number pattern is deliberately not written out in this comment. An
 /// earlier draft spelled one as an example, and this guard read its own
