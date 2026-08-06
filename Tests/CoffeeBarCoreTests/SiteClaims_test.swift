@@ -193,7 +193,7 @@ private func publishedPolicyRows(_ page: String) throws -> [PolicyRow] {
 /// two columns would otherwise silently change what every cell means, and the
 /// comparison would go on passing against a table that now says something else.
 private let visibleTableHeadings = [
-    "Serving", "Display", "On battery at or below 20%", "An agent is working",
+    "Serving", "Display", "On battery at or below 15%", "An agent is working",
     "Holds the system awake", "Holds the display awake",
     "Held back by the battery floor",
 ]

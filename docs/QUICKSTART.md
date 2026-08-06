@@ -236,8 +236,8 @@ version, and Quit.
 | Display | Whether a hold covers the screen as well as the machine. |
 | Battery floor | How much battery a hold may spend. |
 
-The Battery floor control ships at 20%.
-On battery, coffee-bar does not hold at or below 20%.
+The Battery floor control ships at 15%.
+On battery, coffee-bar does not hold at or below 15%.
 Move it up if you want the machine to sleep sooner, or down if you are beside a
 charger. The floor governs every Serving position, including Auto, and it
 outranks the Display control — a screen held below the floor drains the battery

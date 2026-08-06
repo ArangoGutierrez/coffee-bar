@@ -43,7 +43,7 @@ exist; it reads session state from agent hooks and from nothing else.
 - Retires a session whose agent crashed, so a dead process cannot pin the
   machine awake forever.
 - A Serving switch with Off, Auto and On. **Off is an absolute veto.**
-- A battery floor: at or below 20% on battery, it does not hold.
+- A battery floor: at or below 15% on battery, it does not hold.
 
 It has no Dock icon and opens no window. Look for the cup at the right end of
 the menu bar.

@@ -181,7 +181,7 @@ rules it is describing.
 
 <p class="bench-floor">
 The battery floor is a limit on the machine, not on one control position: on
-battery at or below 20%, coffee-bar releases the hold even when Serving is on
+battery at or below 15%, coffee-bar releases the hold even when Serving is on
 On. Off is absolute in the other direction and outranks every session. The bench
 models the floor where it ships; the panel has a control that moves it, and
 <a href="docs.html">the Docs page defines it</a>.
@@ -196,7 +196,7 @@ models the floor where it ships; the panel has a control that moves it, and
 <tr>
 <th scope="col">Serving</th>
 <th scope="col">Display</th>
-<th scope="col">On battery at or below 20%</th>
+<th scope="col">On battery at or below 15%</th>
 <th scope="col">An agent is working</th>
 <th scope="col">Holds the system awake</th>
 <th scope="col">Holds the display awake</th>
@@ -261,7 +261,7 @@ models the floor where it ships; the panel has a control that moves it, and
 {"intent":"serve","displayOptIn":true,"atOrBelowFloor":true,"sessionsActive":true,"system":false,"displayHeld":false,"suppressed":true}
 ]
 </script>
-<script type="application/json" id="policy-meta">{"batteryFloorPercent":20}</script>
+<script type="application/json" id="policy-meta">{"batteryFloorPercent":15}</script>
 <script type="module" src="assets/bench.js"></script>
 
 </section>
@@ -307,7 +307,7 @@ wallpaper and in either appearance.
   <li>Shows how many sessions are working, and which ones are waiting on you.</li>
   <li>Retires a session whose agent crashed, so a dead process cannot pin the machine awake for ever.</li>
   <li>Three positions — Off, Auto, On. <strong>Off is an absolute veto</strong> and outranks everything.</li>
-  <li>A battery floor, which ships at 20%: on battery, at or below 20%, it does not hold. The panel lets you move it.</li>
+  <li>A battery floor, which ships at 15%: on battery, at or below 15%, it does not hold. The panel lets you move it.</li>
 </ul>
 
 <div class="note">

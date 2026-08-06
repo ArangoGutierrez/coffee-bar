@@ -112,12 +112,12 @@ private func inputs(journal j: JournalRecord? = journal(),
 }
 
 @Test func batteryFloorRevertsOnlyOnBattery() {
-    #expect(decide(inputs(battery: 20, onBattery: true))
+    #expect(decide(inputs(battery: 15, onBattery: true))
             == .revert(.batteryFloor))
-    #expect(decide(inputs(battery: 19, onBattery: true))
+    #expect(decide(inputs(battery: 14, onBattery: true))
             == .revert(.batteryFloor))
     // Same percentage on AC is fine — it is charging.
-    #expect(decide(inputs(battery: 19, onBattery: false)) == .hold)
+    #expect(decide(inputs(battery: 14, onBattery: false)) == .hold)
 }
 
 @Test func unknownBatteryDoesNotTriggerFloor() {
@@ -256,16 +256,18 @@ private func inputs(journal j: JournalRecord? = journal(),
 @Test func zeroBatteryFloorIsRaisedToTheMinimum() {
     // A floor of 0 fires only at exactly 0%, i.e. after the machine is dead.
     let p = WatchdogPolicy(heartbeatTimeout: 45, batteryFloorPercent: 0)
-    #expect(p.batteryFloorPercent == 5)
-    #expect(decide(inputs(battery: 5, onBattery: true), policy: p)
+    #expect(p.batteryFloorPercent == 10)
+    #expect(decide(inputs(battery: 10, onBattery: true), policy: p)
             == .revert(.batteryFloor))
-    #expect(decide(inputs(battery: 6, onBattery: true), policy: p) == .hold)
+    #expect(decide(inputs(battery: 11, onBattery: true), policy: p) == .hold)
 }
 
 @Test func batteryFloorAboveOneHundredIsCapped() {
-    // Percentages above 100 are unrepresentable, not merely aggressive.
+    // Percentages above 100 are unrepresentable, not merely aggressive, and
+    // `BatteryFloor.permitted` stops well short of 100 — a floor above half
+    // the battery refuses to hold across half of every discharge.
     let p = WatchdogPolicy(heartbeatTimeout: 45, batteryFloorPercent: 1000)
-    #expect(p.batteryFloorPercent == 100)
+    #expect(p.batteryFloorPercent == 50)
 }
 
 @Test func thermalLevelRawValuesMatchProcessInfo() {

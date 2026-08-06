@@ -186,7 +186,7 @@ policy:
 - Supervision is **TTL-only**. There is no heartbeat channel, because there is
   no channel at all. Nothing cuts a hold short when the work finishes early, so
   the 30-minute default is deliberately the worst case rather than the cap.
-- The daemon uses the built-in battery floor of 20% and **does not read your
+- The daemon uses the built-in battery floor of 15% and **does not read your
   `batteryFloorPercent` setting**. A root process reading an unprivileged user's
   preferences is a new data flow into a privileged process, and it deserves its
   own review before it exists rather than after.

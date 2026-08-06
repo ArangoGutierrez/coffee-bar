@@ -1139,10 +1139,11 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
     // `WatchdogPolicy.init` calls rather than keeping its own clamp.
     //
     // This asserts the DAEMON honours the bounded value rather than the raw
-    // one. An absurd floor of 1000 bounds to 100, so a machine on battery at
-    // any charge is at or below it and must revert. A second, unbounded path
-    // would compare against 1000, never fire, and leave the abort silently
-    // dead — which is the same class of defect as the unwired input above.
+    // one. An absurd floor of 1000 bounds to the top of `permitted`, so a
+    // machine on battery AT that charge is at or below it and must revert. A
+    // second, unbounded path would compare against 1000, never fire, and leave
+    // the abort silently dead — the same class of defect as the unwired input
+    // above.
     let root = try makeScratchRoot()
     defer { try? FileManager.default.removeItem(at: root) }
 
@@ -1153,7 +1154,7 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
     let armed = try makeArmedWatchdog(
         root: root, record: armedRecord(priorValue: false, ttlSeconds: 28_800),
         environment: FakeEnvironment(
-            reading: PowerReading(source: .battery, percent: 100)),
+            reading: PowerReading(source: .battery, percent: 50)),
         policy: policy)
 
     #expect(try armed.service.evaluate(

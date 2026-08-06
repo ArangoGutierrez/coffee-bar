@@ -72,12 +72,12 @@ function st(over) {
 // Every test below reads TABLE. If the regex above ever stops matching, the
 // array is empty and `resolve` throws everywhere, which would look like a bug
 // in the module rather than a broken fixture. These two literals fail first and
-// say which it is. 20 is the `batteryFloorPercent` default in
+// say which it is. 15 is the `batteryFloorPercent` default in
 // PowerBroker.swift's `PowerInputs.init`, written here by hand on purpose.
 
 test('the page still carries the whole key space and the real floor', () => {
   assert.equal(TABLE.length, 24);
-  assert.equal(META.batteryFloorPercent, 20);
+  assert.equal(META.batteryFloorPercent, 15);
 });
 
 // ─── The battery floor, at the boundary ──────────────────────────────────────
@@ -86,14 +86,14 @@ test('the page still carries the whole key space and the real floor', () => {
 // boundary and one step either side of it.
 
 test('on battery at exactly the floor, an explicit On is refused', () => {
-  const row = resolve(st({ intent: 'serve', power: 'battery', batteryPercent: 20 }), TABLE, META);
+  const row = resolve(st({ intent: 'serve', power: 'battery', batteryPercent: 15 }), TABLE, META);
   assert.equal(row.atOrBelowFloor, true);
   assert.equal(row.system, false);
   assert.equal(row.suppressed, true);
 });
 
 test('one point above the floor, the same On holds', () => {
-  const row = resolve(st({ intent: 'serve', power: 'battery', batteryPercent: 21 }), TABLE, META);
+  const row = resolve(st({ intent: 'serve', power: 'battery', batteryPercent: 16 }), TABLE, META);
   assert.equal(row.atOrBelowFloor, false);
   assert.equal(row.system, true);
   assert.equal(row.suppressed, false);
@@ -159,7 +159,7 @@ test('the display is held only alongside the system hold', () => {
 
 test('the display opt-in does not survive the battery floor', () => {
   const row = resolve(
-    st({ intent: 'serve', displayOptIn: true, power: 'battery', batteryPercent: 20 }), TABLE, META);
+    st({ intent: 'serve', displayOptIn: true, power: 'battery', batteryPercent: 15 }), TABLE, META);
   assert.equal(row.system, false);
   assert.equal(row.displayHeld, false);
 });
@@ -208,18 +208,18 @@ test('the readout names no assertion when nothing is held', () => {
 });
 
 test('the suppressed note states the floor inclusively and with a percent sign', () => {
-  // Both details are load-bearing. "below 20%" claims the opposite of what
-  // happens at exactly 20, and the Swift guard `aBoundaryPhraseMatchesTheReal-
+  // Both details are load-bearing. "below 15%" claims the opposite of what
+  // happens at exactly 15, and the Swift guard `aBoundaryPhraseMatchesTheReal-
   // Boundary` fails the page for it. The `%` character matters too: the guards
-  // match `(\d+)\s*%`, so "20 percent" in words slips past them silently.
-  const row = resolve(st({ intent: 'serve', power: 'battery', batteryPercent: 20 }), TABLE, META);
+  // match `(\d+)\s*%`, so "15 percent" in words slips past them silently.
+  const row = resolve(st({ intent: 'serve', power: 'battery', batteryPercent: 15 }), TABLE, META);
   assert.equal(describe(row, META).note,
-    'Nothing is held. At or below 20% on battery, coffee-bar refuses the hold, '
+    'Nothing is held. At or below 15% on battery, coffee-bar refuses the hold, '
     + 'and the floor outranks an explicit On.');
 });
 
 test('the note takes the floor from the page and never from a literal in the module', () => {
-  const row = resolve(st({ intent: 'serve', power: 'battery', batteryPercent: 20 }), TABLE, META);
+  const row = resolve(st({ intent: 'serve', power: 'battery', batteryPercent: 15 }), TABLE, META);
   const note = describe(row, { batteryFloorPercent: 35 }).note;
   assert.match(note, /At or below 35%/);
 });

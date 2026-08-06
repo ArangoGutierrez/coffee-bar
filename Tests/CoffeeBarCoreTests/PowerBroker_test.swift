@@ -23,7 +23,7 @@ private func inputs(sessions: [AgentSession] = [],
                     battery: Int? = 80,
                     intent: UserIntent = .auto,
                     blocked: Bool = false,
-                    floor: Int = 20,
+                    floor: Int = 15,
                     holdDisplayAwake: Bool = false) -> PowerInputs {
     PowerInputs(sessions: sessions, powerSource: source, batteryPercent: battery,
                 userIntent: intent, holdAwakeWhileBlocked: blocked,
@@ -121,16 +121,16 @@ private func inputs(sessions: [AgentSession] = [],
     //
     // At exactly the floor, which is where `PowerBroker` suppresses.
     let out = PowerBroker.decide(inputs(sessions: [session(.working)],
-                                        source: .battery, battery: 20,
+                                        source: .battery, battery: 15,
                                         intent: .serve, holdDisplayAwake: true))
     #expect(out.idleSleepAssertion == false)
     #expect(out.displaySleepAssertion == false)
-    #expect(out.suppression == .batteryFloor(percent: 20, floor: 20))
+    #expect(out.suppression == .batteryFloor(percent: 15, floor: 15))
 
     // One point above it the whole hold arrives, display and all. Without this
     // the check above passes against a `decide` that never grants the opt-in.
     let above = PowerBroker.decide(inputs(sessions: [session(.working)],
-                                          source: .battery, battery: 21,
+                                          source: .battery, battery: 16,
                                           intent: .serve, holdDisplayAwake: true))
     #expect(above.idleSleepAssertion == true)
     #expect(above.displaySleepAssertion == true)
@@ -321,17 +321,17 @@ private func inputs(sessions: [AgentSession] = [],
 
 @Test func batteryFloorSuppressesAtOrBelowTheFloor() {
     #expect(PowerBroker.decide(
-        inputs(source: .battery, battery: 21, intent: .serve)).idleSleepAssertion == true)
+        inputs(source: .battery, battery: 16, intent: .serve)).idleSleepAssertion == true)
     #expect(PowerBroker.decide(
-        inputs(source: .battery, battery: 20, intent: .serve)).idleSleepAssertion == false)
+        inputs(source: .battery, battery: 15, intent: .serve)).idleSleepAssertion == false)
     #expect(PowerBroker.decide(
-        inputs(source: .battery, battery: 19, intent: .serve)).idleSleepAssertion == false)
+        inputs(source: .battery, battery: 14, intent: .serve)).idleSleepAssertion == false)
 }
 
 @Test func batteryFloorAppliesOnlyOnBatteryPower() {
-    // Plugged in at 19% is not an emergency.
+    // Plugged in at 14% is not an emergency.
     #expect(PowerBroker.decide(
-        inputs(source: .ac, battery: 19, intent: .serve)).idleSleepAssertion == true)
+        inputs(source: .ac, battery: 14, intent: .serve)).idleSleepAssertion == true)
 }
 
 @Test func absentBatteryReadingNeverSuppresses() {
@@ -365,15 +365,15 @@ private func inputs(sessions: [AgentSession] = [],
     // position almost every user sits in, so the floor mattering only under
     // `.serve` means the floor effectively does not exist.
     let suppressed = PowerBroker.decide(
-        inputs(sessions: [session(.working)], source: .battery, battery: 19, intent: .auto))
+        inputs(sessions: [session(.working)], source: .battery, battery: 14, intent: .auto))
     #expect(suppressed.idleSleepAssertion == false,
             "Auto held an active session below the battery floor")
-    #expect(suppressed.suppression == .batteryFloor(percent: 19, floor: 20))
+    #expect(suppressed.suppression == .batteryFloor(percent: 14, floor: 15))
 
     // The control case, one point above the floor. Without it, an `.auto` that
     // never holds at all satisfies the expectation above.
     #expect(PowerBroker.decide(
-        inputs(sessions: [session(.working)], source: .battery, battery: 21, intent: .auto)
+        inputs(sessions: [session(.working)], source: .battery, battery: 16, intent: .auto)
     ).idleSleepAssertion == true, "Auto stopped holding above the floor")
 }
 
@@ -386,7 +386,7 @@ private func inputs(sessions: [AgentSession] = [],
     // error and becomes whatever a `defaults write` puts in the preferences.
     //
     // The DISCRIMINATING pair. A floor of 0 that reaches `decide` intact holds
-    // at 1%; a floor raised to the 5 minimum refuses there. The control below
+    // at 1%; a floor raised to the 10 minimum refuses there. The control below
     // is what stops a clamp that simply refuses everything from passing.
     let atOne = PowerBroker.decide(
         inputs(source: .battery, battery: 1, intent: .serve, floor: 0))
@@ -397,23 +397,34 @@ private func inputs(sessions: [AgentSession] = [],
     // `suppressionAdvisory`. A decision that bounded the comparison but
     // reported the raw value would tell the user "does not hold at or below 0%"
     // while refusing at 1%.
-    #expect(atOne.suppression == .batteryFloor(percent: 1, floor: 5))
+    #expect(atOne.suppression == .batteryFloor(percent: 1, floor: 10))
 
     // The control, one point above the bounded floor.
     #expect(PowerBroker.decide(
-        inputs(source: .battery, battery: 6, intent: .serve, floor: 0)
+        inputs(source: .battery, battery: 11, intent: .serve, floor: 0)
     ).idleSleepAssertion == true, "the raised floor refused above its own minimum")
 }
 
 @Test func aFloorAboveOneHundredIsCappedBeforeTheDecisionUsesIt() {
     // Named bug this catches: a floor of 1000 refuses every hold at every
     // charge, and the sentence the panel prints reads "coffee-bar does not hold
-    // at or below 1000%" — a percentage that cannot exist. The refusal at 100%
-    // is correct; the number quoted for it is not.
+    // at or below 1000%" — a percentage that cannot exist. The refusal at the
+    // cap is correct; the number quoted for it is not.
+    //
+    // Tested AT the capped floor rather than at 100%. `permitted` now tops out
+    // at 50, so 100% is above the cap and holds — a check at 100% would assert
+    // the cap by observing a hold, which a `decide` that ignored the floor
+    // entirely would also satisfy.
     let out = PowerBroker.decide(
-        inputs(source: .battery, battery: 100, intent: .serve, floor: 1000))
+        inputs(source: .battery, battery: 50, intent: .serve, floor: 1000))
     #expect(out.idleSleepAssertion == false)
-    #expect(out.suppression == .batteryFloor(percent: 100, floor: 100))
+    #expect(out.suppression == .batteryFloor(percent: 50, floor: 50))
+
+    // The discriminating control: one point above the cap holds. Without it an
+    // implementation that refused every hold would pass the pair above.
+    #expect(PowerBroker.decide(
+        inputs(source: .battery, battery: 51, intent: .serve, floor: 1000)
+    ).idleSleepAssertion == true, "the capped floor refused above its own maximum")
 }
 
 @Test func bothFloorPathsBoundTheSameValueTheSameWay() {
@@ -440,9 +451,9 @@ private func inputs(sessions: [AgentSession] = [],
     // Anti-vacuity. The loop above is satisfied by two paths that both do
     // NOTHING, so the bounds themselves are pinned against literals here.
     #expect(PowerInputs(powerSource: .battery, batteryPercent: 50,
-                        batteryFloorPercent: 0).batteryFloorPercent == 5)
+                        batteryFloorPercent: 0).batteryFloorPercent == 10)
     #expect(PowerInputs(powerSource: .battery, batteryPercent: 50,
-                        batteryFloorPercent: 1000).batteryFloorPercent == 100)
+                        batteryFloorPercent: 1000).batteryFloorPercent == 50)
 }
 
 // MARK: - The declared defaults (§4.2)
@@ -452,21 +463,21 @@ private func inputs(sessions: [AgentSession] = [],
     // `inputs` helper above always passes both, so every other test in this
     // file is blind to what the declared defaults actually are: changing the
     // floor to 90, or the knob to true, leaves them all green. Design spec
-    // §4.2 fixes the floor at 20 and the knob at off, and Task 5 reads both,
+    // §4.2 fixes the floor at 15 and the knob at off, and Task 5 reads both,
     // so the defaults are a contract and need a test that can see them.
 
-    // Floor defaults to 20, so 21% on battery is above it and still holds.
+    // Floor defaults to 15, so 16% on battery is above it and still holds.
     #expect(PowerBroker.decide(
-        PowerInputs(powerSource: .battery, batteryPercent: 21, userIntent: .serve)
-    ).idleSleepAssertion == true, "21% on battery must clear the default floor")
+        PowerInputs(powerSource: .battery, batteryPercent: 16, userIntent: .serve)
+    ).idleSleepAssertion == true, "16% on battery must clear the default floor")
 
-    // 20% is AT the default floor, so §8.1 suppresses. The reason carries the
-    // floor it used, which pins the default to the literal 20 rather than to
+    // 15% is AT the default floor, so §8.1 suppresses. The reason carries the
+    // floor it used, which pins the default to the literal 15 rather than to
     // "whatever the implementation chose".
     let atFloor = PowerBroker.decide(
-        PowerInputs(powerSource: .battery, batteryPercent: 20, userIntent: .serve))
+        PowerInputs(powerSource: .battery, batteryPercent: 15, userIntent: .serve))
     #expect(atFloor.idleSleepAssertion == false)
-    #expect(atFloor.suppression == .batteryFloor(percent: 20, floor: 20))
+    #expect(atFloor.suppression == .batteryFloor(percent: 15, floor: 15))
 
     // The blocked knob defaults to off, so an attention state does not hold.
     // `.auto`, not `.stop`: under `.stop` the veto decides this on its own and

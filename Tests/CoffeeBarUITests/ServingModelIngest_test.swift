@@ -361,7 +361,7 @@ private func makeModel(listener: any IngestListening,
     // recovers — so the panel shows a dead app and no reason for it. The only
     // cure is to quit and relaunch.
     let listener = StubListener()
-    let reader = StubReader(source: .battery, percent: 21)
+    let reader = StubReader(source: .battery, percent: 16)
     let holder = CountingHolder()
     let model = makeModel(listener: listener, reader: reader, holder: holder)
     try model.startMonitoring(interval: 3600)
@@ -372,12 +372,12 @@ private func makeModel(listener: any IngestListening,
     #expect(model.isServing == true)
     #expect(holder.acquireCount == 1)
 
-    reader.set(source: .battery, percent: 20)
+    reader.set(source: .battery, percent: 15)
     model.refresh()
     #expect(model.isServing == false)
-    #expect(model.suppression == .batteryFloor(percent: 20, floor: 20))
+    #expect(model.suppression == .batteryFloor(percent: 15, floor: 15))
 
-    reader.set(source: .battery, percent: 21)
+    reader.set(source: .battery, percent: 16)
     model.refresh()
 
     #expect(model.intent == .auto, "a floor suppression latched the intent away from .auto")
@@ -416,7 +416,7 @@ private func makeModel(listener: any IngestListening,
     // 3. The user clicks On. The floor refuses the hold and says why.
     model.intent = .serve
     #expect(model.isServing == false)
-    #expect(model.suppression == .batteryFloor(percent: 15, floor: 20))
+    #expect(model.suppression == .batteryFloor(percent: 15, floor: 15))
     #expect(model.intent == .auto,
             "a refused click left the control on a position the user never picked")
 
@@ -456,12 +456,12 @@ private func makeModel(listener: any IngestListening,
     // the floor refuses.
     model.intent = .serve
     #expect(model.sessions.isEmpty)
-    #expect(model.suppression == .batteryFloor(percent: 15, floor: 20))
+    #expect(model.suppression == .batteryFloor(percent: 15, floor: 15))
 
     // The claim that line makes, put to the next thing that happens.
     listener.deliver(HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
     #expect(model.isServing == false)
-    #expect(model.suppression == .batteryFloor(percent: 15, floor: 20))
+    #expect(model.suppression == .batteryFloor(percent: 15, floor: 15))
 
     // And the floor is the ONLY thing refusing. Lift it and the hold arrives
     // with no further action from the user.

@@ -94,9 +94,15 @@ while a coding agent works, and lets it sleep when every agent waits on you.
   screen goes dark while the machine stays awake. `Stays on` adds a
   `PreventUserIdleDisplaySleep` assertion. That assertion rides the system hold
   and never outlives it.
-- The battery floor. On battery, at or below 20%, coffee-bar does not hold. The
-  floor also refuses the display assertion. "At or below" is exact: at 20%
-  itself coffee-bar does not hold.
+- The battery floor. On battery, at or below `20%`, coffee-bar does not hold.
+  The floor also refuses the display assertion. "At or below" is exact: at
+  `20%` itself coffee-bar does not hold.
+  <!-- The floor this release shipped, as a code literal ON PURPOSE. It is a
+       record of 0.1.0, not a claim about the current default, and the default
+       has since moved. `theBatteryFloorStatedIsTheRealDefault` reads every
+       percentage in PROSE and asserts it is the floor in force today, so
+       unwrapping these turns the suite red against a sentence that is true. -->
+
 - Ingest over a unix socket with mode 0600. Five Claude Code hooks feed it:
   `SessionStart`, `PreToolUse`, `PostToolUse`, `PermissionDenied` and `Stop`.
   The app learns what your sessions do from these hooks and from nothing else.
