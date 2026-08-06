@@ -546,6 +546,50 @@ private func argumentSpans(of call: String, in code: String) -> [String] {
     return spans
 }
 
+/// The body of the first `{ … }` block that follows `needle` in `code`, and
+/// `code` with that block cut out of it.
+///
+/// Written for a TRAILING closure, which `argumentSpans(of:in:)` cannot reach:
+/// the closure sits OUTSIDE the parentheses, so a paren-balanced reader stops
+/// before it. Splitting the file into "inside that block" and "everything else"
+/// is what lets one guard hold two call sites of the SAME method INDEPENDENTLY.
+/// A `contains` cannot: one call satisfies it for both.
+///
+/// Order does not take part. The block is removed wherever it sits, so moving
+/// the registration above or below the other call site does not change either
+/// answer.
+///
+/// LIMIT, stated rather than hidden, and it is the same limit
+/// `argumentSpans(of:in:)` carries: `swiftCodeWithoutComments` KEEPS string
+/// literals, so a `{` or `}` inside one would misbalance the count. Nothing this
+/// reads carries a brace in a literal today. It is a structural reader and not
+/// the Swift grammar.
+private func braceBlock(after needle: String, in code: String)
+    -> (block: String, rest: String)? {
+    guard let found = code.range(of: needle),
+          let open = code[found.upperBound...].firstIndex(of: "{")
+    else { return nil }
+
+    var depth = 0
+    var cursor = open
+    while cursor < code.endIndex {
+        if code[cursor] == "{" { depth += 1 }
+        if code[cursor] == "}" {
+            depth -= 1
+            if depth == 0 {
+                let close = code.index(after: cursor)
+                return (String(code[open ..< close]),
+                        String(code[code.startIndex ..< open]) + String(code[close...]))
+            }
+        }
+        cursor = code.index(after: cursor)
+    }
+    // Unbalanced. Reported as "no block" rather than as a span running to the
+    // end of the file, so the caller fails rather than reads the whole file as
+    // the block and passes.
+    return nil
+}
+
 /// The four `DemotionPolicy` arguments that DEFAULT to empty.
 ///
 /// Each names a deny rule that is OFF unless a caller fills it, and the
@@ -888,19 +932,34 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
         """)
 }
 
-@Test func theAppComposesTheProcessGovernanceAndRecoversAtLaunch() throws {
+@Test func theAppComposesTheProcessGovernanceAndRecoversAtLaunchAndOnQuit() throws {
     // PRESENCE. `ServingModel.governance` is the ONE seam on that type whose
     // default is null rather than the real implementation, so this is what
     // stops the missing wire shipping silently — the exact objection the
     // listener's real-by-default comment raises.
     //
-    // Three separate things are held, because each can be deleted on its own
-    // and the other two still read as a working feature:
+    // FOUR separate things are held, because each can be deleted on its own and
+    // the other three still read as a working feature:
     //
     //   1. the app CONSTRUCTS a ProcessGovernance;
     //   2. it HANDS it to the model, rather than building one and dropping it;
-    //   3. it RECOVERS at launch, so a demotion an earlier run was killed
-    //      before undoing does not outlive that run.
+    //   3. it RECOVERS AT LAUNCH, so a demotion an earlier run was killed
+    //      before undoing does not outlive that run;
+    //   4. it RECOVERS ON THE WAY OUT, so a clean quit does not leave a process
+    //      on the E-cores until the next launch.
+    //
+    // 3 and 4 are the same METHOD NAME at two call sites, and until 2026-08-06
+    // this guard held them with one `code.contains("restoreDemotedProcesses()")`
+    // — which EITHER call site satisfies on its own. Measured: deleting the
+    // App.init() call and keeping the terminate block left the whole suite at
+    // rc=0 with 732 tests passing. The hazard that leaves is the one
+    // docs/ACCEPTED-RISKS.md says the launch recovery closes: a run that ends by
+    // SIGKILL posts no willTerminateNotification, so only a later LAUNCH can
+    // undo what it left demoted.
+    //
+    // They are separated STRUCTURALLY rather than by counting to two. A count
+    // reaches two when somebody writes the terminate call twice, and the block
+    // split says which call site is missing.
     //
     // COMMENT-STRIPPED, because `main.swift` explains all three in prose. A raw
     // read would be satisfied by the explanation of the thing it deleted.
@@ -922,10 +981,28 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
         main.swift builds a ProcessGovernance and never hands it to the model. \
         ServingModel defaults that seam to nil, so refresh() reconciles nothing.
         """)
-    #expect(code.contains("restoreDemotedProcesses()"), """
-        main.swift never restores at launch. A run that was killed while \
-        holding processes down leaves them there, and the journal it wrote is \
-        the only record naming them.
+    // The terminate block, cut out of the file so the two call sites cannot
+    // stand in for one another.
+    let split = try #require(
+        braceBlock(after: "NSApplication.willTerminateNotification", in: code), """
+            main.swift registers no block on NSApplication.willTerminateNotification, \
+            so a clean quit leaves every demoted process on the E-cores until the \
+            next launch.
+            """)
+
+    #expect(split.block.contains("restoreDemotedProcesses()"), """
+        main.swift observes willTerminateNotification and does not restore inside \
+        that block. The Quit button calls NSApplication.shared.terminate, so a user \
+        who quits cleanly keeps their applications on the E-cores until they launch \
+        coffee-bar again.
+        """)
+
+    #expect(split.rest.contains("restoreDemotedProcesses()"), """
+        main.swift restores ONLY from the willTerminateNotification block, and \
+        never at launch. A run that ends by SIGKILL posts no such notification, so \
+        the processes it was holding down stay there and the journal it wrote is \
+        the only record naming them. docs/ACCEPTED-RISKS.md says the launch \
+        recovery is what closes that window.
         """)
 }
 

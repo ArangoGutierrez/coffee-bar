@@ -40,7 +40,7 @@ public final class ServingModel {
     /// and no check may touch a process it does not own.
     ///
     /// The missing wire cannot ship silently.
-    /// `theAppComposesTheProcessGovernanceAndRecoversAtLaunch` reads
+    /// `theAppComposesTheProcessGovernanceAndRecoversAtLaunchAndOnQuit` reads
     /// `main.swift` for the construction and for the launch recovery.
     private let governance: ProcessGovernance?
 

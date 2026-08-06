@@ -732,7 +732,7 @@ private func aToolCall(session: String = "s1") -> HookEvent {
         // journal file and their own running applications.
         //
         // The missing wire cannot ship silently:
-        // `theAppComposesTheProcessGovernanceAndRecoversAtLaunch` reads
+        // `theAppComposesTheProcessGovernanceAndRecoversAtLaunchAndOnQuit` reads
         // `main.swift` for it.
         let model = ServingModel(holder: NoHold(),
                                  reader: FixedPower(reading: PowerReading(source: .battery,

@@ -30,9 +30,12 @@ struct CoffeeBarMenuBarApp: App {
         // `nil`, deliberately: a null governance demotes nothing, which is the
         // product's documented default, and a real default would point every
         // check in the package at the user's own demotion journal.
-        // `theAppComposesTheProcessGovernanceAndRecoversAtLaunch` reads this
-        // file for all three lines below, because SwiftPM treats `main.swift`
-        // as top-level code that no test target can import.
+        // `theAppComposesTheProcessGovernanceAndRecoversAtLaunchAndOnQuit` reads
+        // this file for all four calls below, because SwiftPM treats
+        // `main.swift` as top-level code that no test target can import. It
+        // holds the launch restore and the terminate restore SEPARATELY: they
+        // are the same method name, so one guard reading for that name once was
+        // satisfied by either call on its own.
         let model = ServingModel(governance: ProcessGovernance())
 
         // Undo whatever an EARLIER run left demoted, before this one can demote
