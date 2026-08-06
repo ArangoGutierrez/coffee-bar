@@ -75,29 +75,53 @@ public enum BatteryFloor {
 
     /// The gap between offered floors.
     ///
-    /// Here beside `permitted` for the reason `choices` gives: two numbers a
-    /// view could restate are two numbers that can drift from the policy.
+    /// Here beside `permitted` rather than in the view: two numbers a view
+    /// could restate are two numbers that can drift from the policy. The
+    /// slider in `PreferencesView.swift` is constructed over this and
+    /// `permitted`, so those two ARE the control's shape — `choices` below
+    /// only describes the result.
     public static let step = 5
 
-    /// What the control offers, DERIVED so it cannot disagree with the range.
+    /// The STEP-ALIGNED POSITIONS the floor control can produce, derived from
+    /// `permitted` and `step` so it cannot disagree with either.
     ///
-    /// A fixed set of positions rather than a free number. This is a safety
-    /// limit somebody sets once and forgets, so the difference between 32 and
-    /// 33 is not a choice worth offering.
+    /// NO PRODUCTION CODE READS THIS, and that is correct rather than a gap.
+    /// The control is a `Slider` in `PreferencesView.swift`, constructed
+    /// `in: permitted, step: step`, so the values it yields are
+    /// `lowerBound + n * step` — exactly what the `stride` below computes. This
+    /// is a derived DESCRIPTION of that control, never a source of truth for
+    /// it.
     ///
-    /// Here beside `permitted` rather than in the view, so the two cannot
-    /// drift. A choice outside the permitted range is a control position the
-    /// decision would silently change under the user: they pick it, the floor
-    /// becomes something else, and the control then matches no value at all.
-    /// `everyOfferedFloorSitsInsideThePermittedRange` goes red on that, and it
-    /// also holds `default` inside the list — a default a user cannot get back
-    /// to is a setting with no undo.
+    /// So editing this changes nothing the user sees. If you want to change
+    /// what the control offers, change `permitted` or `step`; the slider is
+    /// built over those two and this follows. Editing the derivation here
+    /// without touching them makes this DISAGREE with the control while the
+    /// checks that read it stay green — which is the one way this symbol can
+    /// do harm. `theOfferedFloorsAreDerivedFromTheRangeAndStep` goes red on it.
     ///
-    /// Was a literal list. A literal let `default` sit outside the offered
-    /// set: `[10, 20, 30, 40, 50]` cannot reach 15. Deriving it removes the
-    /// class of defect rather than the one instance —
-    /// `theOfferedFloorsAreDerivedFromTheRangeAndStep` goes red the moment
-    /// `step` and `permitted` stop agreeing with the offered positions.
+    /// It earns its place by being what the policy guards assert against.
+    /// `everyOfferedFloorSitsInsideThePermittedRange` holds two properties of
+    /// the constants that a `Slider` makes no less real:
+    ///
+    ///   1. `step` divides the range, so `permitted.upperBound` sits on a step
+    ///      boundary and the user can reach the most conservative floor the app
+    ///      accepts. Under `step = 7` the top position is 45 while
+    ///      `defaults write` can still set 50 — a floor the product honours and
+    ///      the control cannot express.
+    ///   2. `default` sits on a boundary too, so a user who moves off it can
+    ///      get back. A default with no undo is not a default.
+    ///
+    /// LIMIT, stated rather than implied: those are properties of these
+    /// NUMBERS, not observations of SwiftUI. What a stepped `Slider` snaps to
+    /// is not asserted anywhere in this package — M1 design §5.4 rules out
+    /// asserting on the rendered control — so the rendering rides on the manual
+    /// acceptance pass. A step that divides the range is reachable under any
+    /// sane rounding rule, which is the strongest claim available from here.
+    ///
+    /// Was a literal list, and read "what the control offers" until the picker
+    /// it described was deleted. A literal let `default` sit outside the
+    /// offered set: `[10, 20, 30, 40, 50]` cannot reach 15. Deriving it removes
+    /// the class of defect rather than the one instance.
     public static var choices: [Int] {
         Array(stride(from: permitted.lowerBound,
                      through: permitted.upperBound,

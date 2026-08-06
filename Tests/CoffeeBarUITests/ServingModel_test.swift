@@ -2025,7 +2025,19 @@ private struct DisagreeingHealth: HookHealthProviding {
     // than left green, and this paragraph is why their absence is not a gap.
     //
     // What the derivation does NOT give for free is below.
-    #expect(BatteryFloor.choices.isEmpty == false, "the picker would render no segments")
+    //
+    // THE CONTROL IS A SLIDER, not a picker, since the floor moved into the
+    // Preferences window. `choices` describes the STEP-ALIGNED POSITIONS that
+    // slider can produce — it is built `in: permitted, step: step`, so the
+    // values it yields are `lowerBound + n * step`, which is what `stride`
+    // computes. Nothing renders `choices`; it is a derived DESCRIPTION of the
+    // control, never a source of truth for it.
+    //
+    // So both assertions below are properties of the POLICY CONSTANTS, and
+    // they survived the picker's deletion because they were never about a
+    // picker. The wording was, and that is what changed here.
+    #expect(BatteryFloor.choices.isEmpty == false,
+            "permitted and step yield no position at all, so the slider can express nothing")
 
     // 1. The most conservative floor must be REACHABLE. `stride(through:)`
     //    stops short whenever `step` does not divide the range: a step of 7
@@ -2033,6 +2045,13 @@ private struct DisagreeingHealth: HookHealthProviding {
     //    accepting 50 from `defaults write`. The control would then be unable
     //    to express a floor the product honours, which is the same class of
     //    defect as a default outside the offered set.
+    //
+    //    What this proves and what it does not. It proves the POLICY property
+    //    — `step` divides the range, so `upperBound` sits on a step boundary
+    //    and is reachable under any sane rounding. It does NOT prove what
+    //    SwiftUI's stepped `Slider` actually snaps to; design §5.4 rules out
+    //    asserting on the rendered control, so no check here can watch it. The
+    //    rendering rides on the manual acceptance pass.
     #expect(BatteryFloor.choices.last == BatteryFloor.permitted.upperBound,
             """
             the control tops out at \
@@ -2049,10 +2068,15 @@ private struct DisagreeingHealth: HookHealthProviding {
 
 @MainActor
 @Test func theFloorLabelsAreDistinctAndNameTheirPercentage() {
-    // The picker's segments read from here, so a check can see what the control
+    // The slider's READOUT reads from here, so a check can see what the control
     // says — design §5.4 rules out asserting on the rendered view. Named bug
-    // this catches: one label for every segment, which makes the control
-    // unusable and which nothing else in this package could see.
+    // this catches: one label for every position, which makes the readout
+    // useless and which nothing else in this package could see.
+    //
+    // It matters MORE for a slider than it did for the picker it replaces. The
+    // picker drew every position at once, so a duplicated label was visible on
+    // screen; the slider shows one value at a time, and two positions reading
+    // "20%" look like a control that has stopped responding to the drag.
     let labels = BatteryFloor.choices.map { ServingModel.floorLabel(for: $0) }
     #expect(Set(labels).count == BatteryFloor.choices.count,
             "two floors share a label: \(labels)")
