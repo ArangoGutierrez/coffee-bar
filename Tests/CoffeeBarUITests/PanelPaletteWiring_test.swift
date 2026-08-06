@@ -4,17 +4,51 @@
 import Foundation
 import Testing
 
-/// Reads `PanelView.swift` as text. `#filePath` anchors the lookup to THIS
+/// Reads `PanelView.swift` as CODE. `#filePath` anchors the lookup to THIS
 /// source file, never to an installed or deployed copy, so the guard cannot
 /// green-light a different tree than the one under test.
+///
+/// COMMENT-STRIPPED, and that is a repair, not a flourish. Read raw, every
+/// guard in this file counted PROSE as CODE, and the count guard below was
+/// measured to fail in BOTH directions at once — the only guard in this
+/// package to manage both:
+///
+///   INVERTED — a two-line comment naming `.pickerStyle(.segmented)` took the
+///   count to 2 and turned the guard RED on an otherwise correct tree.
+///   BLIND — commenting out the ENTIRE Serving picker left it GREEN, because
+///   the commented-out `.pickerStyle(.segmented)` still counted.
+///
+/// The second is the one that mattered: the guard reported a control present
+/// after it had been removed from the render, which is the exact failure it
+/// exists to catch.
+///
+/// Urgent rather than tidy, because the practice that trips it is now
+/// established in the file it reads. `PanelView.swift` explains the three
+/// controls that moved to Preferences in prose, deliberately — that paragraph
+/// is itself a fixture for `eachMovedControlLivesInExactlyOneSurface` — and
+/// Task 6 extends the practice. The next person to write a helpful comment
+/// about the segmented picker would have reddened this suite on a correct
+/// tree, and the obvious way to green it is to bump the literal to 2, which
+/// silently widens the guard forever.
+///
+/// `swiftCodeWithoutComments` is the lexer `AppLayerBoundary_test.swift`
+/// declares and `swiftCodeWithoutCommentsKeepsCodeAndDropsComments` pins.
+/// Reused rather than re-implemented, for the reason its own doc gives: one
+/// tested stripper in this target, not two.
+///
+/// ALL THREE guards in this file read through here, so all three are fixed at
+/// once: the tint count, the orange count — same shape, same inflation — and
+/// `indicatorComesFromTheModel`, which is the blind direction, where a comment
+/// naming `ServingModel.indicator(` would satisfy it while the call was gone.
+/// The hex-literal check stops matching hex inside prose as a bonus.
 private func panelSource() throws -> String {
     let root = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()   // CoffeeBarUITests
         .deletingLastPathComponent()   // Tests
         .deletingLastPathComponent()   // repo root
-    return try String(
+    return swiftCodeWithoutComments(try String(
         contentsOf: root.appendingPathComponent("Sources/CoffeeBarUI/PanelView.swift"),
-        encoding: .utf8)
+        encoding: .utf8))
 }
 
 @Test("the tint is applied per-picker, so state never paints a non-segment control")
@@ -37,6 +71,11 @@ func tintIsConfinedToTheHeldSegments() throws {
     // The count still discriminates at 1 — deleting the tint gives 0 — and the
     // adjacency check below is what carries the placement half, exactly as it
     // did at 3.
+    //
+    // It counts CODE, never prose. `panelSource()` strips comments and its doc
+    // records the two measured failures that argument replaces; this note is
+    // here because the rationale above argues only the NUMBER's soundness, and
+    // a number is sound over the wrong text.
     #expect(pickers == 1, "expected 1 segmented picker, found \(pickers)")
     #expect(tints == pickers,
             "expected one .tint per segmented picker: \(pickers) pickers, \(tints) tints")
@@ -48,6 +87,11 @@ func tintIsConfinedToTheHeldSegments() throws {
 
     // 1. ADJACENCY. The first modifier after each `.labelsHidden()`, comments
     //    skipped, must be the tint. That is what "on the picker" means.
+    //
+    //    The `hasPrefix("//")` filter is now belt-and-braces: `panelSource()`
+    //    strips comments before this sees them. Kept rather than removed, so
+    //    the check does not silently depend on the reader for correctness —
+    //    it was skipping comments before the reader did, and it still would.
     let attached = source
         .components(separatedBy: ".labelsHidden()\n")
         .dropFirst()
