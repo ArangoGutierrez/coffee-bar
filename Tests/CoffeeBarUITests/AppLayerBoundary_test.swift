@@ -1792,6 +1792,21 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
         in code, so the scroll container has no bound and the list grows as far \
         as the sessions take it. A comment naming the bound does not satisfy this.
         """)
+
+    // The container has to ENCLOSE the rows, and `contains` cannot say that: a
+    // ScrollView wrapped around the empty-state line alone — or added anywhere
+    // else in the file — satisfies the check above while the list it was added
+    // for still grows without limit. `braceBlock(after:in:)` reads the block and
+    // the rows are asserted inside it.
+    let container = try #require(braceBlock(after: "ScrollView", in: code)?.block, """
+        AttentionListView.swift names a ScrollView that opens no balanced block, \
+        so this guard cannot tell what the container holds.
+        """)
+    #expect(container.contains("ForEach(sessions)"), """
+        the scroll container in AttentionListView.swift does not enclose \
+        ForEach(sessions), so the rows still grow outside it and the bound holds \
+        nothing.
+        """)
     // END attention-list scroll tripwire.
 }
 
