@@ -428,8 +428,15 @@ private let forbiddenWriteCalls = [
     // the anchor rather than a cost of it — the loop above now holds the same
     // no-write line over the model that renders the advice as it does over the
     // reader that produced it.
+    //
+    // `HookSnippet.swift` joined it next, and it is the file design §6 exists
+    // for: it PRINTS what a writer would otherwise have written. It names the
+    // path where it records which file its command form was measured from, and
+    // it is admitted rather than reworded — a comment edited to slip past this
+    // anchor is how the next file that really does write one gets in.
     #expect(knowsThePath.sorted() == ["HookHealth.swift",
                                       "HookHealthReader.swift",
+                                      "HookSnippet.swift",
                                       "ServingModel.swift",
                                       "TelemetryRecon.swift"],
             "the set of files that know the settings path changed: \(knowsThePath.sorted())")
