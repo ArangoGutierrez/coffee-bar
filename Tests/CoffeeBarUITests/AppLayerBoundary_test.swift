@@ -1807,6 +1807,24 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
         ForEach(sessions), so the rows still grow outside it and the bound holds \
         nothing.
         """)
+
+    // And the container has to be UNSQUEEZABLE. This one was caught in the
+    // running app, not here: a ScrollView is the only FLEXIBLE child of the
+    // panel's VStack, so when the panel is taller than the window it can use,
+    // the stack takes the shortfall out of the one view that can shrink. This
+    // list collapsed to zero height and "Nothing waiting on you." disappeared
+    // from the panel, with every check in this file green.
+    //
+    // `fixedSize` vertically pins the container at the size the bound already
+    // decided — min(content, maximumListHeight) — so the stack can no longer
+    // take height from it. Without it the bound has a floor of ZERO, which is a
+    // second way for the list to reach the user nowhere.
+    #expect(code.contains(".fixedSize(horizontal: false, vertical: true)"), """
+        AttentionListView.swift does not pin its scroll container with \
+        fixedSize, so the panel's VStack can squeeze the list to nothing — the \
+        rows and the empty-state line then vanish from a panel that is otherwise \
+        healthy.
+        """)
     // END attention-list scroll tripwire.
 }
 
