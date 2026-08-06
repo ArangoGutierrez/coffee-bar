@@ -17,11 +17,6 @@
 # WHAT THIS FILE IS FOR. v0.1.1 pushed a tag, then stopped: no release object,
 # the tap left on v0.1.0, and the site still advertising the older version. Each
 # phase below ends with the check that would have caught that.
-#
-# ONE-TIME SETUP STILL NEEDED: the `release` label below does not exist in this
-# repository yet. GitHub applies only labels that already exist, so create it
-# once or the issues open unlabelled:
-#     gh label create release --description "Cutting a release" --color 0E8A16
 
 name: Release checklist
 description: Cut a release without forgetting the release object, the tap, or the site.
@@ -86,9 +81,14 @@ body:
         ```
         git ls-remote --tags origin | grep vX.Y.Z                      # tag pushed?
         gh api repos/ArangoGutierrez/coffee-bar/releases --jq 'length' # release exists?
-        grep 'tags/v' <tap>/Formula/coffee-bar.rb                      # tap version
+        grep 'tags/v' "$(brew --repository ArangoGutierrez/coffee-bar)/Formula/coffee-bar.rb"
         curl -sS https://arangogutierrez.github.io/coffee-bar/ | grep -o '0\.[0-9]*\.[0-9]*'
         ```
+
+        The third line reads the tap through `brew --repository`, which resolves
+        the checkout by name. Never write the absolute path to a local clone into
+        this issue: `noTrackedFileCarriesLiveSessionProse` fails the suite on the
+        maintainer's username, and a release issue is public.
 
         - [ ] `main` is clean and pushed — `git status -sb` shows no divergence.
         - [ ] The suite is green against the FINAL commit, not an earlier one:
@@ -338,9 +338,12 @@ body:
               ```
               git describe --tags --abbrev=0                                  # vX.Y.Z
               # DMG stamp, from the mounted image in phase 2                   # X.Y.Z
-              grep 'tags/v' <tap>/Formula/coffee-bar.rb                        # tags/vX.Y.Z.tar.gz
+              grep 'tags/v' "$(brew --repository ArangoGutierrez/coffee-bar)/Formula/coffee-bar.rb"
               curl -sS https://arangogutierrez.github.io/coffee-bar/ | grep -o 'X\.Y\.Z'
               ```
+              The tap line expects `tags/vX.Y.Z.tar.gz`. It reads the checkout
+              that `brew` resolves, so run it AFTER the `brew update` in phase 4
+              or it reports the version brew last fetched.
         - [ ] The release object exists and carries the DMG:
               ```
               gh release view vX.Y.Z --repo ArangoGutierrez/coffee-bar --json assets,isDraft \
