@@ -57,7 +57,7 @@ private func uiPackageRoot() -> URL {
     // the defect; a command naming the wrong REAL verb is the other one, so
     // both are asserted.
     let words = ServingModel.lidClosedCommand.split(separator: " ").map(String.init)
-    let verb = try? #require(words.last)
+    let verb = words.last
 
     #expect(verb.flatMap { ProbeVerb(rawValue: $0) } == .arm, """
         the panel prints "\(ServingModel.lidClosedCommand)", whose last word is \

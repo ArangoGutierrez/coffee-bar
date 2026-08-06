@@ -90,7 +90,7 @@ public struct GuardedJournalReader: Sendable {
     /// Moves a refused journal aside, unless this reader only inspects.
     private func quarantineIfPermitted() {
         guard quarantineOnRefusal else { return }
-        try? store.quarantine()
+        _ = try? store.quarantine()
     }
 
     /// The path preconditions alone: nothing is read, nothing is moved.
