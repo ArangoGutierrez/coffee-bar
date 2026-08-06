@@ -1746,6 +1746,55 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     }
 }
 
+@Test func theWaitingListDrawsInsideABoundedScrollContainer() throws {
+    // BEGIN attention-list scroll tripwire — keep beside
+    // `thePanelReadsEverySessionValueTheModelPublishes` above, which guards the
+    // same list from the other side: that one says the panel READS
+    // `model.attention`, this one says the list it draws cannot grow without
+    // limit.
+    //
+    // The defect, observed: with roughly twelve sessions waiting, the list ran
+    // past the bottom of the screen and took the battery reading, the version
+    // line and the legal link with it. Nothing bounded the list and nothing
+    // scrolled, so the panel had no reachable bottom at all.
+    //
+    // Same LIMIT as the checks above, stated rather than hidden: this proves the
+    // view NAMES a scroll container and applies the bound in CODE. It does not
+    // prove the list draws correctly — design §5.4 rules that out. The VALUE of
+    // the bound is asserted in `AttentionListLayout_test.swift`, where a check
+    // can read it; this is the tripwire against deleting the container that
+    // makes the value mean anything.
+    let files = try appLayerSources()
+    #expect(files.count == expectedSourceCount,
+            "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
+
+    let list = try #require(files.first { $0.lastPathComponent == "AttentionListView.swift" },
+                            "the app layer no longer compiles an AttentionListView.swift")
+
+    // CODE, never the raw file, for the reason
+    // `thePanelTellsTheUserHowToArmLidClosedMode` below documents from a
+    // mutation: the doc comment above the scroll container explains why the
+    // container is there and names it, so a raw read cannot tell a live
+    // container from a note about one. Deleting the `ScrollView` and leaving the
+    // prose would keep a raw-file check green.
+    let code = swiftCodeWithoutComments(try String(contentsOf: list, encoding: .utf8))
+
+    #expect(code.contains("ScrollView"), """
+        AttentionListView.swift draws the waiting list in no scroll container in \
+        code, so a long list has nowhere to go and pushes the rest of the panel \
+        off the screen. A comment naming ScrollView does not satisfy this.
+        """)
+
+    // The bound, applied — not merely declared. The container alone is not the
+    // fix: an unbounded ScrollView grows exactly as the VStack did.
+    #expect(code.contains("AttentionListView.maximumListHeight"), """
+        AttentionListView.swift never applies AttentionListView.maximumListHeight \
+        in code, so the scroll container has no bound and the list grows as far \
+        as the sessions take it. A comment naming the bound does not satisfy this.
+        """)
+    // END attention-list scroll tripwire.
+}
+
 @Test func thePanelTellsTheUserHowToArmLidClosedMode() throws {
     // The same tripwire as the three checks above, for issue #13's panel half.
     //
