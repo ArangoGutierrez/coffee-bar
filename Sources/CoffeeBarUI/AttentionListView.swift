@@ -153,6 +153,18 @@ struct AttentionListView: View {
             }
         }
         .frame(maxHeight: AttentionListView.maximumListHeight)
+        // The bound needs a FLOOR as well, and this shipped broken before the
+        // running app showed it: a ScrollView is the only flexible child of the
+        // panel's VStack, so when the panel is taller than the window it can
+        // use, the stack takes the shortfall out of the one view that can
+        // shrink. This list went to zero height and "Nothing waiting on you."
+        // vanished from the panel while every check stayed green.
+        //
+        // `fixedSize` vertically pins the container at the size the bound has
+        // already decided — min(content, maximumListHeight) — so the stack
+        // cannot take height from it. `PanelView` pins the lid-closed advisory
+        // the same way and for the same kind of reason.
+        .fixedSize(horizontal: false, vertical: true)
         .scrollBounceBehavior(.basedOnSize)
     }
 }
