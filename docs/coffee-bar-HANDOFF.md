@@ -536,8 +536,11 @@ would demote nothing and report nothing.
 rule bites the moment ingest learns a pid. The trigger's second condition is a COUNT of
 working sessions for exactly this reason — a condition that required a non-empty pid set
 would be false on every machine, for ever.
-`everyDocumentAboutTheGovernorSaysNothingCallsItYet` stopped requiring the unwired sentence
-here as soon as that production caller existed.
+`everyDocumentAboutTheGovernorMatchesWhetherAnythingCallsIt` stopped requiring the unwired
+sentence here as soon as that production caller existed, and it now REFUSES the sentences
+that caller made false. An earlier version of that guard only lifted itself, and a lifted
+guard returns before it opens a document — so it could not see a stale sentence, and two
+of them survived a whole commit.
 
 `ProcGovernor` is the first thing in this repository that touches a pid it does not own.
 `DemotionProbe` moves `getpid()` and nothing else, which is what makes it safe under a

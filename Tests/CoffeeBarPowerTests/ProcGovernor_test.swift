@@ -212,6 +212,43 @@ private let unwiredMarker = "no production code path calls it"
 /// it and a release does not contain it.
 private let targetsThatDoNotShipTheFeature = ["/CoffeeBarPower/", "/CoffeeBarGovernorHarness/"]
 
+/// Every sentence a production caller makes FALSE.
+///
+/// The other half of the marker above, and the half the earlier version of this
+/// guard could not reach. That version LIFTED itself the moment the feature went
+/// live — correctly — and a lifted guard returns before it opens a document, so
+/// it protected the unwired state and nothing after it. Both sentences below
+/// then sat in `docs/coffee-bar-HANDOFF.md` for a whole commit while
+/// `docs/ACCEPTED-RISKS.md` said "Live, and bounded by two opt-ins", so two
+/// documents in this repository contradicted each other.
+///
+/// The first entry is the damaging one. It sat inside the "How to set it" block,
+/// beside the `defaults write` command that is the ONLY route a user has to fill
+/// the demotable set — so a reader who believed it never ran the command, the
+/// set stayed empty, trigger condition 3 never held, and the feature reached
+/// nobody.
+///
+/// LITERALS, not prose analysis. This guard can say that a KNOWN false sentence
+/// is still in the tree. It claims nothing about a sentence nobody has told it
+/// about, and it is not a substitute for reading the documents.
+private let sentencesFalsifiedByWiring = [
+    unwiredMarker,
+    "has no effect on the running app today",
+    "nothing calls the governor",
+    "Today nothing demotes anything",
+]
+
+/// `text` with every run of whitespace collapsed to one space.
+///
+/// A document wraps its lines, so "because nothing calls the\ngovernor" is one
+/// sentence to a reader and two lines to `contains`. A guard that read the raw
+/// text would pass over the very phrase it was given.
+/// `everyDocumentAboutTheGovernorMatchesWhetherAnythingCallsIt` pins the
+/// behaviour on the wrapped original before it uses it.
+private func flattenedWhitespace(_ text: String) -> String {
+    text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+}
+
 @Suite struct ProcGovernorTests {
 
     // MARK: - Journal first
@@ -777,7 +814,7 @@ private let targetsThatDoNotShipTheFeature = ["/CoffeeBarPower/", "/CoffeeBarGov
 
     // MARK: - The documents must match what the product does
 
-    @Test func everyDocumentAboutTheGovernorSaysNothingCallsItYet() throws {
+    @Test func everyDocumentAboutTheGovernorMatchesWhetherAnythingCallsIt() throws {
         // The `LaunchDaemonInstaller` shape that issue #13 complains about,
         // repeating one milestone later: prose in the PRESENT TENSE about a
         // feature no code path reaches. `docs/ACCEPTED-RISKS.md` said "every
@@ -787,11 +824,18 @@ private let targetsThatDoNotShipTheFeature = ["/CoffeeBarPower/", "/CoffeeBarGov
         // nothing and creates no such file. The code is honest about itself and
         // that does not help, because the documents are what a person reads.
         //
-        // **This guard lifts itself.** The moment anything outside the library
-        // and the harness calls the governor, the feature IS live, the sentence
-        // is no longer required and this check stops asking for it. So it cannot
-        // block the follow-up that wires it, and it cannot become the reason
-        // somebody deletes it.
+        // **This guard SWAPS rules rather than lifting itself, and that is the
+        // repair.** The earlier version lifted: the moment anything outside the
+        // library and the harness called the governor it returned, before it
+        // opened a single document. So it could not block the follow-up that
+        // wired the feature — which was the point — but it also could not see
+        // the sentences the wiring had just made FALSE. It protected the unwired
+        // state and nothing after it, and two sentences shipped saying the
+        // feature does nothing while `docs/ACCEPTED-RISKS.md` said it is live.
+        //
+        // Unwired, every document must CARRY `unwiredMarker`. Wired, every
+        // document must carry NONE of `sentencesFalsifiedByWiring`. There is no
+        // state in which this guard reads no document.
         let root = packageRoot()
 
         var productionCallers: Set<String> = []
@@ -814,9 +858,19 @@ private let targetsThatDoNotShipTheFeature = ["/CoffeeBarPower/", "/CoffeeBarGov
         #expect(anyCaller.contains("main.swift"),
                 "the scan found no ProcGovernor construction anywhere under Sources; it is looking in the wrong place")
 
-        // Wired: the documents may speak in the present tense, because it is
-        // then true.
-        guard productionCallers.isEmpty else { return }
+        // The wrap handling, pinned on the WRAPPED ORIGINAL rather than trusted.
+        // The sentence this half exists for was written across two lines in
+        // `docs/coffee-bar-HANDOFF.md`, so a raw `contains` would report the
+        // document clean and this guard would pass over the one defect it was
+        // added for.
+        let wrappedOriginal = """
+        **This command has no effect on the running app today**, because nothing calls the
+        governor. It is the interface the wiring work will consume.
+        """
+        #expect(flattenedWhitespace(wrappedOriginal).contains("nothing calls the governor"), """
+            a sentence wrapped across two lines is not rejoined, so this guard \
+            cannot see the phrase it was given.
+            """)
 
         for name in ["docs/ACCEPTED-RISKS.md", "docs/ROADMAP.md",
                      "docs/coffee-bar-HANDOFF.md"] {
@@ -826,13 +880,34 @@ private let targetsThatDoNotShipTheFeature = ["/CoffeeBarPower/", "/CoffeeBarGov
             // records.
             #expect(text.count > 1000,
                     "\(name) read back as \(text.count) bytes; this guard is scanning the wrong file")
+            let flattened = flattenedWhitespace(text)
+
+            // WIRED. The present tense is now true, so the marker is no longer
+            // required — and every sentence saying the feature does nothing is
+            // now false. This is the branch the lifting version never reached.
+            guard productionCallers.isEmpty else {
+                for stale in sentencesFalsifiedByWiring {
+                    // The boolean is HOISTED for the reason the unwired half
+                    // hoists its own, below.
+                    let carries = flattened.contains(stale)
+                    #expect(carries == false, """
+                        \(name) still says "\(stale)", and \(productionCallers.sorted()) \
+                        calls the governor. The sentence is FALSE. If it sits beside the \
+                        `defaults write` command it is worse than false: that command is \
+                        the only route a user has to fill the demotable set, so a reader \
+                        who believes it never runs it and the feature reaches nobody.
+                        """)
+                }
+                continue
+            }
+
             // The boolean is HOISTED, and that is not a style choice.
             // `#expect(text.contains(...))` expands `text` into the failure
             // report, so a miss dumped the whole 130 KB handoff — 1012 log
             // lines — and buried the message that says what to do. Expanding
             // `carries` prints `false`, which carries no information and
             // therefore leaves the message as the payload.
-            let carries = text.contains(unwiredMarker)
+            let carries = flattened.contains(unwiredMarker)
             #expect(carries,
                     """
                     \(name) describes ProcGovernor but never says "\(unwiredMarker)", \
