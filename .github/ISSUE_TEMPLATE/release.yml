@@ -234,6 +234,11 @@ body:
         Release object. A pushed tag with no release is the worst resting state:
         it is public, and nothing downstream can use it.
 
+        **WARNING — the tag push below turns `main` RED.** The site guard reads
+        the newest tag, so the sidebar becomes wrong the moment the tag lands and
+        stays wrong until phase 5 merges. Have the phase 5 commit written and
+        reviewed BEFORE you tick the push step.
+
         - [ ] Create the signed, annotated tag:
               ```
               git tag -s vX.Y.Z -m "vX.Y.Z — <summary>"
@@ -311,11 +316,36 @@ body:
   - type: textarea
     id: phase5
     attributes:
-      label: Phase 5 — the site
+      label: Phase 5 — the CHANGELOG and the site
       value: |
         The release must exist BEFORE the page advertises it. A download button
         pointing at a release that is not published is a broken promise.
 
+        **This phase cannot start before phase 3.** The CHANGELOG header states
+        the rule plainly: a version heading there means a tag exists. So the
+        order is not a preference, it is the file's own contract.
+
+        **WARNING — the tag opens a RED WINDOW on `main`.**
+        `everyPageShowsTheNewestReleasedVersion` compares every page's
+        `<p class="sidebar-version">` against `git tag --sort=-v:refname`. The
+        sidebar may therefore name `vX.Y.Z` only after the tag exists, and until
+        this phase merges the suite FAILS on `main`. Prepare the whole commit —
+        both changelog files, the sidebar version and the download link — BEFORE
+        the tag is pushed in phase 3. Then push the tag and merge this commit
+        back to back, so the window lasts seconds.
+
+        **WARNING — `CHANGELOG.md` and `site/changelog.html` move in ONE commit.**
+        `everyReleaseInTheChangelogIsOnTheChangelogPage` compares the release
+        count in BOTH directions, so a version heading added to one file alone
+        turns the suite RED. The guard keys on the version AND the date, so the
+        two dates must be identical. The pair for 0.1.1 is exactly:
+        ```
+        CHANGELOG.md          ## [0.1.1] — 2026-08-04
+        site/changelog.html   <h2>0.1.1 — 2026-08-04</h2>
+        ```
+
+        - [ ] Add the release to `CHANGELOG.md` AND to `site/changelog.html` in
+              the same commit, carrying the same date on both sides.
         - [ ] Update the displayed version to `X.Y.Z`.
         - [ ] Update or add the DMG download link.
         - [ ] **Run the suite by hand before merging the site change.**
