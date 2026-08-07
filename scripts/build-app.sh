@@ -16,7 +16,30 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+# The bundle's executable, named separately because Info.plist's
+# CFBundleExecutable is what macOS launches and only one binary can be it.
 PRODUCT="coffee-bar"
+
+# Everything that lands in Contents/MacOS/, `PRODUCT` first.
+#
+# `coffee-bar-probe` joined it for issue #64. Lid-closed mode's only entry point
+# is `sudo …/coffee-bar-probe arm`, `Sources/CoffeeBarProbe/main.swift`
+# implements `.arm` against a real ArmService, and the bundle shipped without the
+# binary — so the feature was reachable only by building from source, which is a
+# strange thing to tell somebody who just installed a signed disk image.
+#
+# It is NOT on the user's PATH and this script does not put it there. Placing a
+# symlink in /usr/local/bin needs a privileged step, and `coffee-bar never
+# elevates its own privilege` (design §6). The documents print the path inside
+# the bundle instead, and `theBundleTheScriptAssemblesCarriesTheProbe` holds them
+# to the layout this script builds.
+#
+# SIGNING: every one of these needs its own signature. `codesign` on the bundle
+# signs the main executable and seals the rest; a second Mach-O in Contents/MacOS
+# is not covered by that and Gatekeeper rejects the bundle if it is unsigned.
+# Sign the nested binaries first, then the bundle. See issue #45's checklist.
+PRODUCTS=(coffee-bar coffee-bar-probe)
+
 APP_NAME="CoffeeBar"
 BUNDLE_ID="com.coffeebar.app"
 OUT_DIR="${REPO_ROOT}/build"
@@ -131,12 +154,17 @@ fi
 # shellcheck disable=SC2086
 SWIFT_FLAGS="${COFFEE_BAR_SWIFT_FLAGS:-}"
 
-echo "==> swift build -c release --product ${PRODUCT} ${SWIFT_FLAGS}"
-swift build -c release --product "${PRODUCT}" --package-path "${REPO_ROOT}" ${SWIFT_FLAGS}
+for product in "${PRODUCTS[@]}"; do
+    echo "==> swift build -c release --product ${product} ${SWIFT_FLAGS}"
+    swift build -c release --product "${product}" --package-path "${REPO_ROOT}" ${SWIFT_FLAGS}
+done
 
+# One bin path for all of them: every product of one package in one
+# configuration lands in the same directory, so this is asked once.
 BIN_DIR="$(swift build -c release --product "${PRODUCT}" --package-path "${REPO_ROOT}" ${SWIFT_FLAGS} --show-bin-path)"
-BIN="${BIN_DIR}/${PRODUCT}"
-[ -x "${BIN}" ] || die "release binary not found at ${BIN}"
+for product in "${PRODUCTS[@]}"; do
+    [ -x "${BIN_DIR}/${product}" ] || die "release binary not found at ${BIN_DIR}/${product}"
+done
 
 # --- older instance still running --------------------------------------------
 #
@@ -164,8 +192,11 @@ mkdir -p "${CONTENTS}/MacOS" "${CONTENTS}/Resources"
 
 # `command cp` bypasses an interactive `cp -i` alias, which would decline the
 # copy and still exit 0.
-command cp -f "${BIN}" "${CONTENTS}/MacOS/${PRODUCT}"
-[ -x "${CONTENTS}/MacOS/${PRODUCT}" ] || die "binary did not land in the bundle"
+for product in "${PRODUCTS[@]}"; do
+    command cp -f "${BIN_DIR}/${product}" "${CONTENTS}/MacOS/${product}"
+    [ -x "${CONTENTS}/MacOS/${product}" ] || die "${product} did not land in the bundle"
+    echo "    ${product} copied into Contents/MacOS/"
+done
 
 # --- menu-bar glyphs ---------------------------------------------------------
 #
@@ -306,6 +337,32 @@ echo "    LSUIElement=true (no Dock icon)"
 icon_file="$(plutil -extract CFBundleIconFile raw -o - "${CONTENTS}/Info.plist")"
 [ "${icon_file}" = "AppIcon" ] || die "CFBundleIconFile is '${icon_file}', expected AppIcon"
 echo "    CFBundleIconFile=AppIcon"
+
+# --- what actually shipped ----------------------------------------------------
+#
+# Issue #64: the documents tell a user to run a binary out of this directory, and
+# for a whole milestone the binary was not in it. Every check above this line
+# asks whether a step SUCCEEDED; this one asks what the directory now HOLDS, and
+# those are different questions. `command cp` returning 0 is not evidence the
+# byte landed — this repository already carries an interactive-alias no-op and a
+# `cp -R` that nested into a subdirectory, both at exit 0.
+#
+# EXACT set equality, not containment. Containment passes over a bundle carrying
+# a stale binary from a rename, and a second Mach-O in Contents/MacOS is a second
+# thing the maintainer has to sign; one that nobody knew was there is one that
+# does not get signed, and Gatekeeper then rejects the whole bundle.
+#
+# `theBundleTheScriptAssemblesCarriesTheProbe` holds PRODUCTS against what the
+# documents print. This holds the built bundle against PRODUCTS. Neither reaches
+# both ends alone.
+# `printf '%s\n' *` in a subshell rather than `ls`: the glob is what the
+# directory holds, and a failed `cd` short-circuits the `&&` to an empty string,
+# which fails the comparison below rather than passing it.
+shipped="$(cd "${CONTENTS}/MacOS" && printf '%s\n' * | sort | tr '\n' ' ')"
+expected="$(printf '%s\n' "${PRODUCTS[@]}" | sort | tr '\n' ' ')"
+[ "${shipped}" = "${expected}" ] \
+    || die "Contents/MacOS holds '${shipped}', expected '${expected}'"
+echo "    Contents/MacOS: ${shipped}"
 
 # --- done --------------------------------------------------------------------
 
