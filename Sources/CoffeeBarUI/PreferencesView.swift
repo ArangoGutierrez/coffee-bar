@@ -232,7 +232,61 @@ public struct PreferencesView: View {
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(width: 420, height: 360)
+        // A FLEXIBLE frame, and every part of it is load-bearing. This was
+        // `.frame(width: 420, height: 360)`, and a fixed frame does two things
+        // to a `Settings` scene, both measured on this build rather than
+        // inferred:
+        //
+        //   1. IT PINS THE WINDOW. Asking the window server to resize it was
+        //      REFUSED — `set-to-820x900 -> 420x392` and `set-to-120x120 ->
+        //      420x392` — and `AXZoomButton.AXEnabled=false`. There is no
+        //      edge to drag, which is the second half of the complaint.
+        //   2. IT IS TOO SHORT FOR THE CONTENT. Measured at
+        //      0.1.1-44-g7d96ce2: the deepest element sat 81 points BELOW the
+        //      window's bottom edge (`OVERFLOW=81`), so the version line and
+        //      the third tool row were unreachable without scrolling a
+        //      settings window.
+        //
+        // `maxWidth`/`maxHeight` at `.infinity` are what actually unpin it.
+        // min and ideal alone leave the content's maximum EQUAL to its ideal,
+        // and a window whose content cannot grow does not grow either — the
+        // fixed frame is only the extreme case of that. The window opens at
+        // the ideal size and the user can drag from there.
+        //
+        // THE IDEAL HEIGHT IS DERIVED FROM THE MEASUREMENT, not chosen to look
+        // round. Content ran to 441 points inside a 360-point viewport, and
+        // `hookAdvisory` was NIL when that was measured — every tool on this
+        // machine is wired. An unwired tool renders a caption above the rows,
+        // and the comparable caption below it (lid-closed, similar length)
+        // measures 52 points plus 18 of stack spacing. 441 + 70 is 511, so 560
+        // is the content budget with headroom, and a 560-point window is
+        // unremarkable on any display this app supports.
+        //
+        // `minHeight` is well under the ideal ON PURPOSE. A user who shrinks
+        // the window gets the `ScrollView` back, which is the right answer —
+        // what was wrong was having to scroll at the DEFAULT size.
+        //
+        // `minWidth` is the old fixed width, so the tool rows — a path, then
+        // two buttons — are never squeezed tighter than they already ship.
+        .frame(
+            minWidth: 420, idealWidth: 520, maxWidth: .infinity,
+            minHeight: 320, idealHeight: 560, maxHeight: .infinity
+        )
+        // THE DRAG AFFORDANCE, and it is a second, separate thing from the
+        // frame above — the frame decides what SIZE the window may take, this
+        // decides whether the user may change it.
+        //
+        // A flexible frame is NOT enough on its own, which is the whole reason
+        // this line exists. Measured on this build: with the frame above
+        // already in place and no style-mask change, the window reported
+        // `AXSize.settable=false` while `AXPosition.settable=true` on the same
+        // window — it could be moved and not resized. A `Settings` scene is
+        // created without `.resizable` in its style mask.
+        //
+        // `.windowResizability(.contentMinSize)` on the scene is the obvious
+        // SwiftUI answer and it does NOT work here; `main.swift` records both
+        // builds. This line does, and `AXSize.settable=true` with it.
+        .background(HostWindowReader { $0.styleMask.insert(.resizable) })
         // TAKE THE FOREGROUND. Opening a window and becoming the active app are
         // different things, and for an `LSUIElement` process the second does not
         // follow from the first. Measured at 0.1.1-31-g7949c51: the window
@@ -278,4 +332,36 @@ public struct PreferencesView: View {
         }
         .onDisappear { NSApp.setActivationPolicy(.accessory) }
     }
+}
+
+/// Hands back the `NSWindow` that is rendering this view.
+///
+/// BY HIERARCHY, never by title or identifier, and that is the whole reason it
+/// exists. The two usual spellings — matching `NSApp.windows` on the title
+/// "coffee-bar Settings", or on SwiftUI's private
+/// `com_apple_SwiftUI_Settings_window` identifier — are a localized string and
+/// an implementation detail respectively. Both compile, both work today, and
+/// both go silently wrong: the first in any language but English, the second
+/// whenever SwiftUI renames its own window. A view's `window` property is the
+/// window it is actually in.
+///
+/// `private` and confined to this file: this is a workaround for one window's
+/// style mask, not a facility. `PreferencesView` is the only caller.
+private struct HostWindowReader: NSViewRepresentable {
+    let onWindow: (NSWindow) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let probe = NSView(frame: .zero)
+        // `probe.window` is NIL here — the view has not been added to a window
+        // yet when `makeNSView` returns it. One turn of the main loop later it
+        // has. Reading it synchronously is the version of this that compiles,
+        // never fires, and leaves the window pinned.
+        DispatchQueue.main.async {
+            guard let window = probe.window else { return }
+            onWindow(window)
+        }
+        return probe
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }

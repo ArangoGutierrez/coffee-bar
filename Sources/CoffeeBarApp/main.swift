@@ -134,6 +134,35 @@ struct CoffeeBarMenuBarApp: App {
         Settings {
             PreferencesView(model: model)
         }
+        // NO `.windowResizability(.contentMinSize)` HERE, and that absence is
+        // measured rather than an oversight. It is the obvious reach for a
+        // pinned settings window, it was tried, and it changes NOTHING for this
+        // scene: with it the window still reported `AXSize.settable=false`, and
+        // with the style mask fixed in `PreferencesView` it reports
+        // `AXSize.settable=true` WITHOUT it. Both directions were built and
+        // measured. A modifier that moves no measurement is a claim the next
+        // reader has to re-test, so it is not here.
+        //
+        // What does unpin the window is the style mask, in `PreferencesView`.
+        //
+        // The size the window OPENS at. `idealWidth`/`idealHeight` on the
+        // content did not decide it: with the flexible frame in place the
+        // window came up at 900x450, which is SwiftUI's own fallback and far
+        // too wide — a 900-point row stretches the battery-floor slider across
+        // the window and pushes the two buttons an inch from the path they act
+        // on.
+        //
+        // 520x560 is derived from the measurement, not chosen to look round.
+        // Content ran to 441 points inside a 360-point viewport, and
+        // `hookAdvisory` was NIL when that was measured, so an unwired tool
+        // adds a caption the height budget has to carry: the comparable caption
+        // below it measures 52 points plus 18 of stack spacing, and 441 + 70 is
+        // 511.
+        //
+        // This is a DEFAULT, and only the first launch sees it. Once the window
+        // is resizable macOS autosaves the frame, so a user who drags it keeps
+        // their size — which is the point of the whole change.
+        .defaultSize(width: 520, height: 560)
     }
 }
 
