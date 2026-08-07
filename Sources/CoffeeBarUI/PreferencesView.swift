@@ -2,17 +2,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import SwiftUI
+import AppKit
 import Foundation
 import CoffeeBarCore
 
-// `import Foundation` is explicit for `Bundle.main.infoDictionary`, and
+// `import AppKit` is explicit for `NSPasteboard` and `NSWorkspace`,
+// `import Foundation` for `Bundle.main.infoDictionary`, and
 // `import CoffeeBarCore` for `BatteryFloor`. Do not rely on SwiftUI
-// re-exporting either — `PanelView.swift` states the same rule.
+// re-exporting any of them — `PanelView.swift` states the same rule.
 
 /// The Preferences window's whole content.
 ///
-/// One scrolling page with headed sections rather than tabs: four short groups
-/// do not earn a second navigation layer.
+/// One scrolling page with headed sections rather than tabs: Power, Focus and
+/// Agent tools do not earn a second navigation layer.
+///
+/// The sections are NAMED here rather than counted. This sentence said "four
+/// short groups" while the window held two, which is what a number in prose
+/// does — it drifts from the code silently, and no check reads it.
 ///
 /// The version line is here AND in the panel, deliberately. Every surface states
 /// the running version, and both read `PanelView.versionLine(from:)` — one seam,
@@ -95,6 +101,90 @@ public struct PreferencesView: View {
                 Text("Focus").font(.headline)
 
                 Toggle(ServingModel.quietOthersLabel, isOn: $model.quietEverythingElse)
+
+                // The remedy, beside the complaint. The panel already tells the
+                // user which hook file it cannot confirm; until now that was
+                // advice with nothing to act on, and the action it implied was
+                // hand-editing JSON copied off a documentation page.
+                //
+                // PRINT, NEVER WRITE — design §6, and the one rule this section
+                // exists under. Each of these files is shared territory, and
+                // this workspace records a six-occurrence last-writer-wins
+                // clobber in exactly that kind of config: coffee-bar merging
+                // its own entry into a file another tool is also editing is how
+                // a user loses settings they never told anyone about. The
+                // snippet goes to the pasteboard, which IS the user's; the file
+                // is not. `thePreferencesWindowNeverWritesAnAgentToolsSettingsFile`
+                // holds that line by reading this file.
+                Text("Agent tools").font(.headline)
+
+                // The same sentence the panel carries, rendered verbatim from
+                // the model with no text built here — M1 design §5.4 forbids
+                // asserting on rendered AppKit text, so a sentence composed in
+                // this file is a sentence no check reads. It is repeated rather
+                // than moved: the panel is where the user notices the problem,
+                // and this window is where they can do something about it.
+                //
+                // Silent when every tool is wired, for the reason the panel's
+                // copy of it is silent.
+                if let advisory = model.hookAdvisory {
+                    Text(advisory)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                // Built over `AgentTool.allCases`, never over a list of tools
+                // named here. `hookAdvisory` above iterates the same cases, so
+                // a section naming two would advise a user about a third file
+                // and then offer them no way to fix it — and a fourth tool
+                // would arrive uncopyable with every check still green.
+                // `theCopyActionOffersEveryToolTheCheckerCanAdviseAbout` reads
+                // this loop out of `body`.
+                ForEach(AgentTool.allCases, id: \.self) { tool in
+                    HStack {
+                        // `settingsPath(for:)` is the one place that says where
+                        // each tool keeps its file, and the checker, the
+                        // advisory and this label all read it. A path spelled
+                        // out here is a fourth spelling that can disagree with
+                        // the three.
+                        Text("~/" + HookHealth.settingsPath(for: tool))
+                            .font(.caption)
+                            .monospaced()
+
+                        Spacer()
+
+                        // `json(for:)` is the only public entry point, and it
+                        // derives every event from `requiredEvents(for:)` — the
+                        // same source the health check reads. A snippet
+                        // composed here could tell the user to wire a set the
+                        // checker never looks for, leaving them correctly
+                        // pasted and permanently reported broken.
+                        //
+                        // `nil` means there is no advice to give for this tool,
+                        // and the button then does nothing rather than clearing
+                        // the pasteboard the user was holding something in.
+                        Button("Copy hook snippet") {
+                            guard let snippet = HookSnippet.json(for: tool) else { return }
+                            let board = NSPasteboard.general
+                            board.clearContents()
+                            board.setString(snippet, forType: .string)
+                        }
+
+                        // Finder, with the file selected, rather than opening
+                        // it in whatever owns the extension: the user has to
+                        // merge a fragment into a file that already holds their
+                        // own settings, and that is their editor's job, not
+                        // ours. Selecting a file that does not exist opens its
+                        // enclosing directory, which is the right answer for a
+                        // user who has not set that tool up yet.
+                        Button("Reveal") {
+                            NSWorkspace.shared.activateFileViewerSelecting(
+                                [HookHealthReader.defaultURL(for: tool)]
+                            )
+                        }
+                    }
+                }
 
                 Text(PanelView.versionLine(from: Bundle.main.infoDictionary))
                     .font(.caption)
