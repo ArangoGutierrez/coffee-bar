@@ -55,6 +55,23 @@ private func uiPackageRoot() -> URL {
         .deletingLastPathComponent()    // the package root
 }
 
+/// The one probe location every check below composes its expectations from.
+///
+/// **Fixed, and never this machine's.** The app derives the probe's path from
+/// its own bundle, so on a developer's Mac the printed command names a worktree
+/// and on a user's it names wherever they dragged the app. A check that read the
+/// live value would assert a different string on every machine and could not be
+/// compared against a documentation page at all.
+///
+/// `documentedProbePath` is the disk-image location, which is the one a page can
+/// print, and `theBundleTheScriptAssemblesCarriesTheProbe` holds it against the
+/// APP_NAME `scripts/build-app.sh` actually assembles. That two of these checks
+/// then read the SAME constant is not circular: what they hold is the composed
+/// COMMAND — the sudo, the verb, the ordering — and
+/// `theProbePathIsDerivedFromTheBundleAndNotAHardcodedLiteral` is what holds the
+/// derivation itself, against locations that are not this one.
+private let documentedProbe = ServingModel.documentedProbePath
+
 @MainActor
 @Test func theLidClosedCommandNamesAVerbTheBinaryAcceptsAndItIsArm() {
     // Named bug this catches: `ProbeVerb.arm` renamed, or coffee-bar's command
@@ -67,11 +84,11 @@ private func uiPackageRoot() -> URL {
     // would otherwise restate. A command naming a verb the binary refuses is
     // the defect; a command naming the wrong REAL verb is the other one, so
     // both are asserted.
-    let words = ServingModel.lidClosedCommand.split(separator: " ").map(String.init)
+    let words = ServingModel.lidClosedCommand(probeAt: documentedProbe).split(separator: " ").map(String.init)
     let verb = words.last
 
     #expect(verb.flatMap { ProbeVerb(rawValue: $0) } == .arm, """
-        coffee-bar prints "\(ServingModel.lidClosedCommand)", whose last word is \
+        coffee-bar prints "\(ServingModel.lidClosedCommand(probeAt: documentedProbe))", whose last word is \
         \(words.last ?? "(none)"). ProbeVerb.arm is "\(ProbeVerb.arm.rawValue)".
         """)
 
@@ -79,8 +96,8 @@ private func uiPackageRoot() -> URL {
     // the command without `sudo` meets a permission error instead of the mode.
     #expect(ProbeVerb.arm.requiresRoot,
             "ProbeVerb.arm no longer requires root; the printed sudo is now wrong")
-    #expect(ServingModel.lidClosedCommand.hasPrefix("sudo "),
-            "coffee-bar prints \"\(ServingModel.lidClosedCommand)\", which does not start with sudo")
+    #expect(ServingModel.lidClosedCommand(probeAt: documentedProbe).hasPrefix("sudo "),
+            "coffee-bar prints \"\(ServingModel.lidClosedCommand(probeAt: documentedProbe))\", which does not start with sudo")
 }
 
 @MainActor
@@ -103,14 +120,37 @@ private func uiPackageRoot() -> URL {
     #expect(products.count >= 3,
             "parsed \(products.count) executable product(s) from Package.swift: \(products)")
 
-    let words = ServingModel.lidClosedCommand.split(separator: " ").map(String.init)
-    let binary = try #require(words.dropFirst().first,
-                              "the printed command has no binary: \(ServingModel.lidClosedCommand)")
+    let words = ServingModel.lidClosedCommand(probeAt: documentedProbe).split(separator: " ").map(String.init)
+    let invocation = try #require(words.dropFirst().first,
+                                  "the printed command has no binary: \(ServingModel.lidClosedCommand(probeAt: documentedProbe))")
+
+    // The LAST PATH COMPONENT, since issue #64. The command names an absolute
+    // path now — the probe ships inside the bundle and is not on any PATH — so
+    // the second word is `/…/Contents/MacOS/coffee-bar-probe` rather than a bare
+    // product name. Comparing the whole word against `Package.swift` would fail
+    // on a CORRECT tree.
+    //
+    // The INVARIANT this assertion exists for is unchanged and still bites: the
+    // thing invoked has to be an executable this package actually builds. Rename
+    // the product in `Package.swift` while the app keeps printing the old name
+    // and this goes red exactly as before.
+    let binary = (invocation as NSString).lastPathComponent
 
     #expect(products.contains(binary), """
-        coffee-bar prints the binary "\(binary)"; Package.swift declares the \
-        executable products \(products.sorted()). A command naming a binary \
-        that is not built is a command the user cannot run.
+        coffee-bar invokes "\(invocation)", whose binary is "\(binary)"; \
+        Package.swift declares the executable products \(products.sorted()). A \
+        command naming a binary that is not built is a command the user cannot \
+        run.
+        """)
+
+    // The path half, which the last-component check above deliberately discards.
+    // Without this, `sudo coffee-bar-probe arm` — the pre-#64 string, which is
+    // not on any PATH and which no user could run — would satisfy this test.
+    #expect(invocation.hasPrefix("/"), """
+        coffee-bar prints "\(invocation)", which is not an absolute path. The \
+        probe ships inside the app bundle and nothing puts it on the user's \
+        PATH, so a bare product name is a command their shell answers with \
+        "command not found".
         """)
 }
 
@@ -124,10 +164,10 @@ private func uiPackageRoot() -> URL {
     // and a settings window that goes on promising 30 minutes to somebody
     // deciding whether to walk away from a laptop on battery.
     let minutes = ProbeVerb.defaultTTLSeconds / 60
-    #expect(ServingModel.lidClosedSummary.contains("\(minutes) minutes"), """
+    #expect(ServingModel.lidClosedSummary(probeAt: documentedProbe).contains("\(minutes) minutes"), """
         the summary does not state \(minutes) minutes, which is what \
         ProbeVerb.defaultTTLSeconds is. It reads:
-        \(ServingModel.lidClosedSummary)
+        \(ServingModel.lidClosedSummary(probeAt: documentedProbe))
         """)
 }
 
@@ -147,16 +187,16 @@ private func uiPackageRoot() -> URL {
     // paragraph was explanation and moved to `site/docs.html`; this half is a
     // product LIMITATION, and a user who armed the mode and meets no signal
     // anywhere has been told nothing. Shortening the summary must not take it.
-    let summary = ServingModel.lidClosedSummary
+    let summary = ServingModel.lidClosedSummary(probeAt: documentedProbe)
 
-    #expect(summary.contains(ServingModel.lidClosedCommand), """
-        the summary never prints \(ServingModel.lidClosedCommand), so the user \
+    #expect(summary.contains(ServingModel.lidClosedCommand(probeAt: documentedProbe)), """
+        the summary never prints \(ServingModel.lidClosedCommand(probeAt: documentedProbe)), so the user \
         is told about a mode with no way to turn it on. It reads:
         \(summary)
         """)
 
-    #expect(summary.contains(ServingModel.lidClosedReportCommand), """
-        the summary never prints \(ServingModel.lidClosedReportCommand). The \
+    #expect(summary.contains(ServingModel.lidClosedReportCommand(probeAt: documentedProbe)), """
+        the summary never prints \(ServingModel.lidClosedReportCommand(probeAt: documentedProbe)). The \
         app cannot read the journal, so the command that CAN is the only \
         honest answer to "is it on?". It reads:
         \(summary)
@@ -194,7 +234,7 @@ private func uiPackageRoot() -> URL {
     // follows it, which is not pedantry — `coffee-bar-probe` carries no period
     // but a version or an abbreviation would, and splitting on every `.` would
     // count sentences that no reader sees.
-    let summary = ServingModel.lidClosedSummary
+    let summary = ServingModel.lidClosedSummary(probeAt: documentedProbe)
     let characters = Array(summary)
     var sentences = 0
     for (index, character) in characters.enumerated() where ".!?".contains(character) {
@@ -233,7 +273,7 @@ private func uiPackageRoot() -> URL {
     // Named bug this catches: the sentence softened to "coffee-bar will arm
     // lid-closed mode for you", which reads better and describes a product that
     // would need an authorization prompt to exist.
-    let summary = ServingModel.lidClosedSummary.lowercased()
+    let summary = ServingModel.lidClosedSummary(probeAt: documentedProbe).lowercased()
 
     for promise in ["click", "toggle", "turn it on here", "arm it for you",
                     "we will arm", "coffee-bar will arm"] {
@@ -241,7 +281,7 @@ private func uiPackageRoot() -> URL {
             the summary says "\(promise)", which offers a control this app does \
             not have and must not gain. It prints a command for the user to run. \
             It reads:
-            \(ServingModel.lidClosedSummary)
+            \(ServingModel.lidClosedSummary(probeAt: documentedProbe))
             """)
     }
 }
@@ -299,7 +339,7 @@ private func uiPackageRoot() -> URL {
 
     // Both commands, verbatim from the model. The page and the window print one
     // string, and it is composed from `ProbeVerb` in exactly one place.
-    for command in [ServingModel.lidClosedCommand, ServingModel.lidClosedReportCommand] {
+    for command in [ServingModel.lidClosedCommand(probeAt: documentedProbe), ServingModel.lidClosedReportCommand(probeAt: documentedProbe)] {
         #expect(section.contains(command), """
             the lid-closed section of site/docs.html never prints "\(command)", \
             so the page documents a mode the reader cannot operate.
@@ -422,7 +462,7 @@ private func declaredExecutables() throws -> [String] {
         scripts/build-app.sh bundles \(products.sorted()). `coffee-bar-probe` is \
         not among them, so CoffeeBar.app — and the DMG built from it — ships \
         without the only entry point lid-closed mode has. The Preferences window \
-        prints "\(ServingModel.lidClosedCommand)" regardless.
+        prints "\(ServingModel.lidClosedCommand(probeAt: documentedProbe))" regardless.
         """)
 
     // A product name the manifest does not declare fails the BUILD, not this
@@ -528,5 +568,117 @@ private func declaredExecutables() throws -> [String] {
         the bundle and is NOT on the user's PATH, so a page that names \
         `coffee-bar-probe` without its path hands the reader a command their \
         shell answers with "command not found".
+        """)
+}
+
+@MainActor
+@Test func theProbePathIsDerivedFromTheBundleAndNotAHardcodedLiteral() {
+    // Named bug this catches, and it is the one a `/Applications` literal WOULD
+    // have shipped. The app knows where it is; a literal only knows where the
+    // author imagined it would be. Every one of these is a real install:
+    //
+    //   - the disk image, which does land in /Applications;
+    //   - Homebrew, which does NOT — `docs/QUICKSTART.md` says so itself, the
+    //     formula installs into the Homebrew prefix and prints a command to link
+    //     it — so a literal names a path that is not there;
+    //   - a `swift build` tree, which is what the maintainer launches while
+    //     testing this very feature;
+    //   - a copy dragged to the Desktop, which macOS permits and users do.
+    //
+    // Under a literal the app would print /Applications/… to all four, and three
+    // of the four users would type a path their shell cannot find.
+    let cases: [(label: String, executable: String, expected: String)] = [
+        ("the disk image",
+         "/Applications/CoffeeBar.app/Contents/MacOS/coffee-bar",
+         "/Applications/CoffeeBar.app/Contents/MacOS/coffee-bar-probe"),
+        ("a Homebrew prefix",
+         "/opt/homebrew/Cellar/coffee-bar/0.2.1/CoffeeBar.app/Contents/MacOS/coffee-bar",
+         "/opt/homebrew/Cellar/coffee-bar/0.2.1/CoffeeBar.app/Contents/MacOS/coffee-bar-probe"),
+        ("a swift build tree",
+         "/Users/somebody/src/coffee-bar/.build/debug/coffee-bar",
+         "/Users/somebody/src/coffee-bar/.build/debug/coffee-bar-probe"),
+        ("a copy on the Desktop",
+         "/Users/somebody/Desktop/CoffeeBar.app/Contents/MacOS/coffee-bar",
+         "/Users/somebody/Desktop/CoffeeBar.app/Contents/MacOS/coffee-bar-probe"),
+    ]
+
+    for probe in cases {
+        let actual = ServingModel.probePath(
+            besideExecutable: URL(fileURLWithPath: probe.executable))
+        #expect(actual == probe.expected, """
+            for \(probe.label), coffee-bar running at
+              \(probe.executable)
+            names the probe at
+              \(actual)
+            and the probe it ships beside is at
+              \(probe.expected)
+            """)
+    }
+
+    // THE DISCRIMINATOR. Every assertion above passes for a function that
+    // returns a hardcoded /Applications path — the first case IS that path, and
+    // the other three would each fail individually, but a reader scanning a
+    // green run learns nothing from that. This says the property directly: four
+    // different homes give four different answers. A literal collapses them to
+    // one and this is the line that goes red.
+    let answers = Set(cases.map {
+        ServingModel.probePath(besideExecutable: URL(fileURLWithPath: $0.executable))
+    })
+    #expect(answers.count == cases.count, """
+        \(cases.count) different install locations produced \(answers.count) \
+        distinct probe path(s): \(answers.sorted()). The path is not derived \
+        from the running bundle — it is a literal, and it is correct for at most \
+        one of these.
+        """)
+
+    // The fallback, which is a real branch rather than defensive padding:
+    // `Bundle.main.executableURL` is documented as optional and this must reach
+    // a printable command rather than an empty one. The documented location is
+    // the honest answer when the app cannot locate itself.
+    #expect(ServingModel.probePath(besideExecutable: nil) == ServingModel.documentedProbePath, """
+        with no executable URL the model answers \
+        "\(ServingModel.probePath(besideExecutable: nil))". It should fall back \
+        to the documented location, \(ServingModel.documentedProbePath).
+        """)
+}
+
+@MainActor
+@Test func thePreferencesWindowAsksTheRunningBundleWhereTheProbeIs() throws {
+    // The half the pure checks above cannot reach. `probePath(besideExecutable:)`
+    // can be perfectly derived and still be dead code, if the view calls it with
+    // the documented literal — or never calls it at all and prints
+    // `documentedProbePath` directly. Both compile, both look right in a diff,
+    // and both reintroduce exactly the defect the derivation exists to remove.
+    //
+    // COMMENT-STRIPPED, for the reason every source scan in this target is: the
+    // derivation is explained in prose in `ServingModel.swift` and a raw read
+    // would find `Bundle.main.executableURL` in an explanation of a call that
+    // had been deleted.
+    let window = uiPackageRoot().appending(path: "Sources/CoffeeBarUI/PreferencesView.swift")
+    let code = swiftCodeWithoutComments(try String(contentsOf: window, encoding: .utf8))
+
+    #expect(code.contains("Bundle.main.executableURL"), """
+        PreferencesView.swift never reads Bundle.main.executableURL, so the \
+        probe path it prints cannot depend on where this copy of coffee-bar is \
+        installed. `versionLine(from: Bundle.main.infoDictionary)` in this same \
+        file is the shape: the view supplies the machine-dependent value and the \
+        model stays pure.
+        """)
+
+    #expect(code.contains("ServingModel.probePath(besideExecutable:"), """
+        PreferencesView.swift never calls ServingModel.probePath(besideExecutable:), \
+        so whatever it prints is not the derivation this package holds under test.
+        """)
+
+    // DISCRIMINATES against the other way to get this wrong: calling the
+    // derivation AND then printing the documented literal anyway. The literal is
+    // for documents, which cannot ask a running process anything; a window can,
+    // and a window that prints it has thrown the answer away.
+    #expect(!code.contains("ServingModel.documentedProbePath"), """
+        PreferencesView.swift names ServingModel.documentedProbePath. That \
+        constant is the DISK-IMAGE location, for pages that cannot ask a running \
+        process where it lives. This window can ask. Printing the literal tells \
+        a Homebrew user — and the maintainer running a build from source — to \
+        type a path that is not on their machine.
         """)
 }
