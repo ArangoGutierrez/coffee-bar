@@ -247,11 +247,23 @@ public struct PreferencesView: View {
         //      the third tool row were unreachable without scrolling a
         //      settings window.
         //
-        // `maxWidth`/`maxHeight` at `.infinity` are what actually unpin it.
-        // min and ideal alone leave the content's maximum EQUAL to its ideal,
-        // and a window whose content cannot grow does not grow either — the
-        // fixed frame is only the extreme case of that. The window opens at
-        // the ideal size and the user can drag from there.
+        // `maxWidth`/`maxHeight` at `.infinity` let the content FILL a window
+        // the user has dragged bigger. They do NOT make it draggable — the
+        // style mask below does that, and this comment claimed otherwise until
+        // a build measured it and said no.
+        //
+        // The size the window OPENS at is `.defaultSize` on the scene, not the
+        // ideals here: with this frame and no `.defaultSize` the window came up
+        // at 900x450, SwiftUI's own fallback. The ideals are kept because they
+        // AGREE with `.defaultSize`, so the two cannot drift apart and leave a
+        // reader guessing which one decides.
+        //
+        // 420 WIDE IS THE MAINTAINER'S ANSWER, not a derivation. The first cut
+        // of this change opened at 520 and his verdict on it was "you over did
+        // the width, the height is ok now". 420 is what this window has always
+        // shipped at and the width nobody has complained about; the complaint
+        // was vertical scrolling, and the height is what fixes that. A user who
+        // wants it wider drags it — which is the point of the whole change.
         //
         // THE IDEAL HEIGHT IS DERIVED FROM THE MEASUREMENT, not chosen to look
         // round. Content ran to 441 points inside a 360-point viewport, and
@@ -266,10 +278,11 @@ public struct PreferencesView: View {
         // the window gets the `ScrollView` back, which is the right answer —
         // what was wrong was having to scroll at the DEFAULT size.
         //
-        // `minWidth` is the old fixed width, so the tool rows — a path, then
-        // two buttons — are never squeezed tighter than they already ship.
+        // `minWidth` EQUALS the ideal, so the window opens at its narrowest
+        // and only ever grows. The tool rows — a path, then two buttons — are
+        // never squeezed tighter than they already ship.
         .frame(
-            minWidth: 420, idealWidth: 520, maxWidth: .infinity,
+            minWidth: 420, idealWidth: 420, maxWidth: .infinity,
             minHeight: 320, idealHeight: 560, maxHeight: .infinity
         )
         // THE DRAG AFFORDANCE, and it is a second, separate thing from the

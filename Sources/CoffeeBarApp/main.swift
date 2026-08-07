@@ -152,7 +152,15 @@ struct CoffeeBarMenuBarApp: App {
         // the window and pushes the two buttons an inch from the path they act
         // on.
         //
-        // 520x560 is derived from the measurement, not chosen to look round.
+        // THE WIDTH IS THE MAINTAINER'S, THE HEIGHT IS THE MEASUREMENT'S.
+        // This opened at 520 first and his verdict was "you over did the width,
+        // the height is ok now", so the width is back to the 420 this window
+        // has always shipped at. His complaint was vertical scrolling; widening
+        // it was never part of the fix, and `maxWidth: .infinity` on the
+        // content means anyone who wants it wider drags it once and macOS
+        // remembers.
+        //
+        // 560 high is derived from the measurement, not chosen to look round.
         // Content ran to 441 points inside a 360-point viewport, and
         // `hookAdvisory` was NIL when that was measured, so an unwired tool
         // adds a caption the height budget has to carry: the comparable caption
@@ -162,7 +170,7 @@ struct CoffeeBarMenuBarApp: App {
         // This is a DEFAULT, and only the first launch sees it. Once the window
         // is resizable macOS autosaves the frame, so a user who drags it keeps
         // their size — which is the point of the whole change.
-        .defaultSize(width: 520, height: 560)
+        .defaultSize(width: 420, height: 560)
     }
 }
 
