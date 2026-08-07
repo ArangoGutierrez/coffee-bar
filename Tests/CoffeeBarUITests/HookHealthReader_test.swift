@@ -386,6 +386,24 @@ let forbiddenWriteCalls = [
     "O_RDWR",
     "O_CREAT",
     "fopen",
+    // SHELLING OUT IS A WRITE. Every entry above names a way to put bytes on
+    // disk from inside this process, and a reviewer defeated the whole list by
+    // stepping outside it: a Button running
+    // `/bin/sh -c 'printf %s "$SNIP" > "$TARGET"'` with
+    // `TARGET = HookHealthReader.defaultURL(for: tool).path` rewrote every
+    // tool's real settings file, and the full suite stayed green.
+    //
+    // That is design §6 phase 2 — "print, never write" — shipping with every
+    // check green, on the one invariant the Agent tools section exists to
+    // protect. `Process(` is the only way a Swift process starts a subprocess
+    // without an explicit `import Darwin`, so it is where that route has to be
+    // refused.
+    //
+    // It costs nothing on a correct tree: `Process(` appears in exactly one
+    // file under Sources/, `CoffeeBarPower/CommandRunner.swift`, and that file
+    // names neither `.claude/settings.json` nor `settingsURL`, so this loop
+    // never reads it.
+    "Process(",
 ]
 
 @Test func noSourceFileThatKnowsTheSettingsPathCanWriteToIt() throws {
