@@ -655,7 +655,19 @@ private func declaredExecutables() throws -> [String] {
     // would find `Bundle.main.executableURL` in an explanation of a call that
     // had been deleted.
     let window = uiPackageRoot().appending(path: "Sources/CoffeeBarUI/PreferencesView.swift")
-    let code = swiftCodeWithoutComments(try String(contentsOf: window, encoding: .utf8))
+    let stripped = swiftCodeWithoutComments(try String(contentsOf: window, encoding: .utf8))
+
+    // WHITESPACE REMOVED, not merely collapsed, and this was measured rather
+    // than anticipated: the call is long enough that the view wraps it over
+    // three lines, so a needle containing `(besideExecutable:` never matches the
+    // raw text. The first run of this guard failed against a CORRECT view — a
+    // guard that is red when the code is right teaches people to silence it.
+    //
+    // Removing every space also makes this indifferent to how the call is later
+    // reformatted, which is the right sensitivity: what is under test is that
+    // the call is MADE, never how it is laid out.
+    let code = stripped.replacingOccurrences(of: "\\s+", with: "",
+                                             options: .regularExpression)
 
     #expect(code.contains("Bundle.main.executableURL"), """
         PreferencesView.swift never reads Bundle.main.executableURL, so the \

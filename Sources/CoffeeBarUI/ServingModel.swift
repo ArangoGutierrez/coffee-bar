@@ -306,21 +306,83 @@ public final class ServingModel {
         return "\(opening) \(refusal)"
     }
 
-    /// The command that arms lid-closed mode.
+    /// The probe's product name, spelled once.
+    ///
+    /// `Package.swift` declares it and `scripts/build-app.sh` copies it into the
+    /// bundle; `theLidClosedCommandNamesARealExecutableProduct` holds this
+    /// against the manifest, so a rename that misses this line goes red.
+    nonisolated public static let probeProductName = "coffee-bar-probe"
+
+    /// Where a disk-image install puts the probe.
+    ///
+    /// **For DOCUMENTS, and for nothing that can ask a running process.** A page
+    /// has to print one path, and this is the one a reader who downloaded the
+    /// DMG will have. Anything with a `Bundle` in hand uses
+    /// `probePath(besideExecutable:)` instead and gets the truth for that
+    /// machine.
+    ///
+    /// The `CoffeeBar.app` spelling is `APP_NAME` in `scripts/build-app.sh`, and
+    /// `theBundleTheScriptAssemblesCarriesTheProbe` pins the two together rather
+    /// than trusting this line.
+    nonisolated public static let documentedProbePath =
+        "/Applications/CoffeeBar.app/Contents/MacOS/\(probeProductName)"
+
+    /// The probe that sits beside `executable`.
+    ///
+    /// **Derived, because a literal is correct for one install out of four.**
+    /// `scripts/build-app.sh` puts both binaries in the same `Contents/MacOS`,
+    /// so the probe is always the app's own neighbour — and that holds wherever
+    /// the app ended up. A hardcoded `/Applications` path is right for the disk
+    /// image and wrong for a Homebrew prefix (`docs/QUICKSTART.md` states that
+    /// Homebrew formulae do not write to `/Applications`), wrong for a
+    /// `swift build` tree, and wrong for a copy dragged to the Desktop. Each of
+    /// those users would be handed a path their shell cannot find.
+    ///
+    /// **PURE, and it touches no filesystem.** It composes a path and does not
+    /// ask whether anything is there. A check that stat'd the disk would assert
+    /// a different thing on every machine, and this is the seam a test has to be
+    /// able to drive with a location that is not this one —
+    /// `theProbePathIsDerivedFromTheBundleAndNotAHardcodedLiteral` drives four.
+    ///
+    /// The caller supplies the URL, mirroring
+    /// `PanelView.versionLine(from: Bundle.main.infoDictionary)`: the view reads
+    /// `Bundle.main`, the model stays pure. Reading `Bundle.main` in here would
+    /// resolve to the TEST RUNNER under `swift test`, which is neither this app
+    /// nor an error anything could detect.
+    ///
+    /// `nil` — which `Bundle.main.executableURL` is documented to allow — falls
+    /// back to `documentedProbePath`. An app that cannot locate itself still has
+    /// to print a command, and the disk-image location is the likeliest true
+    /// answer at that point.
+    nonisolated public static func probePath(besideExecutable executable: URL?) -> String {
+        guard let executable else { return documentedProbePath }
+        return executable
+            .deletingLastPathComponent()
+            .appendingPathComponent(probeProductName)
+            .path
+    }
+
+    /// The command that arms lid-closed mode, for a probe at `path`.
     ///
     /// The verb comes from `ProbeVerb.arm` rather than being typed here. A
     /// literal drifts the moment the verb is renamed, and the drift lands on
     /// the user at the worst possible moment: they have already typed `sudo`,
     /// and the binary answers with a usage error.
-    public static let lidClosedCommand = "sudo coffee-bar-probe \(ProbeVerb.arm.rawValue)"
+    ///
+    /// The path is a PARAMETER for the reason `probePath(besideExecutable:)`
+    /// exists: it is the one part of this string that depends on the machine.
+    nonisolated public static func lidClosedCommand(probeAt path: String) -> String {
+        "sudo \(path) \(ProbeVerb.arm.rawValue)"
+    }
 
     /// The command that prints what is currently armed.
     ///
     /// `report` is a root verb for a reason worth repeating here: the journal
     /// it prints is a root-owned `0600` file inside a `0700` directory, so an
     /// unprivileged read cannot open it at all.
-    public static let lidClosedReportCommand =
-        "sudo coffee-bar-probe \(ProbeVerb.report.rawValue)"
+    nonisolated public static func lidClosedReportCommand(probeAt path: String) -> String {
+        "sudo \(path) \(ProbeVerb.report.rawValue)"
+    }
 
     /// The short version of lid-closed mode, for the Preferences window.
     ///
@@ -369,12 +431,18 @@ public final class ServingModel {
     /// it prints the snippet and refuses to write `~/.claude/settings.json`.
     /// `theAppLayerNeverReachesForPrivilegeEscalation` refuses the alternative
     /// structurally.
-    public static let lidClosedSummary =
+    /// **A FUNCTION since issue #64**, and the parameter is the whole point. The
+    /// probe ships inside the bundle and is not on any `PATH`, so this sentence
+    /// has to name an absolute path — and the right one depends on where this
+    /// copy of the app is. The window passes
+    /// `probePath(besideExecutable: Bundle.main.executableURL)`.
+    nonisolated public static func lidClosedSummary(probeAt path: String) -> String {
         "Lid-closed mode needs root, so you arm it yourself with "
-        + "\(lidClosedCommand), which holds for "
+        + "\(lidClosedCommand(probeAt: path)), which holds for "
         + "\(ProbeVerb.defaultTTLSeconds / 60) minutes. coffee-bar cannot show "
         + "you whether it is armed — the journal belongs to root and this app "
-        + "runs as you — so run \(lidClosedReportCommand) to find out."
+        + "runs as you — so run \(lidClosedReportCommand(probeAt: path)) to find out."
+    }
 
     /// The one line the panel shows about the battery floor, or `nil` for no
     /// line.

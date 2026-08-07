@@ -119,7 +119,17 @@ public struct PreferencesView: View {
                 // to condition it on — the journal is root-owned and this
                 // process measurably cannot read it, which is half of what the
                 // sentence says.
-                Text(ServingModel.lidClosedSummary)
+                // `Bundle.main.executableURL` is read HERE and the model stays
+                // pure, which is the same split
+                // `versionLine(from: Bundle.main.infoDictionary)` uses below.
+                // The probe is this app's neighbour in `Contents/MacOS`, so the
+                // running bundle is the only thing that knows the path — a
+                // literal would be right for a disk-image install and wrong for
+                // Homebrew, for a `swift build` tree, and for a copy on the
+                // Desktop.
+                Text(ServingModel.lidClosedSummary(
+                    probeAt: ServingModel.probePath(
+                        besideExecutable: Bundle.main.executableURL)))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
