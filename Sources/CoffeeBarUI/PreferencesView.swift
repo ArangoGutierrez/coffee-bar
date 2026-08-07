@@ -350,18 +350,46 @@ public struct PreferencesView: View {
 private struct HostWindowReader: NSViewRepresentable {
     let onWindow: (NSWindow) -> Void
 
-    func makeNSView(context: Context) -> NSView {
-        let probe = NSView(frame: .zero)
-        // `probe.window` is NIL here — the view has not been added to a window
-        // yet when `makeNSView` returns it. One turn of the main loop later it
-        // has. Reading it synchronously is the version of this that compiles,
-        // never fires, and leaves the window pinned.
-        DispatchQueue.main.async {
-            guard let window = probe.window else { return }
-            onWindow(window)
-        }
-        return probe
-    }
+    func makeNSView(context: Context) -> NSView { WindowAwareView(onWindow: onWindow) }
 
     func updateNSView(_ nsView: NSView, context: Context) {}
+
+    /// Reports its window the moment it HAS one.
+    ///
+    /// `viewDidMoveToWindow` and not a `DispatchQueue.main.async` hop out of
+    /// `makeNSView`, and that is a bug fix rather than a preference. A view is
+    /// not in a window yet when `makeNSView` returns it, so the async version
+    /// reads `window` one turn of the main loop later and hopes it has been
+    /// attached by then. Usually it has. When it has not, `guard let` returns
+    /// quietly and the style mask is NEVER applied — the window comes up pinned
+    /// with nothing logged and nothing failing.
+    ///
+    /// That is not theoretical: it was measured on the committed build.
+    /// Consecutive runs reported `AXSize.settable=true`, then `false` on a run
+    /// that differed only in what had opened the window before it, then `true`
+    /// twice more. A fix that works most of the time is the worst of the three
+    /// outcomes, because the bug report it produces is unreproducible.
+    ///
+    /// `viewDidMoveToWindow` is called BY AppKit at the moment of attachment,
+    /// every time, including when the window is torn down and rebuilt. There is
+    /// no window-is-nil branch to lose the work in.
+    private final class WindowAwareView: NSView {
+        private let onWindow: (NSWindow) -> Void
+
+        init(onWindow: @escaping (NSWindow) -> Void) {
+            self.onWindow = onWindow
+            super.init(frame: .zero)
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError("WindowAwareView is never loaded from a nib") }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            // Nil when the view is being REMOVED from a window, which is a real
+            // call and not a failure — there is simply nothing to do then.
+            guard let window else { return }
+            onWindow(window)
+        }
+    }
 }
