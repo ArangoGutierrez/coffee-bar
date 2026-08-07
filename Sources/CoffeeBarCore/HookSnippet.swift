@@ -29,6 +29,23 @@ public enum HookSnippet {
     /// documented as an alternative for a reader who has built it; it is not
     /// what a button pastes.
     ///
+    /// **`-o /dev/null` is LOAD-BEARING, and it pairs with `--fail-with-body`.**
+    /// That flag exists to print the server's error body rather than swallow it,
+    /// and `curl` prints a body to STANDARD OUTPUT. An agent reads a hook's
+    /// standard output as a DECISION — `coffeebar-hook` is built around the same
+    /// rule and `docs/QUICKSTART.md` states it — so without the redirect an
+    /// ingest error arrives at the agent as something to act on. The exit
+    /// status, which is the part `--fail-with-body` is actually wanted for, is
+    /// untouched by the redirect.
+    ///
+    /// Neither flag is left to a reader's judgement, because dropping either is
+    /// a SILENT change: the hook keeps working, and what breaks is what the
+    /// agent is told on the one call that failed.
+    /// `theDocumentedHookBlockIsExactlyWhatTheAppEmits` compares the published
+    /// block against this function. Issue #67 is what the absence of that check
+    /// cost — `docs/QUICKSTART.md` published this line WITHOUT `-o /dev/null`
+    /// while this function emitted it with, and nothing compared the two.
+    ///
     /// **`$HOME` stays UNEXPANDED.** This type resolves no home directory
     /// (design §8), and an expanded path is correct on exactly one machine.
     ///
