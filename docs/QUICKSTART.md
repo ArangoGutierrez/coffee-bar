@@ -224,8 +224,41 @@ control to the other position and a second line appears while an agent works:
 
 coffee-bar has no Dock icon and opens no window. It is a menu-bar app, so after
 it starts, look for the cup at the right end of the menu bar, near the clock.
-Click the cup to open the panel. If your menu bar is full, macOS drops status
-items silently and the cup will not appear.
+Click the cup to open the panel.
+
+### The cup does not appear
+
+The app is almost certainly running. On a full menu bar the cup is there and you
+cannot see it, and on a MacBook with a notch it is usually behind the notch.
+
+macOS fills menu-bar slots right to left in launch order, so the newest arrival
+sits furthest left. On a bar that already carries a dozen items, furthest left is
+underneath the notch. Measured on a notched MacBook: coffee-bar's item at x=929
+on a 1728-point screen whose notch spans roughly 774 to 954, with a neighbouring
+app's item visible at x=1186. The item was fully functional the whole time — a
+click at its coordinates opened the panel normally.
+
+First, confirm the app is running rather than broken. This is the question the UI
+cannot answer for you:
+
+    pgrep -fl CoffeeBar.app
+
+Output means it is running and the cup is hidden, not missing. No output means it
+is not running, and that is a different problem — launch it again.
+
+Then get the item out from under the notch. Any of these works, and the first two
+need nothing installed:
+
+- **Quit coffee-bar and start it again.** It rejoins the bar in a different slot.
+  Measured on the same machine: a relaunch moved the item from x=929 to x=1016,
+  clear of the notch.
+- **⌘-drag** any visible menu-bar item a little way along the bar. That reshuffles
+  the row and can push coffee-bar out from behind the notch.
+- Quit another menu-bar app to free a slot.
+- A menu-bar manager — Ice, Bartender — fixes it for good.
+
+`MenuBarExtra` gives an app no say in where its item lands, so there is nothing
+coffee-bar can change here. It is documented rather than fixed.
 
 The panel holds three controls, a battery line, the Waiting on you list, the
 version, and Quit.
