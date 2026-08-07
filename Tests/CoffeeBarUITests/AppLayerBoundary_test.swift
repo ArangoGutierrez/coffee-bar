@@ -2100,3 +2100,66 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
         the typed route and macOS 14 is already the deployment target.
         """)
 }
+
+@Test func theSettingsWindowTakesTheForegroundAndGivesItBack() throws {
+    // MEASURED, not anticipated. At 0.1.1-31-g7949c51 clicking Preferences…
+    // opened the window and left the app in the background:
+    //
+    //     before=Finder | after=Finder | windows=[coffee-bar Settings]
+    //
+    // coffee-bar is `LSUIElement`, and macOS 14 made activation cooperative: an
+    // `.accessory` app that asks for the foreground is declined. So the window
+    // drew over whatever the user was in, with a grey title bar, taking none of
+    // their keystrokes.
+    //
+    // BOTH HALVES, and the second is the one a fix forgets. Becoming `.regular`
+    // is what lets the app activate; going back to `.accessory` when the window
+    // closes is what stops a menu-bar-only product keeping a Dock icon for the
+    // rest of the session. A tree with the first and not the second passes the
+    // acceptance script and is still wrong.
+    //
+    // THE REAL CHECK FOR THIS IS NOT HERE, and saying so is the point.
+    // `scripts/preferences-activation-acceptance.sh` drives the running app
+    // through the accessibility API and reads which process is frontmost — the
+    // only way to observe it, because M1 design §5.4 rules out asserting on
+    // rendered AppKit state and the fault lives in the window server's notion of
+    // which application is active. That script needs Accessibility permission
+    // and a running build, so it cannot run in CI. This guard is the CI-side net
+    // for it: it proves the calls the script measured are still there. It cannot
+    // prove they work.
+    //
+    // COMMENT-STRIPPED, and this file's own history is why that is not optional.
+    // The paragraph you are reading names both calls while explaining them, so
+    // read raw this expectation would pass on the strength of its own
+    // documentation — the blind direction, exactly as the version guard failed.
+    let files = try appLayerSources()
+    #expect(files.count == expectedSourceCount,
+            "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
+
+    let window = try #require(files.first { $0.lastPathComponent == "PreferencesView.swift" },
+                              "the app layer no longer compiles a PreferencesView.swift")
+    let code = swiftCodeWithoutComments(try String(contentsOf: window, encoding: .utf8))
+
+    #expect(code.contains("NSApp.activate("), """
+        PreferencesView.swift never asks for the foreground. coffee-bar is \
+        LSUIElement: the window then draws in front of whatever the user was \
+        in, with a grey title bar, and their keystrokes go to the other app. \
+        Measured at 0.1.1-31-g7949c51 as before=Finder/after=Finder with the \
+        Settings window present.
+        """)
+
+    #expect(code.contains("setActivationPolicy(.regular)"), """
+        PreferencesView.swift calls NSApp.activate without becoming .regular \
+        first. Measured on macOS 26.5: under .accessory that call does nothing \
+        — the window sits in NSApp.windows and keyWindow stays nil, with or \
+        without makeKeyAndOrderFront. Re-run \
+        scripts/preferences-activation-acceptance.sh before changing this.
+        """)
+
+    #expect(code.contains("setActivationPolicy(.accessory)"), """
+        PreferencesView.swift becomes .regular and never goes back, so a Dock \
+        icon outlives the window that needed it and a menu-bar-only app keeps \
+        one for the rest of the session. The restore belongs on the window's \
+        own disappearance, which is the only event that knows it has gone.
+        """)
+}
