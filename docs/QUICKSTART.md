@@ -50,7 +50,7 @@ Add these to `~/.claude/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+            "command": "curl -sS -o /dev/null --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
           }
         ]
       }
@@ -61,7 +61,7 @@ Add these to `~/.claude/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+            "command": "curl -sS -o /dev/null --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
           }
         ]
       }
@@ -72,7 +72,7 @@ Add these to `~/.claude/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+            "command": "curl -sS -o /dev/null --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
           }
         ]
       }
@@ -82,7 +82,7 @@ Add these to `~/.claude/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+            "command": "curl -sS -o /dev/null --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
           }
         ]
       }
@@ -92,7 +92,7 @@ Add these to `~/.claude/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+            "command": "curl -sS -o /dev/null --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
           }
         ]
       }
@@ -102,6 +102,12 @@ Add these to `~/.claude/settings.json`:
 ```
 
 The two tool events take `"matcher": "*"`; the other three take no matcher.
+
+**Keep `-o /dev/null`.** It pairs with `--fail-with-body`, which exists to print
+the server's error body rather than swallow it — and `curl` prints a body to
+standard output, which is where Claude Code looks for a hook's decision. Without
+the redirect, an ingest error reaches your agent as something to act on. The
+exit status, which is the part `--fail-with-body` is wanted for, is unaffected.
 
 **If your settings file already has a `hooks` key, merge these entries into it.**
 Pasting the block whole replaces whatever hooks you already run.
@@ -120,7 +126,7 @@ it removes a delay. Add this entry beside them:
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+            "command": "curl -sS -o /dev/null --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
           }
         ]
       }
@@ -185,7 +191,8 @@ on standard error by its status code and never by its content. Run
 
 **Measured on the machine that wrote this page**, as the best of 5 runs of 100
 posts each against a running coffee-bar. The shim took 1.16 s, so about 12 ms a
-post. The `curl` line above took 1.66 s over the same work. About 5 ms of either
+post. The `curl` line took 1.66 s over the same work, measured before
+`-o /dev/null` joined it. About 5 ms of either
 is the cost of starting any process at all: 100 runs of `/usr/bin/true` took
 0.54 s. Your machine will differ, and a loaded machine differs a lot — measure
 it rather than trusting these.

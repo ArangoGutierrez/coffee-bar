@@ -147,7 +147,7 @@ writes your settings file for you.</p>
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+            "command": "curl -sS -o /dev/null --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
           }
         ]
       }
@@ -158,7 +158,7 @@ writes your settings file for you.</p>
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+            "command": "curl -sS -o /dev/null --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
           }
         ]
       }
@@ -169,7 +169,7 @@ writes your settings file for you.</p>
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+            "command": "curl -sS -o /dev/null --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
           }
         ]
       }
@@ -179,7 +179,7 @@ writes your settings file for you.</p>
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+            "command": "curl -sS -o /dev/null --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
           }
         ]
       }
@@ -189,7 +189,7 @@ writes your settings file for you.</p>
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+            "command": "curl -sS -o /dev/null --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
           }
         ]
       }
@@ -198,6 +198,13 @@ writes your settings file for you.</p>
 }</pre>
 
 <p>The two tool events take a matcher; the other three take none.</p>
+
+<p><strong>Keep <code>-o /dev/null</code>.</strong> It pairs with
+<code>--fail-with-body</code>, which exists to print the server's error body
+rather than swallow it — and <code>curl</code> prints a body to standard output,
+which is where Claude Code looks for a hook's decision. Without the redirect, an
+ingest error reaches your agent as something to act on. The exit status, which
+is the part <code>--fail-with-body</code> is wanted for, is unaffected.</p>
 
 <p><strong>If your settings file already has a <code>hooks</code> key, merge
 these entries into it.</strong> Pasting the block whole replaces whatever
