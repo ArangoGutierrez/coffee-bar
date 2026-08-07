@@ -468,3 +468,82 @@ private let versionSurfaces = [(file: "PanelView.swift", type: "PanelView"),
             """)
     }
 }
+
+/// The label the copy button carries, read out of `PreferencesView.body`.
+///
+/// **Derived, never restated.** The point of the guard below is that the
+/// DOCUMENTS follow the WINDOW, so the window's own literal is the only
+/// admissible source for it. A label typed into the test as well would make the
+/// test agree with itself while the button was renamed underneath both.
+///
+/// Identified by what the button DOES rather than by what it says: the one whose
+/// action reaches `HookSnippet.json(for:`. That is the seam
+/// `theCopyActionOffersEveryToolTheCheckerCanAdviseAbout` already pins, so the
+/// two guards name the same button by the same evidence.
+///
+/// The `{0,240}` bound is a real limit and not a round number: `[\s\S]*?` would
+/// let this match a `Button` several controls earlier whose closure happens to
+/// be followed, much later in `body`, by an unrelated call to `json(for:)`. The
+/// bound keeps the match inside one control. Measured against the current file,
+/// the gap from `Button(` to `HookSnippet.json(for:` is 46 characters.
+private func copyButtonLabel(in body: String) throws -> String {
+    let pattern = try NSRegularExpression(
+        pattern: "Button\\(\"([^\"]+)\"\\)\\s*\\{[\\s\\S]{0,240}?HookSnippet\\.json\\(for:")
+    let ns = body as NSString
+    let found = pattern.matches(in: body, range: NSRange(location: 0, length: ns.length))
+        .map { ns.substring(with: $0.range(at: 1)) }
+
+    // EXACTLY one. Zero means the button is gone — which is the failure this
+    // whole guard exists for — and it must not read as "nothing to check".
+    // More than one means the scan cannot say which label the docs should
+    // quote, and picking the first would be a coin toss dressed as a check.
+    guard found.count == 1, let label = found.first else {
+        throw SurfaceScanError.notOneFile(name: "Button(…) { … HookSnippet.json(for: …",
+                                          found: found)
+    }
+    return label
+}
+
+@Test func theDocumentedCopyFlowNamesTheButtonTheWindowOffers() throws {
+    // Named bug this catches, and it is issue #66 in both directions.
+    //
+    // FORWARD: the button shipped as this branch's answer to #37 and no
+    // document mentioned it — `grep -i "copy hook" README.md docs/ site/`
+    // returned nothing, while `docs/QUICKSTART.md` §2 went on teaching a reader
+    // to hand-copy a curl line into three files. The documented path was the
+    // error-prone one, and #55 and #64 are both hand-written hook configs
+    // failing invisibly.
+    //
+    // BACKWARD, which is the half the issue asks for explicitly: the button is
+    // deleted or renamed in a later refactor and two pages are left describing
+    // a control that is not there. A reader then hunts a Preferences window for
+    // something that does not exist and concludes the app is broken.
+    //
+    // COMMENT-STRIPPED, for the reason every guard in this file is: the section
+    // is explained at length in `PreferencesView.swift`'s own comments, and a
+    // raw read would find the label in prose describing a button that had been
+    // deleted.
+    let code = try surfaceCode(named: "PreferencesView.swift")
+    let declared = try #require(braceBlock(after: "struct PreferencesView: View", in: code), """
+        PreferencesView.swift declares no `struct PreferencesView: View`, so \
+        this guard names a surface the package no longer has.
+        """)
+    let body = try #require(braceBlock(after: "var body: some View", in: declared.block),
+                            "PreferencesView declares no body to render a section into.")
+
+    let label = try copyButtonLabel(in: body.block)
+
+    // The two pages a stranger follows. Both, because they are separate
+    // documents with separate readers: the quick start is what a builder reads
+    // and the install page is what a downloader reads, and #66 names both.
+    for page in ["docs/QUICKSTART.md", "site/install.html"] {
+        let text = try String(contentsOf: packageRoot.appending(path: page), encoding: .utf8)
+        #expect(text.contains(label), """
+            \(page) never names "\(label)", the button PreferencesView offers \
+            beside each agent tool's settings file. The page therefore teaches \
+            hand-editing as the only route, and the button emits the events the \
+            health check actually looks for and the endpoint for the tool the \
+            reader picked — neither of which the hand-written block explains.
+            """)
+    }
+}
