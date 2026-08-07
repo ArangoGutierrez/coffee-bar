@@ -214,9 +214,10 @@ Then confirm the assertion behaves:
     pmset -g assertions | grep coffee-bar
 
 While an agent is working you should see `PreventUserIdleSystemSleep` named
-`"coffee-bar is serving"`. With the panel's Display control on its default
-position you should see **no** display assertion from coffee-bar. Move that
-control to the other position and a second line appears while an agent works:
+`"coffee-bar is serving"`. With the Display control in the Preferences window on
+its default position you should see **no** display assertion from coffee-bar.
+Move that control to the other position and a second line appears while an agent
+works:
 `PreventUserIdleDisplaySleep`, named
 `"coffee-bar is keeping the display awake"`.
 
@@ -263,14 +264,16 @@ coffee-bar can change here. It is documented rather than fixed.
 The panel holds the Serving control, a battery line, the Waiting on you list,
 the version, Preferences…, and Quit.
 
-Display and Battery floor live in the Preferences window. Open it with
-Preferences… at the foot of the panel, or with ⌘, once coffee-bar is frontmost.
+Display, Battery floor and Quiet everything else live in the Preferences window.
+Open it with Preferences… at the foot of the panel, or with ⌘, once coffee-bar is
+frontmost.
 
 | Control | Where it lives | What it decides |
 |---|---|---|
 | Serving | The panel | Whether to hold at all. Off is an absolute veto. |
 | Display | Preferences | Whether a hold covers the screen as well as the machine. |
 | Battery floor | Preferences | How much battery a hold may spend. |
+| Quiet everything else | Preferences | Whether processes you have named are demoted while an agent works. |
 
 The Battery floor control ships at 15%.
 On battery, coffee-bar does not hold at or below 15%.
