@@ -260,14 +260,17 @@ need nothing installed:
 `MenuBarExtra` gives an app no say in where its item lands, so there is nothing
 coffee-bar can change here. It is documented rather than fixed.
 
-The panel holds three controls, a battery line, the Waiting on you list, the
-version, and Quit.
+The panel holds the Serving control, a battery line, the Waiting on you list,
+the version, Preferences…, and Quit.
 
-| Control | What it decides |
-|---|---|
-| Serving | Whether to hold at all. Off is an absolute veto. |
-| Display | Whether a hold covers the screen as well as the machine. |
-| Battery floor | How much battery a hold may spend. |
+Display and Battery floor live in the Preferences window. Open it with
+Preferences… at the foot of the panel, or with ⌘, once coffee-bar is frontmost.
+
+| Control | Where it lives | What it decides |
+|---|---|---|
+| Serving | The panel | Whether to hold at all. Off is an absolute veto. |
+| Display | Preferences | Whether a hold covers the screen as well as the machine. |
+| Battery floor | Preferences | How much battery a hold may spend. |
 
 The Battery floor control ships at 15%.
 On battery, coffee-bar does not hold at or below 15%.
