@@ -453,3 +453,80 @@ private func declaredExecutables() throws -> [String] {
         Rename one and the other is a path that does not exist.
         """)
 }
+
+@MainActor
+@Test func theBuildingGuideSaysWhereTheProbeBinaryComesFrom() throws {
+    // Named bug this catches, and it is the second half of issue #64.
+    // `docs/BUILDING.md` said of `arm`, `report`, `revert` and `watchdog`:
+    // "**They are not implemented.** Each exits 64 with a message naming the
+    // task that would add it. Nothing in the shipped app reaches the privileged
+    // code path."
+    //
+    // Both sentences were FALSE when they were read on 2026-08-07. #13 shipped
+    // lid-closed mode in v0.2.0, `.arm` reaches a real ArmService with a journal
+    // and a refusal path, and the Preferences window prints the command. A
+    // reader who went looking for the feature was told by the project's own
+    // build guide that it did not exist.
+    //
+    // Nothing could see it. The document is prose about an enum, and prose is
+    // exactly what a compiler does not read.
+    let guide = try String(contentsOf: uiPackageRoot().appending(path: "docs/BUILDING.md"),
+                           encoding: .utf8)
+    #expect(guide.count > 1000,
+            "docs/BUILDING.md is \(guide.count) bytes; every check below would pass vacuously")
+
+    // WHITESPACE-NORMALISED, and that is not tidiness. Markdown wraps prose at
+    // the column, so "Nothing in the shipped app reaches the privileged code
+    // path" is split across two lines in the file. Checked against the raw text
+    // that phrase NEVER MATCHES — measured: it was the one of these three that
+    // stayed silent while the sentence was present, which is a guard that reads
+    // as passing and is asserting nothing.
+    let prose = guide.replacingOccurrences(of: "\\s+", with: " ",
+                                           options: .regularExpression)
+
+    // The claim, in the words it was written in. A phrase check catches this
+    // spelling and no other, which is why the two positive assertions below
+    // carry the weight — but the sentence is quotable and it is worth naming, so
+    // that a reinstated copy fails on the exact text rather than on a synonym
+    // nobody chose.
+    for claim in ["are not implemented", "They are not implemented",
+                  "Nothing in the shipped app reaches the privileged code path"] {
+        #expect(!prose.contains(claim), """
+            docs/BUILDING.md still says "\(claim)". The privileged verbs ARE \
+            implemented — `.arm` reaches a real ArmService — and lid-closed mode \
+            shipped in v0.2.0. A reader who goes looking is told the feature does \
+            not exist.
+            """)
+    }
+
+    // POSITIVE, and derived: every verb the binary refuses without root is a
+    // verb the build guide has to account for. Read out of `ProbeVerb` so a
+    // fifth root verb makes this fail rather than quietly go undocumented.
+    let rootVerbs = ProbeVerb.allCases.filter(\.requiresRoot).map(\.rawValue)
+    #expect(rootVerbs.count >= 4,
+            "ProbeVerb reports \(rootVerbs.count) root verb(s): \(rootVerbs); this guard would sweep almost nothing")
+    for verb in rootVerbs {
+        #expect(guide.contains(verb), """
+            docs/BUILDING.md never names the root verb "\(verb)". The guide is \
+            where a reader goes to find out what the probe does, and a verb it \
+            omits is a verb that exists only in the source.
+            """)
+    }
+
+    // WHERE THE BINARY COMES FROM, which is the acceptance criterion in the
+    // issue's own words. The path is composed from `APP_NAME` in
+    // `scripts/build-app.sh` and the product name that script bundles, so a
+    // rename on either side fails here instead of publishing a path that does
+    // not exist.
+    let script = try bundleAssembler()
+    let appName = try #require(try shellValue(of: "APP_NAME", in: script),
+                               "scripts/build-app.sh sets no APP_NAME this guard can read")
+    let bundlePath = "/Applications/\(appName).app/Contents/MacOS/coffee-bar-probe"
+
+    #expect(guide.contains(bundlePath), """
+        docs/BUILDING.md never prints "\(bundlePath)". The probe now ships inside \
+        the bundle and is NOT on the user's PATH, so a page that names \
+        `coffee-bar-probe` without its path hands the reader a command their \
+        shell answers with "command not found".
+        """)
+}
