@@ -2,7 +2,7 @@
 # Copyright 2026 Carlos Eduardo Arango Gutierrez
 # SPDX-License-Identifier: Apache-2.0
 #
-# Assembles build/CoffeeBar.app from the `coffee-bar` SwiftPM product. No
+# Assembles build/CoffeeBar.app from the SwiftPM products named in PRODUCTS. No
 # .xcodeproj is involved and none is needed — SwiftPM builds the SwiftUI
 # MenuBarExtra fine and the bundle is assembled by hand.
 #
