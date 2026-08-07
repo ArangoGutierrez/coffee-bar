@@ -260,6 +260,86 @@ func everyDocumentedSurfaceIsReadableAndSubstantial(_ name: String) throws {
             "\(hookBlockSurface) documents \(documented.sorted()); HookHealth.requiredEvents is \(required.sorted())")
 }
 
+/// The block the page tells a user to paste is the block the app emits.
+///
+/// **The drift this closes, measured 2026-08-07 — issue #67.**
+/// `HookSnippet.command(for:)` emitted `curl -sS -o /dev/null …` and
+/// `docs/QUICKSTART.md` published the same line WITHOUT `-o /dev/null`. Nothing
+/// compared them. `theHookBlockIsExactlyTheRequiredEvents` above reads the KEYS
+/// of this same block, so it stayed green over two different commands, and
+/// `theSiteHookBlockIsStillACopyOfTheQuickStartBlock` held the site against the
+/// page — which keeps two copies of a wrong command in step with each other.
+///
+/// The missing flag is not cosmetic. Without `-o /dev/null`, `--fail-with-body`
+/// writes the ingest error body to the hook's STANDARD OUTPUT, and an agent
+/// reads a hook's standard output as a decision. A reader who followed the page
+/// wired a hook that speaks to their agent whenever the socket answers with an
+/// error.
+///
+/// **The whole block, not the command alone.** The events, the matcher split and
+/// the command all come out of `HookSnippet.json(for: .claudeCode)`, so
+/// comparing the documents' block against that one value covers every part of it
+/// at once. Compared as re-serialised JSON so indentation and key order — which
+/// are claims about nothing — cannot fail this.
+@Test func theDocumentedHookBlockIsExactlyWhatTheAppEmits() throws {
+    let text = try surfaceText(hookBlockSurface)
+
+    // The FIRST fenced json block, the same one the guard above reads. The
+    // optional SessionEnd snippet and the coffeebar-hook fragment are later
+    // blocks and neither is what the button emits.
+    let blocks = try matches("```json\\n([\\s\\S]*?)\\n```", in: text).map { $0[1] }
+    #expect(!blocks.isEmpty, "no json block in \(hookBlockSurface); the guard cannot run")
+    guard let documented = blocks.first else { return }
+
+    let emitted = try #require(
+        HookSnippet.json(for: .claudeCode),
+        "HookSnippet has no snippet for Claude Code, so there is nothing to hold \(hookBlockSurface) against")
+
+    // Re-serialised through ONE set of options, so the two sides are compared as
+    // structure. `.withoutEscapingSlashes` is included because `json(for:)` uses
+    // it: without it here the documented side comes back as
+    // `http:\/\/localhost\/event` and every run fails on an escape neither
+    // document contains.
+    func canonical(_ raw: String, _ label: String) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: Data(raw.utf8)),
+              let data = try? JSONSerialization.data(
+                withJSONObject: object,
+                options: [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes])
+        else {
+            Issue.record("the hook block in \(label) does not parse as JSON; a reader pasting it would get a broken settings file")
+            return nil
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    guard let onPage = canonical(documented, hookBlockSurface),
+          let fromApp = canonical(emitted, "HookSnippet.json(for: .claudeCode)")
+    else { return }
+
+    // The command on its own, named separately from the block comparison below.
+    // Two identical `{}` blocks would satisfy that comparison, and this is what
+    // stops it: the command is read back OUT of the page and held against the
+    // generator, so a page that lost its commands fails here rather than
+    // matching an equally empty expectation.
+    let expected = HookSnippet.command(for: .claudeCode)
+    let printed = commandStrings(in: (try? JSONSerialization.jsonObject(with: Data(documented.utf8))) ?? [:])
+    #expect(!printed.isEmpty,
+            "\(hookBlockSurface) prints no hook command at all; this guard would otherwise compare two empty blocks")
+    for command in printed {
+        #expect(command == expected, """
+            \(hookBlockSurface) tells the reader to paste
+              \(command)
+            and the Copy hook snippet button emits
+              \(expected)
+            """)
+    }
+
+    #expect(onPage == fromApp, """
+        \(hookBlockSurface) no longer matches HookSnippet.json(for: .claudeCode). \
+        First difference, page then app, \(firstDifference(onPage, fromApp))
+        """)
+}
+
 /// "The two tool events take `"matcher": "*"`; the other three take no matcher."
 ///
 /// Both halves are claims about the block printed directly above them, and a
