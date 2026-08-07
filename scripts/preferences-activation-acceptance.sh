@@ -30,6 +30,16 @@
 # It now resolves the button through the accessibility tree and clicks the frame
 # the window server reports. NOTHING here is derived from a remembered coordinate.
 #
+# THE ALTERNATIVE THAT WAS CONSIDERED, recorded so nobody re-derives it. Anchoring
+# on the popover's own bottom edge fits every panel height measured:
+#     35 + 524 - 497 = 62      35 + 487 - 460 = 62      35 + 383 - 355 = 63
+# so `py = popoverBottom - 62` would land on Preferences… at all three, and it is
+# a real improvement on the status-item offset. It was not taken because 62 is
+# still a remembered number: it encodes the bottom padding, the Quit button, the
+# spacing and half a button, and it silently stops being true the first time a
+# control is added below Preferences…. Reading the button gives the same answer
+# with nothing to remember.
+#
 # THE ONE THING AX CANNOT TELL US, and how that is handled. SwiftUI gives neither
 # button a title: both `SettingsLink { Text("Preferences…") }` and
 # `Button("Quit coffee-bar")` come back as an untitled AXButton, so the tree can
@@ -304,8 +314,15 @@ case "$WINS" in
     *) fail "no window named '$WINDOW_NAME' — Preferences did not open at all" ;;
 esac
 
+# THE MESSAGE IS THE FIX INSTRUCTION, so it must not name a disproven one. This
+# used to say the fix is NSApp.activate(ignoringOtherApps:) on the SettingsLink
+# path. Task 6 measured that and it is WRONG: macOS 14 made activation
+# cooperative, so an .accessory app asking for the foreground is declined — the
+# call runs, returns, and nothing happens. Two other routes were measured dead
+# too, and PreferencesView.swift records all three. Sending the next reader down
+# the route that was already tried is worse than saying nothing.
 [ "$AFTER" = "$APP_NAME" ] \
-    || fail "window opened but '$APP_NAME' is not frontmost (got '$AFTER'). The window is inactive: grey title bar, keyboard input goes elsewhere. Fix is NSApp.activate(ignoringOtherApps: true) on the SettingsLink path."
+    || fail "window opened but '$APP_NAME' is not frontmost (got '$AFTER'). The window is inactive: grey title bar, keyboard input goes elsewhere. The fix is NSApp.setActivationPolicy(.regular) and THEN activate, on .onAppear of the Settings scene, reverting to .accessory in .onDisappear. activate(ignoringOtherApps:) alone does nothing under .accessory — measured, see PreferencesView.swift."
 
 # Leave the app as it was found, so the next run starts from the state this one
 # demanded. Deliberately AFTER the assertions: a failed run keeps its evidence on
