@@ -364,7 +364,14 @@ private func scratchCopy(of fixture: String) throws -> URL {
 /// Calls that put bytes on disk. Not a proof that no other route exists — the
 /// behavioural checks above are the first line of defence, and this is the
 /// second.
-private let forbiddenWriteCalls = [
+///
+/// Internal rather than `private`, which in Swift is scoped to this file.
+/// `PreferencesView_test.swift` holds the same no-write line over the window
+/// that offers the Copy button, and it is the same line for the same reason:
+/// design §6 says print, never write. ONE list in this target, not two — a
+/// second copy drifts from this one, and the two guards then disagree about
+/// what a write is while both read green.
+let forbiddenWriteCalls = [
     "write(to:",
     ".write(",
     "createFile",

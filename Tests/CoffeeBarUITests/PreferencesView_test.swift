@@ -3,6 +3,7 @@
 
 import Foundation
 import Testing
+import CoffeeBarCore
 
 /// What the Preferences window must SAY, held by a source scan.
 ///
@@ -239,4 +240,85 @@ private let versionSurfaces = [(file: "PanelView.swift", type: "PanelView"),
     #expect(prefs.contains("BatteryFloor.permitted"))
     #expect(prefs.contains("BatteryFloor.step"))
     #expect(!prefs.contains("BatteryFloor.bounded"))
+}
+
+@Test func thePreferencesWindowNeverWritesAnAgentToolsSettingsFile() throws {
+    // Named bug this catches: phase 2 arriving by accident. M2 ingest design §6
+    // is "print, never write" — each of those files is shared territory, and
+    // this workspace records a six-occurrence last-writer-wins clobber in
+    // exactly that kind of config. A window offering a Copy button is one small
+    // step from a window offering to do the paste for you, and the step is the
+    // sort a helpful refactor takes without being asked.
+    //
+    // COMMENT-STRIPPED, and here that matters in the INVERTED direction rather
+    // than the blind one, the way it does for the slider guard above: the
+    // honest way to record this decision is a sentence in
+    // `PreferencesView.swift` saying the window writes nothing, and against raw
+    // text that sentence is what would turn this guard red on a correct tree.
+    //
+    // `forbiddenWriteCalls` is the list `HookHealthReader_test.swift` already
+    // holds this same line with, one target over. Reused rather than restated,
+    // for the reason this file reuses the lexer and the brace reader: a second
+    // list disagrees with the first eventually, and then two guards argue about
+    // what a write is.
+    let prefs = try surfaceCode(named: "PreferencesView.swift")
+
+    for call in forbiddenWriteCalls {
+        #expect(!prefs.contains(call), """
+            PreferencesView.swift names \(call). Design §6 forbids this window \
+            putting bytes into an agent tool's settings file: print the snippet \
+            to the pasteboard and let the user paste it.
+            """)
+    }
+
+    // DISCRIMINATES. Without this half the guard passes over a window with no
+    // Agent tools section at all — including this very window as it stood
+    // before this task, which wrote nothing because it did nothing. A guard
+    // that holds over the empty case is not holding anything.
+    #expect(prefs.contains("NSPasteboard"), """
+        PreferencesView.swift never reaches the pasteboard, so the no-write \
+        loop above is asserting over a window that offers no snippet to copy. \
+        It would hold just as well over an empty view.
+        """)
+}
+
+@Test func theCopyActionOffersEveryToolTheCheckerCanAdviseAbout() throws {
+    // Named bug this catches: a section wired to a hardcoded two tools, so the
+    // third stays uncopyable for ever. `ServingModel.hookAdvisory` iterates
+    // `AgentTool.allCases`, so it will tell the user about a file this window
+    // would then give them no way to fix — advice with no remedy beside it.
+    for tool in AgentTool.allCases {
+        #expect(HookSnippet.json(for: tool) != nil, "\(tool) has no snippet to copy")
+    }
+
+    // That loop is a claim about `HookSnippet`, and `HookSnippet_test.swift`
+    // holds the deep version of it. On its own it says NOTHING about this
+    // window: it stays green over a window that offers one tool, or none.
+    //
+    // So the half that matters here is that the section is built OVER the same
+    // list. Scoped to `body` with the two `braceBlock` calls the version guard
+    // above uses, and for the same reason — a `contains` over the whole file is
+    // satisfied by a helper that no rendered surface reaches.
+    let code = try surfaceCode(named: "PreferencesView.swift")
+    let declared = try #require(braceBlock(after: "struct PreferencesView: View", in: code), """
+        PreferencesView.swift declares no `struct PreferencesView: View`, so \
+        this guard names a surface the package no longer has.
+        """)
+    let body = try #require(braceBlock(after: "var body: some View", in: declared.block),
+                            "PreferencesView declares no body to render a section into.")
+
+    // Each seam is the ONLY public route to what it provides, so naming it is
+    // not a stylistic preference. `HookSnippet.command(for:)` is internal to
+    // `CoffeeBarCore` and cannot be reached from here at all; `defaultURL(for:)`
+    // is the one place in the package that resolves a home directory.
+    for seam in ["AgentTool.allCases",
+                 "HookSnippet.json(for:",
+                 "HookHealthReader.defaultURL(for:"] {
+        #expect(body.block.contains(seam), """
+            PreferencesView.body does not name \(seam), so the Agent tools \
+            section is not built over the tool list the advisory beside it is \
+            built over. A section naming its tools one at a time leaves the \
+            next tool uncopyable and nothing here would see it.
+            """)
+    }
 }
