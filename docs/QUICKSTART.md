@@ -40,6 +40,30 @@ Homebrew prefix and the install prints the one command that links it there.
 
 ## 2. Wire the Claude Code hooks
 
+**Let coffee-bar write the entries for you.** Open Preferences… from the foot of
+the panel, or press ⌘, while coffee-bar is frontmost. Under **Agent tools** each
+settings file is listed with a **Copy hook snippet** button beside it. Click the
+one next to `~/.claude/settings.json` and the whole block is on your pasteboard,
+ready to merge into the file.
+
+Prefer that button to the block printed below, and not only because it saves
+typing. It is generated from `HookHealth.requiredEvents(for:)` — the same
+constant the health check reads — so it cannot tell you to wire a set the panel
+then reports as missing. It carries the ingest endpoint belonging to the tool
+you picked, which is how an arriving payload is attributed to that tool at all,
+and it puts the `matcher` key on exactly the events that need one. The JSON
+below explains none of that, and a hook config wrong in any of those ways fails
+silently: the app sees nothing and the panel still says the file is wired.
+
+**Copy hook snippet never touches your settings file.** It writes to the
+pasteboard and stops there. Merging is yours, because that file is yours.
+
+### Or paste the block by hand
+
+Worth doing if you want to read what you are pasting before it goes in, or if
+coffee-bar is not running yet. This is the Claude Code block; the button is the
+only route that prints the Codex and Cursor ones.
+
 Add these to `~/.claude/settings.json`:
 
 ```json

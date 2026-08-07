@@ -138,6 +138,31 @@ doing from Claude Code hooks and from nothing else, so until these entries
 exist the app runs and no session event ever reaches it. coffee-bar never
 writes your settings file for you.</p>
 
+<h3>Let coffee-bar write the entries</h3>
+
+<p>Open Preferences… from the foot of the panel, or press ⌘, while coffee-bar
+is frontmost. Under <strong>Agent tools</strong> each settings file is listed
+with a <strong>Copy hook snippet</strong> button beside it. Click the one next
+to <code>~/.claude/settings.json</code> and the whole block is on your
+pasteboard, ready to merge into the file.</p>
+
+<p>Prefer that button to the block below. It is generated from the same constant
+the health check reads, so it cannot tell you to wire a set the panel then
+reports as missing. It carries the ingest endpoint belonging to the tool you
+picked, which is how an arriving payload is attributed to that tool at all, and
+it puts the <code>matcher</code> key on exactly the events that need one. The
+block below explains none of that, and a hook config wrong in any of those ways
+fails silently: the app sees nothing and the panel still says the file is
+wired.</p>
+
+<p>The button writes to the pasteboard and stops there. Merging is yours,
+because that file is yours.</p>
+
+<h3>Or paste the block by hand</h3>
+
+<p>Worth doing if you want to read what you are pasting before it goes in, or if
+coffee-bar is not running yet.</p>
+
 <p>Add these to <code>~/.claude/settings.json</code>:</p>
 
 <pre class="hooks">{
