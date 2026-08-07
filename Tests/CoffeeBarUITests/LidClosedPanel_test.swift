@@ -342,3 +342,114 @@ private func uiPackageRoot() -> URL {
             """)
     }
 }
+
+// MARK: - Issue #64: the binary the docs send people to has to be in the bundle
+
+/// The bundle assembler, read as text.
+///
+/// `scripts/build-app.sh` is the only thing that decides what lands in
+/// `CoffeeBar.app/Contents/MacOS/`, and no Swift target imports it. Reading it
+/// is the only route from this suite to that decision.
+private func bundleAssembler() throws -> String {
+    try String(contentsOf: uiPackageRoot().appending(path: "scripts/build-app.sh"),
+               encoding: .utf8)
+}
+
+/// One shell assignment's value, e.g. `APP_NAME="CoffeeBar"` -> `CoffeeBar`.
+///
+/// Anchored to the start of a line so a mention inside a comment or a string
+/// cannot answer for the real assignment.
+private func shellValue(of name: String, in script: String) throws -> String? {
+    let pattern = try NSRegularExpression(pattern: "(?m)^\(name)=\"?([A-Za-z0-9._-]+)\"?\\s*$")
+    let ns = script as NSString
+    return pattern.firstMatch(in: script, range: NSRange(location: 0, length: ns.length))
+        .map { ns.substring(with: $0.range(at: 1)) }
+}
+
+/// The executable products `scripts/build-app.sh` puts in the bundle.
+private func bundledProducts(in script: String) throws -> [String] {
+    let pattern = try NSRegularExpression(pattern: "(?m)^PRODUCTS=\\(([^)]*)\\)")
+    let ns = script as NSString
+    guard let match = pattern.firstMatch(in: script,
+                                         range: NSRange(location: 0, length: ns.length))
+    else { return [] }
+    return ns.substring(with: match.range(at: 1))
+        .split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" })
+        .map { String($0).trimmingCharacters(in: CharacterSet(charactersIn: "\"'")) }
+        .filter { !$0.isEmpty }
+}
+
+/// The executable products `Package.swift` declares.
+private func declaredExecutables() throws -> [String] {
+    let manifest = try String(contentsOf: uiPackageRoot().appending(path: "Package.swift"),
+                              encoding: .utf8)
+    let pattern = try NSRegularExpression(pattern: "\\.executable\\(name: \"([^\"]+)\"")
+    let ns = manifest as NSString
+    return pattern.matches(in: manifest, range: NSRange(location: 0, length: ns.length))
+        .map { ns.substring(with: $0.range(at: 1)) }
+}
+
+@MainActor
+@Test func theBundleTheScriptAssemblesCarriesTheProbe() throws {
+    // Named bug this catches, and it is issue #64 exactly. `build-app.sh` built
+    // `--product coffee-bar` alone, so `Contents/MacOS/` held one binary and the
+    // DMG held one binary. Lid-closed mode's ONLY entry point is the probe, and
+    // `Sources/CoffeeBarProbe/main.swift` implements `.arm` against a real
+    // `ArmService`. A headline feature of v0.2.0 shipped with no way to reach it
+    // for every user who installed from the disk image, while the app's own
+    // Preferences window told them to run it.
+    //
+    // Nothing in this package could see that. `Package.swift` declares the
+    // product, `swift test` builds it, and every probe test in
+    // `CoffeeBarPowerTests` runs the binary out of `.build/` — which exists
+    // whatever the bundle contains. The one file that decides is a shell script
+    // no target imports, so a guard has to read it as text.
+    let script = try bundleAssembler()
+    let products = try bundledProducts(in: script)
+
+    // ANTI-VACUITY, and it is the whole failure mode of a text-scraped guard: a
+    // renamed variable makes `products` empty, `contains` then fails for a
+    // reason that reads like the defect, and a `products.isEmpty` early return
+    // would instead pass over a script that bundles nothing at all.
+    #expect(products.count >= 2, """
+        parsed \(products.count) product(s) from the PRODUCTS array in \
+        scripts/build-app.sh: \(products). The bundle carries at least the app \
+        and the probe, so fewer than two means this guard read the wrong thing \
+        rather than that the script is thin.
+        """)
+
+    #expect(products.contains("coffee-bar-probe"), """
+        scripts/build-app.sh bundles \(products.sorted()). `coffee-bar-probe` is \
+        not among them, so CoffeeBar.app — and the DMG built from it — ships \
+        without the only entry point lid-closed mode has. The Preferences window \
+        prints "\(ServingModel.lidClosedCommand)" regardless.
+        """)
+
+    // A product name the manifest does not declare fails the BUILD, not this
+    // check — but it fails it at release time, on the maintainer's machine,
+    // after a tag. Catching a typo here costs one comparison.
+    let declared = try declaredExecutables()
+    #expect(declared.count >= 3,
+            "parsed \(declared.count) executable product(s) from Package.swift: \(declared)")
+    for product in products {
+        #expect(declared.contains(product), """
+            scripts/build-app.sh bundles "\(product)", which Package.swift does \
+            not declare as an executable product. Package.swift declares \
+            \(declared.sorted()). `swift build --product \(product)` cannot \
+            succeed, so the release build fails at the tag.
+            """)
+    }
+
+    // The bundle layout the printed command depends on. `APP_NAME` is what names
+    // `CoffeeBar.app`, and the path the user is told to type is built from it —
+    // so a rename here silently invalidates every document that prints the path.
+    let appName = try #require(try shellValue(of: "APP_NAME", in: script), """
+        scripts/build-app.sh sets no APP_NAME this guard can read, so the bundle \
+        path the documents print rests on nothing.
+        """)
+    #expect(appName == "CoffeeBar", """
+        scripts/build-app.sh assembles \(appName).app; every surface that prints \
+        the probe's path names /Applications/CoffeeBar.app/Contents/MacOS/. \
+        Rename one and the other is a path that does not exist.
+        """)
+}
