@@ -2277,10 +2277,35 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
         scripts/preferences-activation-acceptance.sh before changing this.
         """)
 
-    #expect(code.contains("setActivationPolicy(.accessory)"), """
-        PreferencesView.swift becomes .regular and never goes back, so a Dock \
-        icon outlives the window that needed it and a menu-bar-only app keeps \
-        one for the rest of the session. The restore belongs on the window's \
-        own disappearance, which is the only event that knows it has gone.
+    // SCOPED TO `.onDisappear`, and the unscoped `contains` this replaces was
+    // defeated BY EXECUTION rather than by argument. The mutant: delete
+    // `.onDisappear` and put `if false { setActivationPolicy(.accessory) }`
+    // inside `onAppear`. The string is still in the file, the old assertion
+    // still passed, and the call can never run — so a permanent Dock icon
+    // shipped with CI green, which is the exact failure the message below
+    // claims to prevent.
+    //
+    // That is not a hypothetical mutation. The revert is the SOLE condition on
+    // which a Dock icon was accepted into a menu-bar-only product at all, so
+    // this is the one assertion in this test that has to hold by wiring rather
+    // than by spelling.
+    //
+    // `braceBlock(after:in:)` is the reader the version guard and the
+    // attention-list guard already use. One tested brace reader in this target,
+    // never a second — two could disagree about what a block is.
+    let restore = try #require(braceBlock(after: ".onDisappear", in: code)?.block, """
+        PreferencesView.swift opens no `.onDisappear` block, so nothing restores \
+        the activation policy when the Preferences window closes. The app turns \
+        .regular to take the foreground and never turns back: a menu-bar-only \
+        product then keeps a Dock icon for the rest of the session.
+        """)
+
+    #expect(restore.contains("setActivationPolicy(.accessory)"), """
+        PreferencesView.swift's .onDisappear does not call \
+        setActivationPolicy(.accessory), so a Dock icon outlives the window that \
+        needed it and a menu-bar-only app keeps one for the rest of the session. \
+        The restore belongs on the window's own disappearance, which is the only \
+        event that knows it has gone. A call ANYWHERE ELSE in the file does not \
+        satisfy this — an unreachable one is what this scoping was added to catch.
         """)
 }
