@@ -582,6 +582,31 @@ private func argumentSpans(of call: String, in code: String) -> [String] {
 /// in a file scopes to the earliest match. `PreferencesView_test.swift` composes
 /// two calls — type first, then `body` — because `PanelView.swift` declares two
 /// `View`s and the first `var body: some View` in it belongs to `MenuBarLabel`.
+/// How many braces are still open where `needle` first appears, or `nil` when it
+/// does not appear at all.
+///
+/// The unit of comparison for "is this line as conditional as that one". Two
+/// siblings in the same container sit at the same depth; wrapping one in an
+/// `if`, a `switch` or a closure adds a brace and moves it. That is the whole
+/// mechanism, and it is what tells a live render from a render that is merely
+/// SPELLED — `if false { Text(x) }` keeps every `contains` check green.
+///
+/// `nil` rather than `0` for a missing needle, so a caller cannot compare two
+/// absences and find them equal.
+///
+/// It counts every brace, string literals included, which is a real limit and
+/// the caller's job to know about: `swiftCodeWithoutComments` strips comments
+/// and keeps strings, so a `{` inside a literal ahead of the needle miscounts.
+func braceDepth(atFirst needle: String, in code: String) -> Int? {
+    guard let found = code.range(of: needle) else { return nil }
+    var depth = 0
+    for character in code[code.startIndex ..< found.lowerBound] {
+        if character == "{" { depth += 1 }
+        if character == "}" { depth -= 1 }
+    }
+    return depth
+}
+
 func braceBlock(after needle: String, in code: String)
     -> (block: String, rest: String)? {
     guard let found = code.range(of: needle),
@@ -1970,6 +1995,62 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
         so the only route a user has to lid-closed mode — the command to run — \
         reaches them nowhere. Render it, or delete the property and the checks \
         on its text. A comment naming the property does not satisfy this.
+        """)
+
+    // WIRED, not merely SPELLED. `contains` proves the property is named in
+    // code; it cannot tell a live render from a dead one, and the difference is
+    // invisible to every other check here because design §5.4 rules out reading
+    // the drawn window.
+    //
+    // Named bug this catches, and it is not hypothetical — the same shape
+    // defeated a sibling guard in this repository:
+    //
+    //     if false {
+    //         Text(ServingModel.lidClosedSummary)
+    //     }
+    //
+    // The property is spelled, the assertion above is green, and the user meets
+    // nothing. Any disabling condition does it, not just `false`.
+    //
+    // The test is BRACE DEPTH against an unconditional neighbour. Both renders
+    // are direct children of the same `VStack`, so they sit at the same depth;
+    // wrapping either in an `if`, a `switch` or a closure adds one. `Text("Power")`
+    // is the anchor because it is the section heading — a build where THAT is
+    // conditional is not a build where this check is the problem.
+    //
+    // LIMIT, stated rather than hidden: this counts braces over comment-stripped
+    // code, and `swiftCodeWithoutComments` keeps string literals. A brace inside
+    // a string in this file would miscount. There is none today — the strings
+    // are labels like "Power" and "Battery floor" — and if one arrives, this
+    // guard is what has to change.
+    //
+    // It also cannot prove the VStack itself is reachable. It proves this row is
+    // no more conditional than the heading above it, which is the property that
+    // was actually at risk.
+    let anchorDepth = try #require(braceDepth(atFirst: "Text(\"Power\")", in: windowCode), """
+        PreferencesView.swift no longer contains Text("Power"), so this guard has \
+        no unconditional neighbour to compare against and measured nothing.
+        """)
+    let summaryDepth = try #require(braceDepth(atFirst: "ServingModel.lidClosedSummary",
+                                               in: windowCode))
+
+    // ANTI-VACUITY. `body`, `ScrollView` and `VStack` are three braces before
+    // either render, plus the struct. A depth of nought means the counter read
+    // something that is not this view at all, and two zeroes would compare equal
+    // and pass.
+    #expect(anchorDepth >= 3, """
+        the unconditional anchor in PreferencesView.swift sits at brace depth \
+        \(anchorDepth), which is shallower than the struct, body, ScrollView and \
+        VStack that must enclose it. This guard is reading the wrong thing.
+        """)
+
+    #expect(summaryDepth == anchorDepth, """
+        PreferencesView.swift spells ServingModel.lidClosedSummary at brace depth \
+        \(summaryDepth) while the unconditional Text("Power") beside it sits at \
+        \(anchorDepth). The summary is inside something the heading is not — an \
+        `if`, a `switch`, a closure — so the text is present in the file and the \
+        user may never see it. The lid-closed summary is unconditional: there is \
+        no state to condition it on, and silence reads as "lid-closed mode is off".
         """)
 
     // The negative half. Issue #56: the panel keeps NOTHING about lid-closed
