@@ -1912,51 +1912,91 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // END attention-list scroll tripwire.
 }
 
-@Test func thePanelTellsTheUserHowToArmLidClosedMode() throws {
-    // The same tripwire as the three checks above, for issue #13's panel half.
+@Test func theLidClosedSummaryIsInThePreferencesWindowAndNotInThePanel() throws {
+    // TWO SURFACES, and the negative half is the point of issue #56.
     //
-    // Lid-closed mode is the one capability with NO control in this panel, and
-    // that is deliberate: it needs root, and coffee-bar never elevates its own
-    // privilege. What is left is telling the user the command — so if
-    // `PanelView` never reads the property, the feature reaches the user
-    // nowhere at all and the app simply has no lid-closed mode as far as anyone
-    // can tell.
+    // Lid-closed mode is the one capability with NO control anywhere, and that
+    // is deliberate: it needs root, and coffee-bar never elevates its own
+    // privilege. What is left is telling the user the command — so if NO view
+    // reads the property, the feature reaches the user nowhere at all and the
+    // app simply has no lid-closed mode as far as anyone can tell. That is what
+    // the positive half below refuses.
+    //
+    // The panel is the wrong surface for it, and the reason is not taste. The
+    // panel is 260pt wide and reports what coffee-bar is doing NOW; this
+    // sentence is neither live state nor a control, and it rendered as roughly
+    // 80 words of documentation inside that column. It belongs beside the other
+    // power settings, where somebody configuring behaviour is already looking,
+    // and the long explanation belongs on `site/docs.html`.
     //
     // The property carries the command AND the statement that this app cannot
     // read whether the mode is armed. Both halves matter and they are one
     // property for that reason; see
-    // `theLidClosedAdvisoryCarriesBothTheCommandAndWhatTheAppCannotSee`.
+    // `theLidClosedSummaryCarriesBothTheCommandAndWhatTheAppCannotSee`.
     //
     // Same LIMIT as the checks above, stated rather than hidden: this proves
-    // the panel NAMES the property, not that it renders it. M1 design §5.4
-    // forbids asserting on rendered AppKit text.
+    // which file NAMES the property, not what either surface renders. M1
+    // design §5.4 forbids asserting on rendered AppKit text.
     let files = try appLayerSources()
     #expect(files.count == expectedSourceCount,
             "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
 
+    let window = try #require(files.first { $0.lastPathComponent == "PreferencesView.swift" },
+                              "the app layer no longer compiles a PreferencesView.swift")
     let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
                              "the app layer no longer compiles a PanelView.swift")
 
-    // CODE, never the raw file. A mutation caught this: deleting the whole
-    // `Text(ServingModel.lidClosedAdvisory)` render and its modifier chain left
-    // this check GREEN, because the doc comment sitting above that render also
-    // names the property. The guard was reading its own explanation and
-    // reporting the feature present. Stripping comments first is what makes it
-    // discriminate; `swiftCodeWithoutComments` keeps string literals, and the
-    // render is code, so the correct tree stays green.
-    let code = swiftCodeWithoutComments(try String(contentsOf: panel, encoding: .utf8))
+    // CODE, never the raw file, and this file learned that from a mutation:
+    // deleting the whole `Text(ServingModel.lidClosedAdvisory)` render and its
+    // modifier chain left the old check GREEN, because the doc comment sitting
+    // above that render also named the property. The guard was reading its own
+    // explanation and reporting the feature present.
+    //
+    // The negative half needs it even more than the positive one. `PanelView`
+    // still CARRIES a comment saying where this moved and why — deliberately,
+    // so the next reader does not put it back — and a raw-file check would read
+    // that note and report the prose still rendered.
+    let windowCode = swiftCodeWithoutComments(try String(contentsOf: window, encoding: .utf8))
+    let panelCode = swiftCodeWithoutComments(try String(contentsOf: panel, encoding: .utf8))
 
-    // `ServingModel.lidClosedAdvisory` rather than `model.lidClosedAdvisory`:
-    // the sentence depends on no instance state — only on `ProbeVerb` — so it
-    // is a static, exactly like `ServingModel.displayLabel`. Requiring the
-    // instance spelling would have forced a property that ignores its own
-    // instance, which reads as though the panel were reporting live state. It
-    // is not, and that is the whole point of this surface.
-    #expect(code.contains("ServingModel.lidClosedAdvisory"), """
-        PanelView.swift never reads ServingModel.lidClosedAdvisory in code, so \
-        the only route a user has to lid-closed mode — the command to run — \
+    // `ServingModel.lidClosedSummary` rather than `model.lidClosedSummary`: the
+    // sentence depends on no instance state — only on `ProbeVerb` — so it is a
+    // static, exactly like `ServingModel.displayLabel`. Requiring the instance
+    // spelling would have forced a property that ignores its own instance,
+    // which reads as though the window were reporting live state. It is not,
+    // and that is the whole point of this surface.
+    #expect(windowCode.contains("ServingModel.lidClosedSummary"), """
+        PreferencesView.swift never reads ServingModel.lidClosedSummary in code, \
+        so the only route a user has to lid-closed mode — the command to run — \
         reaches them nowhere. Render it, or delete the property and the checks \
         on its text. A comment naming the property does not satisfy this.
+        """)
+
+    // The negative half. Issue #56: the panel keeps NOTHING about lid-closed
+    // mode, so both the current property and the one it replaced are refused.
+    // Naming the OLD spelling too is not belt and braces — a revert that
+    // restores `lidClosedAdvisory` is the most likely way this comes back, and
+    // a guard that only knew the new name would pass over it.
+    for property in ["lidClosedSummary", "lidClosedAdvisory"] {
+        #expect(!panelCode.contains(property), """
+            PanelView.swift reads \(property) in code. Issue #56: the Serving \
+            panel keeps nothing about lid-closed mode — it is neither live \
+            state nor a control, and it rendered as a paragraph of \
+            documentation in a 260pt column. The short version belongs in \
+            PreferencesView.swift and the explanation on site/docs.html.
+            """)
+    }
+
+    // The literal, not only the symbol. A sentence pasted straight into the
+    // panel as a string carries no property name at all, and the two checks
+    // above would both pass while the paragraph was back on screen — the
+    // failure mode M1 design §5.4 makes invisible to every other check here.
+    // `swiftCodeWithoutComments` keeps string literals, which is what makes
+    // this readable at all.
+    #expect(!panelCode.contains("Lid-closed"), """
+        PanelView.swift carries the literal "Lid-closed" in code, so the prose \
+        is back in the panel as a string rather than as a property. Issue #56: \
+        that surface keeps nothing about lid-closed mode.
         """)
 }
 

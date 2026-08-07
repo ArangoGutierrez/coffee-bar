@@ -376,7 +376,18 @@ private let secondsPerUnit: [String: Double] = ["second": 1, "minute": 60, "hour
 /// than this guard did: `SECURITY.md` states the 30-minute default a third time
 /// with no symbol beside it, and `theDocumentedTTLBoundsAreTheShippedConstants`
 /// cannot see that one because its anchor cannot cross a line break.
-private let durationSweepExclusions: Set<String> = ["SECURITY.md"]
+///
+/// `site/docs.html` joined it on 2026-08-07 for the identical reason, and issue
+/// #56 is why the page states a duration at all: the lid-closed explanation the
+/// menu-bar panel used to carry now lives there, and it tells the reader how
+/// long `sudo coffee-bar-probe arm` holds. That number is
+/// `ProbeVerb.defaultTTLSeconds`, which this target cannot reach.
+/// `everyDurationOnADocumentedSitePageIsARealProductConstant` sweeps the whole
+/// page from `CoffeeBarPowerTests`, and
+/// `theSiteExplainsLidClosedModeAndStatesTheShippedHold` in
+/// `Tests/CoffeeBarUITests/LidClosedPanel_test.swift` pairs that number with the
+/// sentence it belongs to. Two guards where this file had one.
+private let durationSweepExclusions: Set<String> = ["SECURITY.md", "site/docs.html"]
 
 /// The exclusion list cannot grow silently, and cannot rot into a dead name.
 ///
@@ -387,10 +398,11 @@ private let durationSweepExclusions: Set<String> = ["SECURITY.md"]
 /// a renamed or mistyped surface leaves an exclusion that silently excludes
 /// nothing, which reads like coverage and is not.
 @Test func theDurationSweepExcludesOnlySurfacesAnotherGuardCovers() {
-    #expect(durationSweepExclusions == ["SECURITY.md"], """
+    #expect(durationSweepExclusions == ["SECURITY.md", "site/docs.html"], """
         the duration sweep now skips \(durationSweepExclusions.sorted()). Each \
         exclusion needs a guard elsewhere that covers it — see \
-        everyDurationInAPolicyDocumentIsARealProductConstant in \
+        everyDurationInAPolicyDocumentIsARealProductConstant and \
+        everyDurationOnADocumentedSitePageIsARealProductConstant in \
         CoffeeBarPowerTests — and this check exists so adding one cannot be quiet.
         """)
 

@@ -782,6 +782,120 @@ private func durationsStated(in text: String) throws -> [(digits: String, unit: 
         """)
 }
 
+/// The site pages `DocsClaims_test.swift` hands over, and why each is here.
+///
+/// `site/docs.html` states how long `sudo coffee-bar-probe arm` holds — issue
+/// #56 moved the lid-closed explanation out of the menu-bar panel and onto that
+/// page, and the panel's paragraph had pointed at documentation that did not
+/// exist. The number is `ProbeVerb.defaultTTLSeconds`, and `CoffeeBarCoreTests`
+/// depends on `CoffeeBarCore` alone, so `everyDurationStatedIsARealProductConstant`
+/// cannot judge it. It is listed in that file's `durationSweepExclusions`, and
+/// `theDurationSweepExcludesOnlySurfacesAnotherGuardCovers` names this check as
+/// the guard that fills the hole.
+///
+/// A LIST and not `publishedSitePages()`, deliberately. Discovery would be the
+/// better default — it is what that helper exists for — but this list mirrors an
+/// exclusion list in another target that a glob could silently outgrow: a page
+/// discovered HERE and not excluded THERE is swept twice, which is harmless, while
+/// a page excluded there and never added here is swept by nobody. The pairing
+/// check below refuses the second case.
+private let handedOverSitePages = ["site/docs.html"]
+
+/// The site page excluded from the core sweep is the one this file sweeps.
+///
+/// Named bug this catches: somebody adds a third surface to
+/// `durationSweepExclusions` to quiet a red sweep, and the coverage disappears
+/// with nothing to say so. The two lists live in different test targets and
+/// cannot share a constant, so this reads the other file as text — ugly, and
+/// better than a coverage hole that looks like thorough work.
+@Test func everySitePageHandedOverByTheCoreSweepIsSweptHere() throws {
+    let other = policyRoot()
+        .appending(path: "Tests/CoffeeBarCoreTests/DocsClaims_test.swift")
+    guard let source = try? String(contentsOf: other, encoding: .utf8) else {
+        Issue.record("cannot read \(other.path); this cross-check cannot run")
+        return
+    }
+
+    let declaration = "private let durationSweepExclusions: Set<String> = "
+    guard let start = source.range(of: declaration),
+          let end = source[start.upperBound...].firstIndex(of: "]") else {
+        Issue.record("""
+            DocsClaims_test.swift no longer declares durationSweepExclusions on \
+            one line, so this cross-check read nothing. Re-anchor it.
+            """)
+        return
+    }
+    let excluded = source[start.upperBound...end]
+
+    for page in handedOverSitePages {
+        #expect(excluded.contains("\"\(page)\""), """
+            \(page) is swept here as a hand-over from DocsClaims_test.swift, but \
+            that file no longer excludes it. Either the hand-over ended — drop it \
+            from handedOverSitePages — or the exclusion was lost.
+            """)
+    }
+
+    // The other direction, which is the one that loses coverage. Any `site/`
+    // page excluded there and absent here is a page no duration sweep reads.
+    for match in try matchedGroups("\"(site/[^\"]+)\"", in: String(excluded)) {
+        #expect(handedOverSitePages.contains(match), """
+            DocsClaims_test.swift excludes \(match) from its duration sweep and \
+            this file does not sweep it, so no guard reads the durations on that \
+            page at all.
+            """)
+    }
+}
+
+/// Every duration on a handed-over site page is a constant the product holds.
+///
+/// **Named bug this catches.** `site/docs.html` tells the reader that arming
+/// lid-closed mode holds for 30 minutes. Raise `ProbeVerb.defaultTTLSeconds` to
+/// 45 and the page goes on promising 30 to a stranger deciding whether to shut
+/// the lid on a laptop and walk away. Nothing else reads that page's durations:
+/// the core sweep hands it over precisely because it cannot reach the constant.
+///
+/// STRUCTURAL / EQUALITY, with a PRESENCE anti-vacuity half.
+///
+/// **What this CANNOT do.** It proves a stated duration EQUALS some product
+/// constant, not that the page attached the right constant to the right
+/// sentence. `theSiteExplainsLidClosedModeAndStatesTheShippedHold` in
+/// `Tests/CoffeeBarUITests/LidClosedPanel_test.swift` is what pairs the number
+/// with the lid-closed section it belongs to, so the two are complementary.
+@Test func everyDurationOnADocumentedSitePageIsARealProductConstant() throws {
+    let known = Set(policyDurationConstants.values)
+    var swept = 0
+
+    for name in handedOverSitePages {
+        let prose = try readerFacingProse(name)
+        for stated in try durationsStated(in: prose) {
+            let digits = stated.digits.replacingOccurrences(of: ",", with: "")
+                                      .replacingOccurrences(of: "_", with: "")
+            guard let value = Int(digits),
+                  let scale = policySecondsPerUnit[stated.unit.lowercased()] else { continue }
+            swept += 1
+
+            #expect(known.contains(value * scale), """
+                \(name) states "\(stated.digits) \(stated.unit)" = \
+                \(value * scale) s, which is no product constant. Known: \
+                \(policyDurationConstants.sorted { $0.value < $1.value }
+                    .map { "\($0.key)=\($0.value)" })
+                """)
+        }
+    }
+
+    // ANTI-VACUITY, and it is not a formality here. `readerFacingProse` strips
+    // `<code>` blocks before this reads a word, so a duration wrapped in one is
+    // invisible to this guard AND to the core sweep it took over from — the
+    // page would carry a number no check anywhere reads, which is the exact
+    // shape of the hole `durationSweepExclusions` exists to close.
+    #expect(swept >= 1, """
+        the sweep found no duration in \(handedOverSitePages.joined(separator: ", ")). \
+        Those pages are excluded from the core duration sweep on the grounds \
+        that this one reads them, so a page with nothing readable here is a page \
+        nothing checks. Is the number inside a <code> block?
+        """)
+}
+
 // MARK: - Guard: a citation points at text, and text does not renumber
 
 /// Every `.swift` file under `Sources/` and `Tests/`.
