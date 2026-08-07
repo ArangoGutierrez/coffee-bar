@@ -86,6 +86,45 @@ public struct PreferencesView: View {
                         .monospacedDigit()
                 }
 
+                // Lid-closed mode: the third power question, and the only one
+                // with no control anywhere in this window.
+                //
+                // It arrived here from the panel, where it rendered as roughly
+                // 80 words in a 260pt column — a man page in a popover, issue
+                // #56. This is the SHORT version; `site/docs.html` carries the
+                // explanation, and the sentence names the commands rather than
+                // linking, because a user who has to type `sudo` is already in
+                // a terminal.
+                //
+                // NO CONTROL, and that is not an omission to be fixed later.
+                // Arming needs root and coffee-bar never elevates its own
+                // privilege (SECURITY.md, design §6.3), so a switch here would
+                // have to grow an authorization prompt — the one thing the
+                // security posture rules out. Same posture as the Agent tools
+                // section below, which prints a snippet and refuses to write
+                // the file.
+                //
+                // LAST IN THE SECTION, under the two real controls, because a
+                // paragraph above a slider reads as instructions for the
+                // slider.
+                //
+                // Rendered verbatim from the model with no text built here, for
+                // the reason every other line in this file gives: M1 design
+                // §5.4 forbids asserting on rendered AppKit text, so a sentence
+                // composed in this view is a sentence no check reads. The
+                // wording lives on `ServingModel.lidClosedSummary` and is
+                // asserted there.
+                //
+                // Unconditional, unlike `hookAdvisory` below. There is no state
+                // to condition it on — the journal is root-owned and this
+                // process measurably cannot read it, which is half of what the
+                // sentence says.
+                Text(ServingModel.lidClosedSummary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+
                 // Its own section and not a third row under Power, because it
                 // is a different question: not how long coffee-bar holds the
                 // machine, but what it does to everything that is not the

@@ -73,7 +73,9 @@
 <!-- page content starts here -->
 <!--
   PAGE NOTES — kept OUT of the shared comment above, which must stay byte
-  identical across all four pages. Three rules are specific to this page.
+  identical across all four pages. The rules below are specific to this page.
+  They are LETTERED and not counted: this line said "three rules" while four
+  were listed under it, which is what a number in prose does.
 
   A. THE BATTERY SENTENCE. Write "at or below 15%", with the % SIGN.
      `PowerBroker` suppresses at `percent <= floor`, so the exclusive wording
@@ -113,6 +115,23 @@
      so the answer survives a plain tag-strip byte for byte. Wrapping such a line
      or putting a word of it in <code> breaks that, and a JSON-LD answer that
      contradicts the visible text is worse than no JSON-LD at all.
+
+  C. A DURATION ON THIS PAGE IS SWEPT FROM A DIFFERENT TEST TARGET, and it must
+     stay in PLAIN PROSE. `everyDurationStatedIsARealProductConstant` in
+     `Tests/CoffeeBarCoreTests/DocsClaims_test.swift` cannot judge the numbers
+     here: `ProbeVerb.defaultTTLSeconds` lives in `CoffeeBarPower` and that
+     target depends on `CoffeeBarCore` alone. This page is therefore listed in
+     that file's `durationSweepExclusions`, and
+     `everyDurationOnADocumentedSitePageIsARealProductConstant` in
+     `Tests/CoffeeBarPowerTests/PolicyDocumentClaims_test.swift` reads it
+     instead. `theSiteExplainsLidClosedModeAndStatesTheShippedHold` pairs the
+     30-minute figure with the sentence it belongs to.
+
+     Both of those read the page with <code> STRIPPED, exactly as note A2
+     describes. So a duration wrapped in <code> is read by NOBODY, on a page
+     the core sweep has already been told to skip — the one arrangement that
+     leaves a number on this page with no check behind it at all. Write a
+     duration as plain words.
 -->
 
 <h1>How coffee-bar works</h1>
@@ -203,6 +222,64 @@ your Mac awake:</p>
 <p>These are the same mechanism <code>caffeinate</code> uses. The app needs no root, no password and no kernel extension, and it writes nothing to your power
 settings. Releasing an assertion restores your normal behaviour exactly.</p>
 
+<h2 class="eyebrow">Lid-closed mode</h2>
+
+<p>Everything above keeps the Mac awake with the lid open. Closing the lid still
+puts it to sleep, because an assertion does not survive that — the lid is a
+different mechanism, and overriding it means changing a system setting rather
+than asking for a hold.</p>
+
+<p>That is what lid-closed mode does, and it is deliberately not part of the
+menu-bar app. Changing that setting needs root, and coffee-bar never elevates its
+own privilege, so there is no control anywhere in the app that arms it. You run a
+command yourself, which is the same posture the app takes with hooks: it prints
+what to paste and edits none of your files.</p>
+
+<p>The command is <code>coffee-bar-probe</code>, and it is not inside the disk
+image. It builds with the rest of the project — see
+<a href="https://github.com/ArangoGutierrez/coffee-bar/blob/main/docs/BUILDING.md">Building
+from source</a>.</p>
+
+<h3>Arming it</h3>
+
+<p><code>sudo coffee-bar-probe arm</code> records what it is about to change,
+installs a launchd watchdog, sets the system to stay awake with the lid shut,
+and forces the display off. The order matters: nothing is changed until the
+record is on disk and the watchdog that undoes it is loaded, so a process killed
+half way through leaves no held setting behind it.</p>
+
+<p>An armed hold lasts 30 minutes and then the watchdog puts your setting back.
+<code>--ttl</code> takes a number of seconds and buys more, up to a cap of 8
+hours. The default is short on purpose: nothing here watches your work, so it
+cannot end the hold early when the agent finishes, and the time you ask for is
+what a machine you have walked away from will spend.</p>
+
+<p>The display is forced off rather than left to sleep on its own. A closed lid
+over a lit panel is heat with nowhere to go, and it burns the battery this whole
+feature exists to save.</p>
+
+<h3>Why coffee-bar cannot tell you whether it is armed</h3>
+
+<p>coffee-bar cannot show you whether lid-closed mode is armed, because the journal that records it belongs to root and this app runs as you.</p>
+
+<p>That is measured rather than assumed. The journal is a root-owned file inside
+a root-owned directory the app has no execute permission on, so it cannot read
+the file, read its permissions, or learn whether it exists at all. Loosening
+those permissions to give the panel something to display was considered and
+rejected: they are the security property that makes a root-owned file safe to
+hand to a root process, and they outrank a nicer window.</p>
+
+<p>So the app states the limit instead of inventing a reading, and the Preferences
+window carries the short version of this page beside the other power settings.
+The answer itself comes from <code>sudo coffee-bar-probe report</code>, which
+prints what is armed, since when, and until when.</p>
+
+<h3>Ending it early</h3>
+
+<p><code>sudo coffee-bar-probe revert</code> restores the sleep setting you had
+and removes the watchdog. You do not need it for an ordinary hold, which ends on
+its own.</p>
+
 <h2 class="eyebrow">Waiting on you</h2>
 
 <p>Waiting on you is the panel heading for the sessions that are blocked on a human. Under Auto these sessions do not hold the Mac awake, and that release is the entire product.</p>
@@ -290,6 +367,14 @@ two answers never merge into one.</p>
       "acceptedAnswer": {
         "@type": "Answer",
         "text": "The Battery floor control ships at 15%, and that is a default rather than a fixed limit. The panel lets you move it, and your choice is remembered across launches."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Can coffee-bar tell me whether lid-closed mode is armed?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "coffee-bar cannot show you whether lid-closed mode is armed, because the journal that records it belongs to root and this app runs as you."
       }
     },
     {

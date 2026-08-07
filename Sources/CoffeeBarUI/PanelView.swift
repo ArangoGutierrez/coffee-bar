@@ -253,30 +253,21 @@ public struct PanelView: View {
 
             Divider()
 
-            // Lid-closed mode, which this panel deliberately cannot switch on.
+            // NOTHING ABOUT LID-CLOSED MODE LIVES HERE, and this note is the
+            // whole of what replaced it. Issue #56: this panel rendered roughly
+            // 80 words explaining the mode, unconditionally, in a 260pt column.
             //
-            // It needs root, and coffee-bar never elevates its own privilege,
-            // so the honest surface is the command rather than a control. The
-            // sentence also says what the app CANNOT see: the journal is
-            // root-owned and unreadable here, measured, so a panel that stayed
-            // silent would read as "lid-closed mode is off" — a claim with no
-            // evidence behind it.
+            // It is neither live state nor a control, so it belongs to neither
+            // half of the split #50 established — this surface says what
+            // coffee-bar is doing NOW, and Preferences holds what the user
+            // configures. The short version moved to Preferences → Power beside
+            // the other power settings, and the explanation is on
+            // `site/docs.html`, which had none until that issue.
             //
-            // Rendered verbatim from the model, with no text built here, for
-            // the reason every other line in this file gives: M1 design §5.4
-            // forbids asserting on rendered AppKit text, so a sentence composed
-            // in this view is a sentence no check reads. The wording lives on
-            // `ServingModel.lidClosedAdvisory` and is asserted there.
-            //
-            // Unconditional, unlike the advisories above. There is no state to
-            // condition it on — that is the point of it.
-            Text(ServingModel.lidClosedAdvisory)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-
-            Divider()
+            // `theLidClosedSummaryIsInThePreferencesWindowAndNotInThePanel`
+            // holds both ends of that move and reads this file with its
+            // comments stripped, so this paragraph cannot satisfy it. Putting
+            // the render back turns it red.
 
             Label(batteryLine, systemImage: "bolt")
                 .font(.caption)
