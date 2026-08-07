@@ -432,9 +432,11 @@ private let forbiddenWriteCalls = [
     // `HookSnippet.swift` joined it next, and it is the file design §6 exists
     // for: it PRINTS what a writer would otherwise have written. The line that
     // matches this scan is the one recording which file its MATCHER shape was
-    // measured from — not its command form, whose own comment names no path —
-    // and it is admitted rather than reworded, because a comment edited to slip
-    // past this anchor is how the next file that really does write one gets in.
+    // measured from — not its command form, whose own comment cites
+    // `docs/QUICKSTART.md` but no SETTINGS path, which is what this scan looks
+    // for — and it is admitted rather than reworded, because a comment edited to
+    // slip past this anchor is how the next file that really does write one
+    // gets in.
     #expect(knowsThePath.sorted() == ["HookHealth.swift",
                                       "HookHealthReader.swift",
                                       "HookSnippet.swift",

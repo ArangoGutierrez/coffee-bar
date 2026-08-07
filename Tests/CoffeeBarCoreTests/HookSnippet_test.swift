@@ -216,23 +216,40 @@ func everySnippetCarriesAMarkerTheCheckerRecognises(_ tool: AgentTool) throws {
     }
 }
 
+/// How many times `flag` appears in `command`.
+///
+/// A COUNT and not a `contains`, because curl resolves a repeated option rather
+/// than rejecting it, and the resolution is not the one a reader assumes: given
+/// two `--unix-socket` arguments, curl 8.7.1 connects to the LAST. A guard that
+/// resolves the first occurrence therefore inspects an argument the transport
+/// never uses.
+private func occurrences(of flag: String, in command: String) -> Int {
+    command.components(separatedBy: flag).count - 1
+}
+
 @Test(arguments: AgentTool.allCases)
-func everyCommandIsTheCurlFormAndNamesNoUninstalledBinary(_ tool: AgentTool) throws {
-    // **`HookHealth` cannot be relied on for this one, and that is the point.**
+func everyCommandWouldActuallyDeliverAnEvent(_ tool: AgentTool) throws {
+    // **The job here is to prove the command would DELIVER AN EVENT** — not that
+    // it starts with the right word. An earlier version of this test pinned the
+    // HEAD of the command, and three separate edits defeated it while staying
+    // green: each left `curl` at the front and broke the request behind it.
+    //
+    // **`HookHealth` cannot be relied on for any of this, and that is the point.**
     // `HookHealth.commandMarkers` accepts `shimCommandName` as well as the socket
     // path, so a snippet whose command is `coffeebar-hook …` satisfies the
     // checker completely — and nothing installs that binary on a `PATH`.
     // `everySnippetCarriesAMarkerTheCheckerRecognises` above passes over exactly
-    // that snippet. So does the round trip. The command FORM has no reader-side
-    // guard anywhere, which leaves this the only place it can be pinned.
+    // that snippet, and so does the `.wired` round trip. There is no reader-side
+    // guard on the command anywhere, which leaves this the only place it exists.
     //
-    // Named bug this catches: somebody later swaps the shim back in, or renames
-    // a flag. Every other check stays green, the panel reports `.wired`, and
-    // every user who clicks Copy pastes a command that cannot run.
+    // Named bug this catches: a later edit that looks correct to every other
+    // check in the package. The panel reports `.wired`, the user pastes what the
+    // button gave them, the command runs and exits 0, and no event is ever
+    // stored.
     //
-    // Pinned in three pieces rather than as `contains("curl")`, because the
-    // requirement is the command's FORM: a snippet that merely mentions `curl`
-    // somewhere while transporting over the wrong flag posts nothing at all.
+    // The URL is deliberately NOT pinned here.
+    // `eachToolsCommandDeclaresThatToolsOwnOrigin` owns it, per tool, and a
+    // second copy would drift from the first.
     let found = try commands(in: tool)
     #expect(found.count == 5, "\(tool) snippet holds \(found.count) commands, expected 5")
 
@@ -247,15 +264,46 @@ func everyCommandIsTheCurlFormAndNamesNoUninstalledBinary(_ tool: AgentTool) thr
                 would report .wired over a command the user cannot run.
                 """)
 
+        // Counted WITHOUT the trailing space so `--unix-socket=/other.sock`, a
+        // spelling curl accepts, is caught too. A spaced-only count would not
+        // see it at all.
+        #expect(occurrences(of: "--unix-socket", in: command) == 1,
+                """
+                \(tool) command carries \(occurrences(of: "--unix-socket", in: command)) \
+                --unix-socket arguments. curl connects to the LAST, so the guard below \
+                would resolve a path the transport never uses: \(command)
+                """)
+
         // `range(of:)` and not `contains`: a renamed flag has to fail to RESOLVE
         // here rather than be satisfied by the socket path appearing elsewhere
-        // in the line.
+        // in the line. Sound only because exactly one occurrence is asserted
+        // above — first and last are then the same argument.
         let flag = "--unix-socket "
         let range = try #require(command.range(of: flag),
                                  "\(tool) command carries no \(flag)argument: \(command)")
         #expect(command[range.upperBound...]
                     .hasPrefix("\"$HOME/Library/Application Support/coffee-bar/ingest.sock\""),
                 "\(tool) passes something other than the quoted socket path to \(flag)")
+
+        // The body flag. Without it curl still runs, still resolves, still
+        // connects to the real socket — and sends NOTHING.
+        // `CoffeeBarShim/main.swift` records where that ends: "an empty POST
+        // would only earn a 400 for an event that never was." One flag dropped
+        // from this literal is a command that executes cleanly and delivers
+        // nothing, for ever.
+        //
+        // Counted, for the reason the socket flag is counted: curl CONCATENATES
+        // repeated data arguments rather than taking the last, so a second one
+        // appends bytes to the payload and what arrives is not what the hook
+        // sent.
+        #expect(occurrences(of: "--data-binary", in: command) == 1,
+                """
+                \(tool) command carries \(occurrences(of: "--data-binary", in: command)) \
+                --data-binary arguments, so it posts something other than the hook's \
+                own payload: \(command)
+                """)
+        #expect(command.contains("--data-binary @-"),
+                "\(tool) command never reads the payload from stdin, so it posts an empty body: \(command)")
     }
 }
 
