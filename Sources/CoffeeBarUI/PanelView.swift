@@ -336,6 +336,12 @@ public struct PanelView: View {
             // string that compiles on every OS and works on some. This is the
             // typed equivalent, and it needs macOS 14 — which is already this
             // package's deployment target.
+            //
+            // `SettingsLink` OPENS the window and does not ACTIVATE the app,
+            // and for an `LSUIElement` process those are different things —
+            // measured, see `PreferencesView.swift`, which is where the fix
+            // lives. NOTHING may be hung off this link to do it: a
+            // `simultaneousGesture` attached here was measured never to fire.
             SettingsLink {
                 Text("Preferences…")
             }

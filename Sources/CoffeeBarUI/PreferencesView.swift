@@ -194,5 +194,49 @@ public struct PreferencesView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(width: 420, height: 360)
+        // TAKE THE FOREGROUND. Opening a window and becoming the active app are
+        // different things, and for an `LSUIElement` process the second does not
+        // follow from the first. Measured at 0.1.1-31-g7949c51: the window
+        // appeared and Finder stayed frontmost — `before=Finder | after=Finder |
+        // windows=[coffee-bar Settings]`. The user then gets a settings window
+        // drawn over the app they were using, with a grey title bar, taking none
+        // of their keystrokes.
+        //
+        // THE POLICY CHANGE IS WHAT MAKES IT WORK, and it is not decoration.
+        // Three routes were measured on macOS 26.5 before this one, and the
+        // first two do nothing whatever:
+        //
+        //   1. `simultaneousGesture` on the panel's `SettingsLink` — NEVER
+        //      FIRES. Instrumented with a log line the run never printed, while
+        //      a control line from the same build printed every time.
+        //   2. `NSApp.activate(ignoringOtherApps: true)` from here under
+        //      `.accessory` — synchronously, and again deferred to the next
+        //      turn of the main loop with `makeKeyAndOrderFront` on the window
+        //      itself. The window was in `NSApp.windows` the whole time and
+        //      `keyWindow` stayed `nil`.
+        //   3. This. `after=coffee-bar`, five landed runs out of five.
+        //
+        // macOS 14 made activation cooperative: an `.accessory` app asking for
+        // the foreground is declined, which is also why
+        // `activate(ignoringOtherApps:)` alone is no longer enough anywhere.
+        // Becoming `.regular` for the lifetime of this window is the supported
+        // way to ask.
+        //
+        // WHAT IT COSTS, stated rather than buried: a Dock icon appears while
+        // the Preferences window is open. `onDisappear` puts the app back to
+        // `.accessory` when the window closes — measured firing on close — so
+        // the icon lives exactly as long as the window does and no longer. A
+        // product that is menu-bar-only the rest of the time briefly is not,
+        // and that is the price of a settings window the user can type into.
+        //
+        // `scripts/preferences-activation-acceptance.sh` is what measures this.
+        // No test in the suite can: M1 design §5.4 rules out asserting on
+        // rendered AppKit state, and the fault lives in the window server's
+        // notion of which application is active.
+        .onAppear {
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        .onDisappear { NSApp.setActivationPolicy(.accessory) }
     }
 }
