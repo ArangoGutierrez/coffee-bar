@@ -213,6 +213,11 @@ private let versionSurfaces = [(file: "PanelView.swift", type: "PanelView"),
     // Named bug this catches: a control left behind in the panel during the
     // move, so the user has two of them and they disagree — or a refactor that
     // silently moves one back.
+    //
+    // WHICH SURFACE, not whether the user can reach it. `prefs.contains` below
+    // is satisfied by `if false { … }` around every one of these three, which
+    // was measured. `everyMovedControlIsRenderedAsUnconditionallyAsTheHeadingsAboveIt`
+    // holds that half.
     let panel = try surfaceCode(named: "PanelView.swift")
     let prefs = try surfaceCode(named: "PreferencesView.swift")
 
@@ -240,6 +245,147 @@ private let versionSurfaces = [(file: "PanelView.swift", type: "PanelView"),
     #expect(prefs.contains("BatteryFloor.permitted"))
     #expect(prefs.contains("BatteryFloor.step"))
     #expect(!prefs.contains("BatteryFloor.bounded"))
+
+    // REACHABILITY is held by
+    // `everyMovedControlIsRenderedAsUnconditionallyAsTheHeadingsAboveIt` below.
+    // The three assertions here are `contains`, and a `contains` cannot tell a
+    // live control from a dead one.
+}
+
+/// The three moved controls are RENDERED, not merely SPELLED.
+///
+/// Every findability guard on this branch was a file-wide `contains` with no
+/// reachability half, and a measured mutation defeated all four at once:
+/// wrapping the Display `Picker`, the Battery floor `HStack` and the Focus
+/// `Toggle` each in `if false { … }` left `swift test` at rc=0 with 856 tests
+/// passing. The shipped window drew the two headings, the lid-closed sentence
+/// and the Agent tools rows, and NO CONTROLS AT ALL — the three settings this
+/// whole branch exists to relocate.
+///
+/// The four that were satisfied by that build:
+///
+///   - `thePreferencesWindowOffersTheDisplayHoldControlAndThePanelReportsItsResult`
+///   - `thePreferencesWindowOffersTheQuietOthersControl`
+///   - `theFloorSliderIsBuiltOverThePolicyAndAddsNoSecondBoundingSite`
+///   - `eachMovedControlLivesInExactlyOneSurface`
+///
+/// THE REMEDY WAS ALREADY IN THE PACKAGE, one file over and a few lines away
+/// from the controls it failed to cover.
+/// `theLidClosedSummaryIsInThePreferencesWindowAndNotInThePanel`
+/// (`AppLayerBoundary_test.swift`) holds the SENTENCE beside these controls with
+/// exactly this mechanism, and its comment names `if false { … }` as the defeat
+/// it closes. The prose was better defended than the settings.
+///
+/// BRACE DEPTH against an unconditional neighbour, which is that mechanism.
+/// `Text("Power")` is the anchor because it is a section heading: a build where
+/// THAT is conditional is not a build where this check is the problem. Wrapping
+/// a sibling in an `if`, a `switch` or a closure adds a brace and moves it.
+///
+/// COMMENT-STRIPPED through `surfaceCode`, so the prose in `PreferencesView.swift`
+/// that explains each control at length cannot satisfy any of this.
+///
+/// LIMITS, stated rather than hidden, and they are the sibling guard's limits
+/// because it is the sibling guard's mechanism:
+///
+///   1. `swiftCodeWithoutComments` KEEPS string literals, so a `{` inside one
+///      ahead of a needle would miscount. There is none today — the literals in
+///      this file are labels like "Power" and "Battery floor".
+///   2. It cannot prove the `ScrollView` and the `VStack` are themselves
+///      reachable — a `body` that returns `EmptyView()` around the whole page
+///      is invisible to a brace counter. Everything INSIDE them is held: the
+///      anchor's depth is pinned absolutely rather than by inequality, so no
+///      container may be added around a section without saying so, and the two
+///      headings are compared to each other so neither section can be wrapped
+///      as a unit.
+///   3. It reads structure, not AppKit. M1 design §5.4 rules out asserting on a
+///      rendered window, so no check in this package can watch a picker appear.
+@Test func everyMovedControlIsRenderedAsUnconditionallyAsTheHeadingsAboveIt() throws {
+    // Named bug this catches: a control disabled rather than deleted. `if false`
+    // is the honest spelling; `if FeatureFlags.showDisplayControl` is the one
+    // that arrives in a real change and reads as deliberate.
+    let prefs = try surfaceCode(named: "PreferencesView.swift")
+
+    let anchorDepth = try #require(braceDepth(atFirst: "Text(\"Power\")", in: prefs), """
+        PreferencesView.swift no longer contains Text("Power"), so this guard \
+        has no unconditional neighbour to compare against and measured nothing.
+        """)
+
+    // EXACTLY FOUR, and not `>= 3` like the sibling guard this borrows from.
+    // The four are named: the `struct`, `body`, the `ScrollView` and the
+    // `VStack`. Nothing else may enclose a section heading.
+    //
+    // The inequality is what leaves the hole, and the hole is reachable rather
+    // than theoretical. Every other assertion here is RELATIVE, so wrapping the
+    // Power section AND the Focus section in two separate `if false { … }`
+    // blocks shifts every depth by one uniformly: the headings still agree with
+    // each other, each control still agrees with its heading, `>= 3` still
+    // holds, and the window ships with no controls at all. That is the same
+    // defeat this guard exists to close, applied twice.
+    //
+    // THIS NUMBER IS A DESIGNED UPDATE POINT. A legitimate container — a `Form`,
+    // a `GroupBox`, a `Section` — around the page turns this red, and the fix is
+    // to change the number here and say which brace was added. Restoring the
+    // inequality to silence it puts the hole back.
+    #expect(anchorDepth == 4, """
+        the section heading in PreferencesView.swift sits at brace depth \
+        \(anchorDepth), not the four that the struct, body, ScrollView and \
+        VStack account for. Either the page grew a container — say so here and \
+        raise the number — or the Power section is wrapped in something, which \
+        every relative check below would pass over because it moves the \
+        controls and their heading together.
+        """)
+
+    // BOTH HEADINGS, compared to each other, and that is the half that stops a
+    // whole section disappearing as a unit. Wrapping `Text("Power")` and the two
+    // Power controls together moves all three equally, and every per-control
+    // comparison below would still hold — the Focus heading is what stays put
+    // and reports it.
+    let focusDepth = try #require(braceDepth(atFirst: "Text(\"Focus\")", in: prefs), """
+        PreferencesView.swift no longer contains Text("Focus"), so the Focus \
+        section has no heading and this guard lost the neighbour that pins the \
+        Power section against being wrapped as a whole.
+        """)
+    #expect(focusDepth == anchorDepth, """
+        PreferencesView.swift puts Text("Focus") at brace depth \(focusDepth) \
+        while Text("Power") sits at \(anchorDepth). One section heading is \
+        inside something the other is not, so a whole section can be disabled \
+        with every per-control check below still green.
+        """)
+
+    // The nesting each control is ALLOWED, and naming what the braces are is
+    // what makes this readable. Nought means a direct child of the `VStack`,
+    // beside the headings. The slider's one is the `HStack` that carries its
+    // label and its readout — a row, not a condition.
+    //
+    // THIS TABLE IS A DESIGNED UPDATE POINT, the same shape as
+    // `versionSurfaces` above. Wrapping the floor row in a `GroupBox` for
+    // legitimate reasons turns this red, and the fix is to say so here. Widening
+    // the assertion to `<=` is what must NOT happen: `if false { Slider(…) }` in
+    // the VStack sits at exactly the depth the HStack row does, so an inequality
+    // passes over the mutation this guard exists to catch.
+    let allowedNesting = [
+        (needle: "$model.holdDisplayAwake", braces: 0, control: "the Display picker", enclosing: "nothing"),
+        (needle: "Slider(", braces: 1, control: "the Battery floor slider", enclosing: "its HStack row"),
+        (needle: "$model.quietEverythingElse", braces: 0, control: "the Quiet everything else toggle", enclosing: "nothing"),
+    ]
+
+    for control in allowedNesting {
+        let depth = try #require(braceDepth(atFirst: control.needle, in: prefs), """
+            PreferencesView.swift names \(control.needle) nowhere in code, so \
+            \(control.control) is gone from the window this branch moved it to.
+            """)
+
+        #expect(depth == anchorDepth + control.braces, """
+            PreferencesView.swift renders \(control.control) at brace depth \
+            \(depth), and the only brace between it and the unconditional \
+            Text("Power") at \(anchorDepth) should be \(control.enclosing). It \
+            is inside something the heading is not — an `if`, a `switch`, a \
+            closure — so the control is present in the file and the user may \
+            never reach it. `if false { … }` around this control keeps every \
+            `contains` check in this package green while the window ships with \
+            nothing to click.
+            """)
+    }
 }
 
 @Test func thePreferencesWindowNeverWritesAnAgentToolsSettingsFile() throws {

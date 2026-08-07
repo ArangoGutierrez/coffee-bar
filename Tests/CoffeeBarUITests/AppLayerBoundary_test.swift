@@ -949,7 +949,10 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     //
     // LIMIT, stated rather than hidden: this proves the window NAMES the
     // binding, not that it draws a usable control. Design §5.4 rules out
-    // asserting on rendered AppKit text.
+    // asserting on rendered AppKit text. Wrapping the toggle in `if false { … }`
+    // was measured leaving this check green over a window with no switch in it;
+    // `everyMovedControlIsRenderedAsUnconditionallyAsTheHeadingsAboveIt`
+    // (`PreferencesView_test.swift`) holds the reachability half.
     //
     // COMMENT-STRIPPED, unlike the three panel tripwires above it. Those state
     // that a mention in a comment satisfies them; this one refuses that,
@@ -2102,6 +2105,13 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // control. M1 design §5.4 forbids asserting on rendered AppKit text, so no
     // check in this package can watch the picker appear. It is a tripwire
     // against deleting the control, not proof the control is right.
+    //
+    // AND IT IS SATISFIED BY A DEAD RENDER, which is not a limit that can be
+    // left at "stated": wrapping this picker in `if false { … }` was measured
+    // leaving this check green over a window with no Display control in it.
+    // `everyMovedControlIsRenderedAsUnconditionallyAsTheHeadingsAboveIt`
+    // (`PreferencesView_test.swift`) holds the reachability half by brace
+    // depth. This one holds the naming half, and neither is sufficient alone.
     let files = try appLayerSources()
     #expect(files.count == expectedSourceCount,
             "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
