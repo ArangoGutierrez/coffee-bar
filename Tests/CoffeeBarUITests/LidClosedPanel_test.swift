@@ -642,6 +642,117 @@ private func declaredExecutables() throws -> [String] {
         """)
 }
 
+// MARK: - Issue #75: the sequence the window prints has to be one root accepts
+
+@MainActor
+@Test func theArmedProbeIsNeverTheCopyInsideTheAppBundle() throws {
+    // Named bug this catches, and it is issue #75 exactly. The window printed
+    // `sudo /Applications/CoffeeBar.app/Contents/MacOS/coffee-bar-probe arm`,
+    // and that command CANNOT succeed on any Mac. Measured on 2026-08-07:
+    //
+    //   $ sudo /Applications/CoffeeBar.app/Contents/MacOS/coffee-bar-probe arm
+    //   coffee-bar-probe: could not arm: programPathInsecure(...)
+    //     /Applications                groupOrOtherWritable: true
+    //     /Applications/CoffeeBar.app  notOwnedByRoot: true
+    //
+    // `arm` reaches `LaunchDaemonInstaller.install()`, which puts its own
+    // program path through `PathSecurity.validate` before it writes anything —
+    // launchd execs that file as uid 0 with `RunAtLoad` and `KeepAlive`, so a
+    // program file another local account can rewrite is root persistence handed
+    // to whoever gets there first. Apple ships `/Applications` as
+    // `drwxrwxr-x root:admin`, so EVERY component below it fails that bar. The
+    // check is right; the printed command was wrong.
+    //
+    // This reads `lidClosedSummary`, which is the string `PreferencesView`
+    // renders, rather than any one command accessor — what the user is handed is
+    // the sentence, and a fix that corrects a helper the sentence stops calling
+    // is not a fix.
+    //
+    // It is the MIRROR of `theProbePathIsDerivedFromTheBundleAndNotAHardcodedLiteral`
+    // above, and the contrast is the point. Where the probe SHIPS depends on the
+    // install and must be derived; where it is ARMED cannot depend on the install
+    // at all, because only a root-owned location is armable. Four homes, one arm
+    // target.
+    let installs: [(label: String, path: String)] = [
+        ("the disk image", "/Applications/CoffeeBar.app/Contents/MacOS/coffee-bar-probe"),
+        ("a Homebrew prefix",
+         "/opt/homebrew/Cellar/coffee-bar/0.2.1/CoffeeBar.app/Contents/MacOS/coffee-bar-probe"),
+        ("a swift build tree", "/Users/somebody/src/coffee-bar/.build/debug/coffee-bar-probe"),
+        ("a copy on the Desktop",
+         "/Users/somebody/Desktop/CoffeeBar.app/Contents/MacOS/coffee-bar-probe"),
+    ]
+
+    // The verb comes from `ProbeVerb`, never typed, for the reason
+    // `theLidClosedCommandNamesAVerbTheBinaryAcceptsAndItIsArm` gives. The
+    // trailing lookahead keeps `arm` from matching the head of a longer word,
+    // and the leading `sudo ` keeps the prose "you arm it yourself" out of the
+    // match — that phrase carries the verb and no path.
+    let armPattern = try NSRegularExpression(
+        pattern: "sudo (/\\S+) \(ProbeVerb.arm.rawValue)(?![-A-Za-z0-9])")
+
+    var armTargets: Set<String> = []
+
+    for install in installs {
+        let summary = ServingModel.lidClosedSummary(probeAt: install.path)
+        let ns = summary as NSString
+        let matches = armPattern.matches(in: summary,
+                                         range: NSRange(location: 0, length: ns.length))
+
+        // ANTI-VACUITY, and it is the failure mode of every scraped guard: a
+        // reworded summary that matches nothing leaves the assertions below
+        // asserting about a value that was never found.
+        #expect(matches.count == 1, """
+            for \(install.label), the summary names \(matches.count) arm \
+            command(s); this guard reads exactly one. It reads:
+            \(summary)
+            """)
+        guard let match = matches.first else { continue }
+        let armed = ns.substring(with: match.range(at: 1))
+        armTargets.insert(armed)
+
+        #expect(!armed.contains("/Applications/"), """
+            for \(install.label), the window says to arm \(armed). Apple ships \
+            /Applications as drwxrwxr-x root:admin, so PathSecurity refuses \
+            every component under it and `arm` exits before it changes \
+            anything. Issue #75. It reads:
+            \(summary)
+            """)
+
+        #expect(armed != install.path, """
+            for \(install.label), the window says to arm the probe where it \
+            SHIPS, \(armed). No install location is root-owned — the disk image \
+            lands under a group-writable /Applications, Homebrew and a Desktop \
+            copy and a build tree all belong to the user — so the binary has to \
+            be copied somewhere root can trust before it can be armed. Issue \
+            #75. It reads:
+            \(summary)
+            """)
+
+        // The other half of the same property. The user cannot be told to arm a
+        // path with no account of how a binary got there, so the sentence has to
+        // name the copy they actually have.
+        #expect(summary.contains(install.path), """
+            for \(install.label), the window never names the probe this copy of \
+            coffee-bar ships with, \(install.path), so the path it does name \
+            appears from nowhere and there is nothing on that machine to run. \
+            It reads:
+            \(summary)
+            """)
+    }
+
+    // THE DISCRIMINATOR. Each assertion above is per-install and a reader
+    // scanning a red run sees four separate failures rather than the property.
+    // This states it once: the arm target is a property of the SYSTEM, not of
+    // where the user dragged the app.
+    #expect(armTargets.count == 1, """
+        \(installs.count) install locations produced \(armTargets.count) \
+        distinct arm target(s): \(armTargets.sorted()). Arming succeeds from \
+        exactly one kind of place — a path whose every component is root-owned \
+        and not group-writable — so a command that varies with the install is a \
+        command most users cannot run. Issue #75.
+        """)
+}
+
 @MainActor
 @Test func thePreferencesWindowAsksTheRunningBundleWhereTheProbeIs() throws {
     // The half the pure checks above cannot reach. `probePath(besideExecutable:)`
