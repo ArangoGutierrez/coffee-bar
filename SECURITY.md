@@ -183,6 +183,21 @@ policy:
   minutes when you name none, and `JournalRecord.maxTTLSeconds` caps it at 8
   hours however much you ask for. A root process still holding a setting after
   whatever armed it has gone is the failure the watchdog exists to prevent.
+- **That cap is counted in elapsed time, not on the clock you can set.** The
+  journal records a monotonic since-boot stamp beside its wall-clock one, and
+  `WatchdogDecision.decide` measures the TTL against the first of the two. Both
+  ends of that subtraction come from `mach_continuous_time`, which nothing in
+  userspace can move and which keeps counting while a lidded machine naps. So
+  putting the system clock back while a hold is live buys no extra hold: the
+  daemon reports the step as a clock anomaly and ends the hold there. Until this
+  shipped, a backward step landing inside a live window was invisible to every
+  check the daemon made, and it extended the hold by its own size — far past the
+  bound stated above, and without limit for a large enough step (#77).
+- The monotonic stamp means nothing across a reboot and never has to survive
+  one: a journal older than `kern.boottime` is reverted before any TTL
+  arithmetic runs at all. Adding it moved the journal's `schemaVersion` on, so a
+  journal an older build left behind is refused rather than judged against a
+  reference it never recorded.
 - Supervision is **TTL-only**. There is no heartbeat channel, because there is
   no channel at all. Nothing cuts a hold short when the work finishes early, so
   the 30-minute default is deliberately the worst case rather than the cap.
