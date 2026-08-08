@@ -23,7 +23,11 @@ public struct ArmProvenance: Codable, Equatable, Sendable {
 /// mutation it describes, so a crash in between leaves evidence rather than
 /// a silent change. Handoff §8.2(1).
 public struct JournalRecord: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = 1
+    // 2 since the record gained `setAtMonotonic` (#77). A v1 journal records
+    // no elapsed-time reference at all, so its TTL cannot be judged — and
+    // `decide()`'s first rung reverts an unknown schema, which is the safe
+    // answer and needs no migration code to reach it.
+    public static let currentSchemaVersion = 2
     /// Handoff §8.2(5): hard cap regardless of settings.
     public static let maxTTLSeconds = 8 * 60 * 60
 
