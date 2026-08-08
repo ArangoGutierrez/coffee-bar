@@ -278,6 +278,20 @@ private func makeScratchRoot() throws -> URL {
 
 private let fixedNow = Date(timeIntervalSince1970: 1_800_000_000)
 
+/// The monotonic reading taken beside `fixedNow`. An arbitrary since-boot
+/// number: only its distance from the reading a tick passes is ever read.
+private let fixedUptime: TimeInterval = 10_000
+
+/// What the monotonic clock reports `seconds` after `fixedNow`, on a machine
+/// whose wall clock never moved.
+///
+/// Every tick written before #77 passes this, because agreeing clocks are what
+/// those tests meant. A tick that models a clock STEP passes the two apart, and
+/// the gap between them is the step.
+private func uptime(after seconds: TimeInterval) -> TimeInterval {
+    fixedUptime + seconds
+}
+
 /// The machine booted an hour before the arm, which is the ordinary case.
 ///
 /// A journal written AFTER this is not evidence of an unclean exit, so it must
@@ -307,6 +321,10 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
         supervisor: RecordingSupervisor(log: log),
         display: RecordingDisplay(log: log, awakeAfterForcing: false),
         clock: { fixedNow },
+        // Fixed for the same reason `clock` is: the real uptime of whatever
+        // machine runs the suite is machine state, not a fixture, and the
+        // record `arm` writes is read back by ticks that pass their own.
+        monotonicClock: { fixedUptime },
         displayVerifyDelay: 0)
 
     try service.arm(ttlSeconds: 3600)
@@ -341,6 +359,10 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
         supervisor: RecordingSupervisor(log: log),
         display: RecordingDisplay(log: log, awakeAfterForcing: false),
         clock: { fixedNow },
+        // Fixed for the same reason `clock` is: the real uptime of whatever
+        // machine runs the suite is machine state, not a fixture, and the
+        // record `arm` writes is read back by ticks that pass their own.
+        monotonicClock: { fixedUptime },
         displayVerifyDelay: 0)
 
     try service.arm(ttlSeconds: 3600)
@@ -372,6 +394,10 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
         supervisor: RecordingSupervisor(log: log),
         display: RecordingDisplay(log: log, awakeAfterForcing: false),
         clock: { fixedNow },
+        // Fixed for the same reason `clock` is: the real uptime of whatever
+        // machine runs the suite is machine state, not a fixture, and the
+        // record `arm` writes is read back by ticks that pass their own.
+        monotonicClock: { fixedUptime },
         displayVerifyDelay: 0)
 
     try service.arm(ttlSeconds: 3600)
@@ -380,6 +406,49 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
     #expect(written.priorValue == true)
     #expect(written.setAt == fixedNow)
     #expect(written.intent == .sleepDisabled)
+}
+
+@Test func armStampsTheJournalWithTheMonotonicClockAndNotWithTheWallClock() throws {
+    // #77. `setAt` is what a human reads out of `report`; `setAtMonotonic` is
+    // what the 8-hour cap is measured against, and the two come from different
+    // clocks on purpose.
+    //
+    // Named bug this catches, and it is the one a compiler cannot: filling the
+    // new field from the wall clock — `setAtMonotonic: clock().timeIntervalSince1970`
+    // — because both are a `TimeInterval` and it reads fine. The daemon then
+    // subtracts a since-1970 number from a since-BOOT one, gets an elapsed time
+    // of about minus fifty-seven years, and no TTL ever expires. That is an
+    // unbounded root-held `SleepDisabled`, reached with nobody attacking
+    // anything. No other test in this file reads the record back, so none of
+    // them would notice.
+    let root = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let log = CallLog()
+    let url = root.appending(path: "state/probe-journal.json")
+    let store = FileJournalStore(url: url)
+    let service = ArmService(
+        journal: RecordingJournal(log: log, inner: store),
+        reader: GuardedJournalReader(url: url, requiredOwner: getuid(),
+                                     quarantineOnRefusal: false),
+        power: RecordingPower(log: log, state: .init(false)),
+        supervisor: RecordingSupervisor(log: log),
+        display: RecordingDisplay(log: log, awakeAfterForcing: false),
+        clock: { fixedNow },
+        // Distinct from `fixedUptime` and nowhere near `fixedNow`'s epoch, so
+        // neither a hard-coded stamp nor a wall reading can satisfy this.
+        monotonicClock: { 4242.5 },
+        displayVerifyDelay: 0)
+
+    try service.arm(ttlSeconds: 3600)
+
+    let written = try #require(try store.load())
+    #expect(written.setAtMonotonic == 4242.5, """
+        arm recorded \(written.setAtMonotonic) as the monotonic stamp, and the \
+        clock it was given reads 4242.5. The cap is measured against this field.
+        """)
+    // Both, because one alone does not distinguish a stamp from a copy.
+    #expect(written.setAt == fixedNow)
 }
 
 @Test func armCapsTheTTLAtEightHoursHoweverLongTheCallerAsks() throws {
@@ -399,6 +468,10 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
         supervisor: RecordingSupervisor(log: log),
         display: RecordingDisplay(log: log, awakeAfterForcing: false),
         clock: { fixedNow },
+        // Fixed for the same reason `clock` is: the real uptime of whatever
+        // machine runs the suite is machine state, not a fixture, and the
+        // record `arm` writes is read back by ticks that pass their own.
+        monotonicClock: { fixedUptime },
         displayVerifyDelay: 0)
 
     try service.arm(ttlSeconds: 99_999_999)
@@ -440,6 +513,10 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
         supervisor: RecordingSupervisor(log: log),
         display: RecordingDisplay(log: log, awakeAfterForcing: false, failOnForce: true),
         clock: { fixedNow },
+        // Fixed for the same reason `clock` is: the real uptime of whatever
+        // machine runs the suite is machine state, not a fixture, and the
+        // record `arm` writes is read back by ticks that pass their own.
+        monotonicClock: { fixedUptime },
         displayVerifyDelay: 0)
 
     #expect(throws: (any Error).self) { try service.arm(ttlSeconds: 3600) }
@@ -477,6 +554,10 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
         supervisor: RecordingSupervisor(log: log, failOnInstall: true),
         display: RecordingDisplay(log: log, awakeAfterForcing: false),
         clock: { fixedNow },
+        // Fixed for the same reason `clock` is: the real uptime of whatever
+        // machine runs the suite is machine state, not a fixture, and the
+        // record `arm` writes is read back by ticks that pass their own.
+        monotonicClock: { fixedUptime },
         displayVerifyDelay: 0)
 
     #expect(throws: (any Error).self) { try service.arm(ttlSeconds: 3600) }
@@ -510,6 +591,10 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
         supervisor: RecordingSupervisor(log: log),
         display: RecordingDisplay(log: log, awakeAfterForcing: false),
         clock: { fixedNow },
+        // Fixed for the same reason `clock` is: the real uptime of whatever
+        // machine runs the suite is machine state, not a fixture, and the
+        // record `arm` writes is read back by ticks that pass their own.
+        monotonicClock: { fixedUptime },
         displayVerifyDelay: 0)
 
     try service.arm(ttlSeconds: 3600)
@@ -542,6 +627,10 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
         supervisor: RecordingSupervisor(log: log),
         display: RecordingDisplay(log: log, awakeAfterForcing: true),  // stayed lit
         clock: { fixedNow },
+        // Fixed for the same reason `clock` is: the real uptime of whatever
+        // machine runs the suite is machine state, not a fixture, and the
+        // record `arm` writes is read back by ticks that pass their own.
+        monotonicClock: { fixedUptime },
         displayVerifyDelay: 0)
 
     #expect(throws: ArmError.displayStayedAwake) { try service.arm(ttlSeconds: 3600) }
@@ -574,6 +663,10 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
         supervisor: RecordingSupervisor(log: log),
         display: RecordingDisplay(log: log, awakeAfterForcing: nil),
         clock: { fixedNow },
+        // Fixed for the same reason `clock` is: the real uptime of whatever
+        // machine runs the suite is machine state, not a fixture, and the
+        // record `arm` writes is read back by ticks that pass their own.
+        monotonicClock: { fixedUptime },
         displayVerifyDelay: 0)
 
     try service.arm(ttlSeconds: 3600)
@@ -621,7 +714,9 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
         bootTime: { fixedBoot })
 
     // Exactly what launchd runs at load: the `watchdog` verb, one tick.
-    supervisor.runAtLoad = { _ = try? watchdog.evaluate(now: fixedNow) }
+    supervisor.runAtLoad = {
+        _ = try? watchdog.evaluate(now: fixedNow, monotonicNow: fixedUptime)
+    }
 
     let service = ArmService(
         journal: RecordingJournal(log: log, inner: store),
@@ -631,6 +726,10 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
         supervisor: supervisor,
         display: RecordingDisplay(log: log, awakeAfterForcing: false),
         clock: { fixedNow },
+        // Fixed for the same reason `clock` is: the real uptime of whatever
+        // machine runs the suite is machine state, not a fixture, and the
+        // record `arm` writes is read back by ticks that pass their own.
+        monotonicClock: { fixedUptime },
         displayVerifyDelay: 0)
 
     try service.arm(ttlSeconds: 3600)
@@ -687,6 +786,10 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
         supervisor: supervisor,
         display: RecordingDisplay(log: log, awakeAfterForcing: false),
         clock: { fixedNow },
+        // Fixed for the same reason `clock` is: the real uptime of whatever
+        // machine runs the suite is machine state, not a fixture, and the
+        // record `arm` writes is read back by ticks that pass their own.
+        monotonicClock: { fixedUptime },
         displayVerifyDelay: 0)
 
     #expect(throws: ArmError.journalVanished) { try service.arm(ttlSeconds: 3600) }
@@ -736,7 +839,9 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
         power: power, supervisor: supervisor, notifier: RecordingNotifier(),
         environment: FakeEnvironment(),
         bootTime: { fixedBoot })
-    supervisor.runAtLoad = { _ = try? watchdog.evaluate(now: fixedNow) }
+    supervisor.runAtLoad = {
+        _ = try? watchdog.evaluate(now: fixedNow, monotonicNow: fixedUptime)
+    }
 
     let service = ArmService(
         journal: RecordingJournal(log: log, inner: store),
@@ -746,6 +851,10 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
         supervisor: supervisor,
         display: RecordingDisplay(log: log, awakeAfterForcing: false),
         clock: { fixedNow },
+        // Fixed for the same reason `clock` is: the real uptime of whatever
+        // machine runs the suite is machine state, not a fixture, and the
+        // record `arm` writes is read back by ticks that pass their own.
+        monotonicClock: { fixedUptime },
         displayVerifyDelay: 0)
 
     #expect(throws: (any Error).self) { try service.arm(ttlSeconds: 3600) }
@@ -793,7 +902,9 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
         environment: FakeEnvironment(),
         // The machine booted a second AFTER this arm's truncated `setAt`.
         bootTime: { fixedNow.addingTimeInterval(1) })
-    supervisor.runAtLoad = { _ = try? watchdog.evaluate(now: fixedNow) }
+    supervisor.runAtLoad = {
+        _ = try? watchdog.evaluate(now: fixedNow, monotonicNow: fixedUptime)
+    }
 
     let service = ArmService(
         journal: RecordingJournal(log: log, inner: store),
@@ -803,6 +914,10 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
         supervisor: supervisor,
         display: RecordingDisplay(log: log, awakeAfterForcing: false),
         clock: { fixedNow },
+        // Fixed for the same reason `clock` is: the real uptime of whatever
+        // machine runs the suite is machine state, not a fixture, and the
+        // record `arm` writes is read back by ticks that pass their own.
+        monotonicClock: { fixedUptime },
         displayVerifyDelay: 0)
 
     #expect(throws: ArmError.journalVanished) { try service.arm(ttlSeconds: 3600) }
@@ -846,7 +961,7 @@ private func makeArmedWatchdog(root: URL, record: JournalRecord,
 private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
     -> JournalRecord {
     JournalRecord(intent: .sleepDisabled, priorValue: priorValue, setAt: fixedNow,
-                  ttlSeconds: ttlSeconds,
+                  setAtMonotonic: fixedUptime, ttlSeconds: ttlSeconds,
                   armedBy: ArmProvenance(pid: 4242, binaryPath: "/usr/local/bin/probe",
                                          uid: 501))
 }
@@ -862,7 +977,8 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
     let armed = try makeArmedWatchdog(root: root, record: armedRecord(ttlSeconds: 3600))
 
     let decision = try armed.service.evaluate(
-        now: fixedNow.addingTimeInterval(3601), lastHeartbeat: nil)
+        now: fixedNow.addingTimeInterval(3601),
+        monotonicNow: uptime(after: 3601), lastHeartbeat: nil)
 
     #expect(decision == .revert(.ttlExpired))
     #expect(armed.power.state.current == false, "the TTL expired and sleep is still disabled")
@@ -895,6 +1011,7 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
 
     let thread = Thread {
         _ = try? service.evaluate(now: fixedNow.addingTimeInterval(3601),
+                                  monotonicNow: uptime(after: 3601),
                                   lastHeartbeat: nil)
     }
     thread.start()
@@ -923,7 +1040,8 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
     let armed = try makeArmedWatchdog(root: root, record: armedRecord(ttlSeconds: 3600))
 
     let decision = try armed.service.evaluate(
-        now: fixedNow.addingTimeInterval(60), lastHeartbeat: nil)
+        now: fixedNow.addingTimeInterval(60),
+        monotonicNow: uptime(after: 60), lastHeartbeat: nil)
 
     #expect(decision == .hold, """
         the watchdog reverted a live arm 60 s in with 3600 s of TTL left. \
@@ -949,6 +1067,7 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
 
     let decision = try armed.service.evaluate(
         now: fixedNow.addingTimeInterval(3601),
+        monotonicNow: uptime(after: 3601),
         lastHeartbeat: fixedNow.addingTimeInterval(31_536_000))
 
     #expect(decision == .revert(.ttlExpired), """
@@ -956,6 +1075,95 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
         attacker-influenced and may only shorten a hold, never extend it.
         """)
     #expect(armed.power.state.current == false)
+}
+
+// MARK: - #77: a wall clock that steps cannot buy extra hold
+
+@Test func aBackwardWallClockStepInsideTheLiveWindowDoesNotExtendTheHold() throws {
+    // #77 driven the way it happens: `sudo coffee-bar-probe arm --ttl 28800`,
+    // and 7 h 58 m later the machine's wall clock is put back seven hours.
+    //
+    // The second tick below used to answer `.hold`, and went on answering it
+    // for another seven hours. Rung 3 tested `now < setAt` alone, so a step
+    // landing INSIDE the live window passed it untouched, and the TTL rung then
+    // compared the rewound clock against a deadline expressed in that same
+    // rewound frame. Rung 6 is the only rung that ends a healthy hold on this
+    // path — no reboot, no heat, no battery floor, no heartbeat channel — so
+    // suppressing it suppresses the cap itself.
+    let root = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let armed = try makeArmedWatchdog(root: root,
+                                      record: armedRecord(ttlSeconds: 28_800))
+
+    // The premise, and it is load-bearing: 7 h 58 m in with both clocks
+    // agreeing, the hold is healthy. Without it the revert below could just as
+    // well be a daemon that refuses to hold anything.
+    #expect(try armed.service.evaluate(now: fixedNow.addingTimeInterval(28_700),
+                                       monotonicNow: uptime(after: 28_700),
+                                       lastHeartbeat: nil) == .hold,
+            "the daemon reverted a healthy hold, so the step below proves nothing")
+
+    // One 5 s tick later. The wall clock now reads seven hours earlier than it
+    // did; elapsed time does not, because nothing a user can type moves it.
+    let decision = try armed.service.evaluate(
+        now: fixedNow.addingTimeInterval(28_705 - 25_200),
+        monotonicNow: uptime(after: 28_705),
+        lastHeartbeat: nil)
+
+    #expect(decision == .revert(.clockAnomaly), """
+        the daemon held a root-set SleepDisabled straight through a seven-hour \
+        backward clock step, and would keep holding it for seven more hours. \
+        got: \(decision)
+        """)
+    #expect(armed.power.state.current == false,
+            "the clock stepped backward and sleep is still disabled")
+    #expect(try armed.store.load() == nil, "the journal survived the revert")
+    #expect(armed.log.calls.contains("watchdog.uninstall"))
+    #expect(armed.notifier.posted == ["reverted SleepDisabled to false: clockAnomaly"],
+            "posted: \(armed.notifier.posted)")
+}
+
+@Test func theCapEndsTheHoldOnElapsedTimeWhileTheWallClockIsStillBehind() throws {
+    // The cap itself, isolated from the anomaly signal above — and the two need
+    // isolating, because the signal is a diagnostic and the cap is the
+    // invariant SECURITY.md states.
+    //
+    // The wall clock here is 8 s behind real time, inside
+    // `WatchdogPolicy.clockStepTolerance`, so the anomaly rung stays quiet by
+    // design and the TTL rung is the only thing left that can end the hold.
+    //
+    // Named bug this catches: measuring the cap as `now > journal.expiry`. That
+    // answers HOLD here — and answers it for however far the wall clock lags,
+    // which is what turns #77's step into an extension rather than an error.
+    let root = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let armed = try makeArmedWatchdog(
+        root: root,
+        record: armedRecord(ttlSeconds: JournalRecord.maxTTLSeconds))
+    let cap = TimeInterval(JournalRecord.maxTTLSeconds)
+
+    // The premise: the same 8 s lag well inside the cap must NOT revert, or the
+    // assertion below passes on a daemon that reverts unconditionally.
+    #expect(try armed.service.evaluate(now: fixedNow.addingTimeInterval(cap - 108),
+                                       monotonicNow: uptime(after: cap - 100),
+                                       lastHeartbeat: nil) == .hold,
+            "an 8 s clock lag ended a hold with 100 s of TTL left")
+
+    let decision = try armed.service.evaluate(
+        now: fixedNow.addingTimeInterval(cap - 7),      // wall clock: 7 s short
+        monotonicNow: uptime(after: cap + 1),           // real time: 1 s past
+        lastHeartbeat: nil)
+
+    #expect(decision == .revert(.ttlExpired), """
+        \(cap + 1) s of real time have passed on a \(cap) s cap and the daemon \
+        is still holding, because the wall clock it measures against is 8 s \
+        behind. SECURITY.md states that cap as a bound on a root-held setting. \
+        got: \(decision)
+        """)
+    #expect(armed.power.state.current == false)
+    #expect(try armed.store.load() == nil)
 }
 
 @Test func theWatchdogRevertsUnconditionallyWhenTheJournalPredatesTheLastBoot() throws {
@@ -975,7 +1183,8 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
         bootTime: fixedNow.addingTimeInterval(1))
 
     let decision = try armed.service.evaluate(
-        now: fixedNow.addingTimeInterval(5), lastHeartbeat: fixedNow)
+        now: fixedNow.addingTimeInterval(5),
+        monotonicNow: uptime(after: 5), lastHeartbeat: fixedNow)
 
     #expect(decision == .revert(.dirtyJournalAtBoot))
     #expect(armed.power.state.current == false)
@@ -1001,7 +1210,8 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
                                       bootTime: fixedBoot)
 
     let decision = try armed.service.evaluate(
-        now: fixedNow.addingTimeInterval(1), lastHeartbeat: nil)
+        now: fixedNow.addingTimeInterval(1),
+        monotonicNow: uptime(after: 1), lastHeartbeat: nil)
 
     #expect(decision == .hold, """
         a fresh journal was read as a dirty boot, so the daemon undoes every \
@@ -1024,7 +1234,9 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
     let armed = try makeArmedWatchdog(root: root,
                                       record: armedRecord(priorValue: true, ttlSeconds: 60))
 
-    _ = try armed.service.evaluate(now: fixedNow.addingTimeInterval(61), lastHeartbeat: nil)
+    _ = try armed.service.evaluate(now: fixedNow.addingTimeInterval(61),
+                                   monotonicNow: uptime(after: 61),
+                                   lastHeartbeat: nil)
 
     #expect(armed.power.state.current == true,
             "the watchdog enabled sleep on a machine that had it disabled to begin with")
@@ -1064,7 +1276,8 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
         notifier: notifier,
         environment: FakeEnvironment())
 
-    _ = try service.evaluate(now: fixedNow.addingTimeInterval(5), lastHeartbeat: nil)
+    _ = try service.evaluate(now: fixedNow.addingTimeInterval(5),
+                             monotonicNow: uptime(after: 5), lastHeartbeat: nil)
 
     #expect(power.state.current == false, """
         a refused journal left sleep disabled with nothing supervising it. \
@@ -1115,6 +1328,7 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
 
     let thread = Thread {
         _ = try? service.evaluate(now: fixedNow.addingTimeInterval(5),
+                                  monotonicNow: uptime(after: 5),
                                   lastHeartbeat: nil)
     }
     thread.start()
@@ -1192,7 +1406,8 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
     let decision = try armed.service.evaluate(
         // `nil`, so the TTL-only substitution keeps the heartbeat guard quiet
         // and the input under test is the ONLY thing that can revert.
-        now: fixedNow.addingTimeInterval(60), lastHeartbeat: nil)
+        now: fixedNow.addingTimeInterval(60),
+        monotonicNow: uptime(after: 60), lastHeartbeat: nil)
 
     #expect(decision == .revert(.thermalAbort), """
         the daemon did not abort on a serious thermal state, so §8.1's thermal \
@@ -1223,7 +1438,8 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
     let decision = try armed.service.evaluate(
         // `nil`, so the TTL-only substitution keeps the heartbeat guard quiet
         // and the input under test is the ONLY thing that can revert.
-        now: fixedNow.addingTimeInterval(60), lastHeartbeat: nil)
+        now: fixedNow.addingTimeInterval(60),
+        monotonicNow: uptime(after: 60), lastHeartbeat: nil)
 
     #expect(decision == .revert(.batteryFloor))
     #expect(armed.power.state.current == false)
@@ -1252,7 +1468,8 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
     let decision = try armed.service.evaluate(
         // `nil`, so the TTL-only substitution keeps the heartbeat guard quiet
         // and the input under test is the ONLY thing that can revert.
-        now: fixedNow.addingTimeInterval(60), lastHeartbeat: nil)
+        now: fixedNow.addingTimeInterval(60),
+        monotonicNow: uptime(after: 60), lastHeartbeat: nil)
 
     #expect(decision == .hold, """
         the daemon reverted a charge below the floor while on AC power. The \
@@ -1289,7 +1506,8 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
     #expect(try armed.service.evaluate(
         // `nil`, so the TTL-only substitution keeps the heartbeat guard quiet
         // and the input under test is the ONLY thing that can revert.
-        now: fixedNow.addingTimeInterval(60), lastHeartbeat: nil)
+        now: fixedNow.addingTimeInterval(60),
+        monotonicNow: uptime(after: 60), lastHeartbeat: nil)
         == .revert(.batteryFloor))
 }
 
@@ -1333,7 +1551,8 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
         notifier: notifier,
         environment: FakeEnvironment())
 
-    #expect(try service.evaluate(now: fixedNow, lastHeartbeat: nil) == .hold)
+    #expect(try service.evaluate(now: fixedNow, monotonicNow: fixedUptime,
+                                 lastHeartbeat: nil) == .hold)
     #expect(log.calls.contains("power.set(false)") == false, "\(log.calls)")
     #expect(notifier.posted.isEmpty)
 }
@@ -1496,7 +1715,8 @@ private func buildArmer() throws -> String {
         environment: FakeEnvironment())
 
     let decision = try watchdog.evaluate(
-        now: fixedNow.addingTimeInterval(61), lastHeartbeat: nil)
+        now: fixedNow.addingTimeInterval(61),
+        monotonicNow: uptime(after: 61), lastHeartbeat: nil)
 
     #expect(decision == .revert(.ttlExpired))
     #expect(try power.isEnabled() == false, """

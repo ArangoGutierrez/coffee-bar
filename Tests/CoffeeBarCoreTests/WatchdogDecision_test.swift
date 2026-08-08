@@ -6,22 +6,42 @@ import Foundation
 @testable import CoffeeBarCore
 
 private let t0 = Date(timeIntervalSince1970: 1_000_000)
+
+/// The monotonic reading taken beside `t0`. An arbitrary since-boot value —
+/// only its difference from `inputs.monotonicNow` is ever read, and picking a
+/// number far from `t0`'s epoch keeps the two frames from being confusable.
+private let m0: TimeInterval = 10_000
+
 private let prov = ArmProvenance(pid: 1, binaryPath: "/x", uid: 501)
 
-private func journal(ttl: Int = 900, schema: Int = 1,
+// The record's own version rather than a literal 1. A schema bump is a normal
+// event here — the monotonic stamp caused one — and a hard-coded version would
+// make every test in this file revert as `.unknownSchema` on the next one,
+// which reads as the feature breaking rather than as a stale fixture.
+private func journal(ttl: Int = 900,
+                     schema: Int = JournalRecord.currentSchemaVersion,
                      prior: Bool = false) -> JournalRecord {
     JournalRecord(schemaVersion: schema, intent: .sleepDisabled,
-                  priorValue: prior, setAt: t0, ttlSeconds: ttl, armedBy: prov)
+                  priorValue: prior, setAt: t0, setAtMonotonic: m0,
+                  ttlSeconds: ttl, armedBy: prov)
 }
 
 private func inputs(journal j: JournalRecord? = journal(),
                     now: Date = t0.addingTimeInterval(10),
+                    monotonicNow: TimeInterval? = nil,
                     heartbeat: Date? = t0.addingTimeInterval(10),
                     boot: Bool = false,
                     thermal: ThermalLevel = .nominal,
                     battery: Int? = 80,
                     onBattery: Bool = false) -> WatchdogInputs {
-    WatchdogInputs(journal: j, now: now, lastHeartbeat: heartbeat,
+    WatchdogInputs(journal: j, now: now,
+                   // DERIVED from `now` by default: a machine whose wall clock
+                   // never moved, which is what every test written before #77
+                   // silently assumed. A test that models a clock step passes
+                   // its own reading and breaks the two apart — that split is
+                   // the entire subject of `#77`.
+                   monotonicNow: monotonicNow ?? (m0 + now.timeIntervalSince(t0)),
+                   lastHeartbeat: heartbeat,
                    isBootEvaluation: boot, thermal: thermal,
                    batteryPercent: battery, onBattery: onBattery)
 }
@@ -102,6 +122,119 @@ private func inputs(journal j: JournalRecord? = journal(),
             == .revert(.clockAnomaly))
 }
 
+// MARK: - #77: the cap runs on elapsed real time, not on what the clock reads
+
+@Test func theCapIsMeasuredOnElapsedRealTimeNotOnWhatTheWallClockReads() {
+    // THE INVARIANT. `JournalRecord.maxTTLSeconds` promises a bound on how long
+    // a root process may hold `SleepDisabled`, and a bound read off a wall clock
+    // is a bound anyone able to set that clock can move.
+    //
+    // Here the wall clock sits 8 s behind real time — inside the anomaly
+    // tolerance, so the clock guard stays deliberately quiet and this rung is
+    // the ONLY thing that can end the hold. 901 s of real time have passed on a
+    // 900 s TTL, while the wall clock still reads 893 s.
+    //
+    // Named bug this catches: `inputs.now > journal.expiry`. That comparison
+    // answers HOLD here, and it answers hold for the whole size of any backward
+    // step — 7 hours of one, in #77's report, on an 8-hour cap.
+    #expect(decide(inputs(now: t0.addingTimeInterval(893),
+                          monotonicNow: m0 + 901,
+                          heartbeat: t0.addingTimeInterval(893)))
+            == .revert(.ttlExpired))
+}
+
+@Test func theCapDoesNotEndAHoldEarlyWhenTheWallClockRanAhead() {
+    // The other side, and it is what stops the rung above being satisfiable by
+    // "revert whenever the clocks disagree at all". Real time is 5 s short of
+    // the TTL while the wall clock has already sailed past it: the hold stands,
+    // because elapsed time is what the cap counts.
+    #expect(decide(inputs(now: t0.addingTimeInterval(903),
+                          monotonicNow: m0 + 895,
+                          heartbeat: t0.addingTimeInterval(903))) == .hold)
+}
+
+@Test func aBackwardWallClockStepLandingAfterSetAtIsAnAnomaly() {
+    // #77's actual report, at the rung that reports it. The old guard tested
+    // `now < setAt` and so saw only a step that overshot the arm; a step that
+    // lands anywhere INSIDE the live window passed every rung on the ladder and
+    // the hold simply carried on.
+    //
+    // Detectable at all only because the journal now carries a second reading
+    // to compare against: 500 s of real time have elapsed and the wall clock
+    // claims 100.
+    #expect(decide(inputs(now: t0.addingTimeInterval(100),
+                          monotonicNow: m0 + 500,
+                          heartbeat: t0.addingTimeInterval(100)))
+            == .revert(.clockAnomaly))
+}
+
+@Test func aForwardWallClockStepIsAnAnomalyToo() {
+    // The guard is BIDIRECTIONAL. A forward step cannot extend a hold now that
+    // the cap ignores the wall clock, so this is a signal rather than a
+    // protection — but a machine whose clock jumped 400 s in either direction
+    // has something wrong with it, and reporting only one direction hides half
+    // of that.
+    #expect(decide(inputs(now: t0.addingTimeInterval(500),
+                          monotonicNow: m0 + 100,
+                          heartbeat: t0.addingTimeInterval(500)))
+            == .revert(.clockAnomaly))
+}
+
+@Test func theClockStepToleranceBracketsTheAnomalyGuard() {
+    // Both sides of the bound, so neither `>` nor `>=` passes by luck.
+    //
+    // The tolerance is not zero on purpose: `HostInfo.now` truncates `setAt`
+    // DOWN to the whole second and the monotonic stamp beside it is not
+    // truncated, so a healthy arm starts life with the two readings up to a
+    // second apart, and NTP moves the wall clock by small amounts routinely.
+    #expect(decide(inputs(now: t0.addingTimeInterval(90),
+                          monotonicNow: m0 + 100,
+                          heartbeat: t0.addingTimeInterval(90))) == .hold)
+    #expect(decide(inputs(now: t0.addingTimeInterval(89),
+                          monotonicNow: m0 + 100,
+                          heartbeat: t0.addingTimeInterval(89)))
+            == .revert(.clockAnomaly))
+}
+
+@Test func customClockStepToleranceIsHonoured() {
+    // Without this the guard could compare against a literal 10 and no test
+    // would notice. Default is 10 s, under which 8 s of skew HOLDs; with a 5 s
+    // policy the same inputs are an anomaly.
+    let strict = WatchdogPolicy(heartbeatTimeout: 45, batteryFloorPercent: 20,
+                                clockStepTolerance: 5)
+    #expect(decide(inputs(now: t0.addingTimeInterval(92),
+                          monotonicNow: m0 + 100,
+                          heartbeat: t0.addingTimeInterval(92))) == .hold)
+    #expect(decide(inputs(now: t0.addingTimeInterval(92),
+                          monotonicNow: m0 + 100,
+                          heartbeat: t0.addingTimeInterval(92)),
+                   policy: strict) == .revert(.clockAnomaly))
+}
+
+@Test func degenerateClockStepTolerancesAreClampedAndTheSignalStillFires() {
+    // The same degenerate values the heartbeat timeout is clamped against, and
+    // they fail the same way round: `abs(skew) > .infinity` is never true, so
+    // an unclamped policy reports a machine whose clock jumped an hour as
+    // perfectly healthy.
+    let wide = WatchdogPolicy(heartbeatTimeout: 45, batteryFloorPercent: 20,
+                              clockStepTolerance: .infinity)
+    #expect(wide.clockStepTolerance == 300)
+    #expect(decide(inputs(now: t0.addingTimeInterval(100),
+                          monotonicNow: m0 + 3700,
+                          heartbeat: t0.addingTimeInterval(100)),
+                   policy: wide) == .revert(.clockAnomaly))
+
+    // NaN survives `min`/`max` untouched, and `abs(skew) > .nan` is false for
+    // every skew there is.
+    let nan = WatchdogPolicy(heartbeatTimeout: 45, batteryFloorPercent: 20,
+                             clockStepTolerance: .nan)
+    #expect(nan.clockStepTolerance.isFinite)
+    #expect(decide(inputs(now: t0.addingTimeInterval(100),
+                          monotonicNow: m0 + 3700,
+                          heartbeat: t0.addingTimeInterval(100)),
+                   policy: nan) == .revert(.clockAnomaly))
+}
+
 @Test func seriousThermalRevertsWhileArmed() {
     #expect(decide(inputs(thermal: .serious)) == .revert(.thermalAbort))
     #expect(decide(inputs(thermal: .critical)) == .revert(.thermalAbort))
@@ -170,6 +303,15 @@ private func inputs(journal j: JournalRecord? = journal(),
                           battery: 1, onBattery: true))
             == .revert(.clockAnomaly))
 
+    // 4 clock, the #77 flavour: a wall clock stepped back to `setAt` without
+    // ever going past it. Unlike the rewound flavour this one CAN hold at the
+    // same time as an expired TTL, so it pins the rung above all four below it
+    // at once.
+    #expect(decide(inputs(now: t0, monotonicNow: m0 + 100_000,
+                          heartbeat: deadBeat, thermal: hot,
+                          battery: 1, onBattery: true))
+            == .revert(.clockAnomaly))
+
     // 5 thermal — over battery, TTL, heartbeat.
     #expect(decide(inputs(now: expired, heartbeat: t0, thermal: hot,
                           battery: 1, onBattery: true))
@@ -207,13 +349,17 @@ private func inputs(journal j: JournalRecord? = journal(),
 }
 
 @Test func customKnownSchemaVersionIsHonoured() {
-    // Default known version is 1, so a v1 journal HOLDs. Under a policy that
-    // knows only v2, that same journal is unknown-schema — which is how a
-    // future reader refuses to act on a record it cannot interpret.
-    let v2 = WatchdogPolicy(heartbeatTimeout: 45, batteryFloorPercent: 20,
-                            knownSchemaVersion: 2)
-    #expect(decide(inputs(journal: journal(schema: 1)), policy: v2)
-            == .revert(.unknownSchema))
+    // The default known version is the record's own, so a current journal
+    // HOLDs. Under a policy that knows only the NEXT version, that same journal
+    // is unknown-schema — which is how a reader refuses to act on a record it
+    // cannot interpret. Written against `currentSchemaVersion` rather than
+    // against literals, so the monotonic stamp's bump did not turn it into an
+    // assertion about a version nobody ships.
+    let next = WatchdogPolicy(
+        heartbeatTimeout: 45, batteryFloorPercent: 20,
+        knownSchemaVersion: JournalRecord.currentSchemaVersion + 1)
+    #expect(decide(inputs()) == .hold)
+    #expect(decide(inputs(), policy: next) == .revert(.unknownSchema))
 }
 
 @Test func policyDefaultsToTheCurrentSchemaVersion() {

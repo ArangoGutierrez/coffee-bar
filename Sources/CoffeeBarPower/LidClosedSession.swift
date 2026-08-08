@@ -96,6 +96,7 @@ public struct ArmService: Sendable {
     private let supervisor: any WatchdogSupervising
     private let display: any DisplaySleepForcing
     private let clock: @Sendable () -> Date
+    private let monotonicClock: @Sendable () -> TimeInterval
     private let displayVerifyDelay: TimeInterval
 
     /// `clock` and `displayVerifyDelay` stay injectable so tests need no wall
@@ -111,6 +112,8 @@ public struct ArmService: Sendable {
                 supervisor: any WatchdogSupervising,
                 display: any DisplaySleepForcing,
                 clock: @escaping @Sendable () -> Date = HostInfo.now,
+                monotonicClock: @escaping @Sendable () -> TimeInterval
+                    = SystemMonotonicClock.now,
                 displayVerifyDelay: TimeInterval = 5) {
         self.journal = journal
         self.reader = reader
@@ -118,6 +121,7 @@ public struct ArmService: Sendable {
         self.supervisor = supervisor
         self.display = display
         self.clock = clock
+        self.monotonicClock = monotonicClock
         self.displayVerifyDelay = displayVerifyDelay
     }
 
@@ -148,6 +152,10 @@ public struct ArmService: Sendable {
             intent: .sleepDisabled,
             priorValue: priorValue,
             setAt: clock(),
+            // Sampled beside `setAt`, and it is what the cap is measured
+            // against. The wall stamp stays because a human reading `report`
+            // needs a date, not a since-boot number.
+            setAtMonotonic: monotonicClock(),
             ttlSeconds: ttlSeconds,
             armedBy: Self.provenance())
 
@@ -322,8 +330,14 @@ public struct WatchdogService: Sendable {
     /// `evaluate(now:)` — so §8.1's two aborts could not fire in production
     /// however hot the machine got or however low the charge fell. Reading them
     /// from the injected environment removes the caller's chance to forget.
+    ///
+    /// `monotonicNow` is REQUIRED and has no default, for that same reason: a
+    /// default is how an input ships unwired. It is also the only reading here
+    /// a wall clock cannot move, so a caller that quietly skipped it would put
+    /// the 8-hour cap back on the clock issue #77 showed can be stepped.
     @discardableResult
     public func evaluate(now: Date,
+                         monotonicNow: TimeInterval,
                          lastHeartbeat: Date? = nil) throws -> WatchdogDecision {
         switch readJournal() {
         case .refused:
@@ -337,6 +351,7 @@ public struct WatchdogService: Sendable {
             let inputs = WatchdogInputs(
                 journal: record,
                 now: now,
+                monotonicNow: monotonicNow,
                 // No heartbeat channel means TTL-ONLY supervision, not an
                 // instant revert. `decide()` treats a nil heartbeat as
                 // `.heartbeatLost`, which is right when a channel exists and

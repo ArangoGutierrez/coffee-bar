@@ -240,7 +240,12 @@ case .watchdog:
     let service = makeWatchdogService()
     while true {
         do {
-            _ = try service.evaluate(now: Date())
+            // Both clocks, sampled together. `Date()` is what a human
+            // reads; `SystemMonotonicClock.now()` is what the cap is
+            // measured against, because only the first of the two can
+            // be stepped backward out from under a live hold (#77).
+            _ = try service.evaluate(now: Date(),
+                                     monotonicNow: SystemMonotonicClock.now())
         } catch {
             // A tick that failed must not take the daemon down: the next one
             // may well succeed, and a dead watchdog supervises nothing.
