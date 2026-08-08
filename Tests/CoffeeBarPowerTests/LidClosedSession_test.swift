@@ -481,6 +481,148 @@ private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
     #expect(written.ttlSeconds == 8 * 60 * 60)
 }
 
+@Test func armAnswersWithTheHoldItTookRatherThanTheOneItWasAskedFor() throws {
+    // Named bug this catches, and it reached the user as a printed number that
+    // was not true: `arm --ttl 999999` answered "armed: sleep disabled for up to
+    // 999999s" while the record on disk said 28800 and the watchdog reverted at
+    // eight hours. `site/docs.html` states the cap, so the product's two
+    // surfaces described the same hold differently and the CLI was the wrong one.
+    //
+    // READ BACK OFF THE JOURNAL, and never clamped a second time at the caller.
+    // A `min(ttl, maxTTLSeconds)` beside the print would be a copy of the rule
+    // that drifts the moment the cap moves, and it would still agree with a
+    // record that had been written wrong. What the machine is actually held for
+    // is what `decide()` reads, which is the file — so the answer comes from
+    // there.
+    let root = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let log = CallLog()
+    let url = root.appending(path: "state/probe-journal.json")
+    let store = FileJournalStore(url: url)
+    let service = ArmService(
+        journal: RecordingJournal(log: log, inner: store),
+        reader: GuardedJournalReader(url: url, requiredOwner: getuid(),
+                                     quarantineOnRefusal: false),
+        power: RecordingPower(log: log, state: .init(false)),
+        supervisor: RecordingSupervisor(log: log),
+        display: RecordingDisplay(log: log, awakeAfterForcing: false),
+        clock: { fixedNow },
+        monotonicClock: { fixedUptime },
+        displayVerifyDelay: 0)
+
+    let asked = 99_999_999
+    let held = try service.arm(ttlSeconds: asked)
+    let written = try #require(try store.load())
+
+    #expect(held == written.ttlSeconds, """
+        arm answered \(held)s and wrote \(written.ttlSeconds)s. The number a \
+        caller prints has to be the one the journal keeps: that record is what \
+        WatchdogDecision.decide reads, so it alone says when the machine sleeps \
+        again.
+        """)
+    #expect(held == JournalRecord.maxTTLSeconds, """
+        arm answered \(held)s for a request of \(asked)s. §8.2(5) caps a hold at \
+        \(JournalRecord.maxTTLSeconds)s regardless of what is asked.
+        """)
+    #expect(held != asked, """
+        arm answered with the \(asked)s it was handed, which is argv rather than \
+        a fact about the machine.
+        """)
+}
+
+@Test func armAnswersWithTheRequestedHoldWhenItIsUnderTheCap() throws {
+    // THE DISCRIMINATOR for the test above, and it is not padding: an
+    // implementation that returned `maxTTLSeconds` unconditionally — or the
+    // record's clamp applied to nothing — satisfies every assertion there. A
+    // request under the cap has to come back unchanged, or the printed number is
+    // wrong in the other direction for every ordinary arm.
+    let root = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let log = CallLog()
+    let url = root.appending(path: "state/probe-journal.json")
+    let store = FileJournalStore(url: url)
+    let service = ArmService(
+        journal: RecordingJournal(log: log, inner: store),
+        reader: GuardedJournalReader(url: url, requiredOwner: getuid(),
+                                     quarantineOnRefusal: false),
+        power: RecordingPower(log: log, state: .init(false)),
+        supervisor: RecordingSupervisor(log: log),
+        display: RecordingDisplay(log: log, awakeAfterForcing: false),
+        clock: { fixedNow },
+        monotonicClock: { fixedUptime },
+        displayVerifyDelay: 0)
+
+    let held = try service.arm(ttlSeconds: 900)
+
+    #expect(held == 900, "arm answered \(held)s for a 900s request, which is under the cap")
+    #expect(try #require(try store.load()).ttlSeconds == 900)
+}
+
+/// `Sources/CoffeeBarProbe/main.swift`, resolved from `#filePath`.
+///
+/// The probe is an executable with top-level code, so no test target can import
+/// it and call anything in it. Reading it is the only route from this suite to
+/// what it prints.
+private func probeMainSource() throws -> String {
+    let root = URL(fileURLWithPath: #filePath)  // …/Tests/CoffeeBarPowerTests/LidClosedSession_test.swift
+        .deletingLastPathComponent()            // …/Tests/CoffeeBarPowerTests
+        .deletingLastPathComponent()            // …/Tests
+        .deletingLastPathComponent()            // the package root
+    return try String(contentsOf: root.appending(path: "Sources/CoffeeBarProbe/main.swift"),
+                      encoding: .utf8)
+}
+
+@Test func theProbePrintsTheHoldItTookAndNotTheNumberOnTheCommandLine() throws {
+    // The half `armAnswersWithTheHoldItTookRatherThanTheOneItWasAskedFor` cannot
+    // reach. `arm` can answer perfectly and the probe can go on printing
+    // `invocation.ttlSeconds`, which is argv — the exact defect, with a correct
+    // service underneath it and every service-level check green.
+    //
+    // The BINDING is read out of the source and required in the printed line,
+    // rather than a fixed name being searched for. A guard looking for a literal
+    // `armed` variable fails on a correct rename, and a guard merely asserting
+    // that `invocation.ttlSeconds` is absent from that line passes for a line
+    // that prints a second clamp computed on the spot.
+    let source = try probeMainSource()
+    let ns = source as NSString
+
+    let printed = try NSRegularExpression(pattern: "^.*armed: sleep disabled.*$",
+                                          options: [.anchorsMatchLines])
+        .matches(in: source, range: NSRange(location: 0, length: ns.length))
+        .map { ns.substring(with: $0.range) }
+
+    // ANTI-VACUITY: a reworded message finds no line, and every assertion below
+    // would then be about a string that was never located.
+    let line = try #require(printed.count == 1 ? printed.first : nil,
+                            "main.swift has \(printed.count) lines announcing an arm: \(printed)")
+
+    let bound = try NSRegularExpression(pattern: "let\\s+(\\w+)\\s*=\\s*try\\s+service\\.arm\\(")
+        .matches(in: source, range: NSRange(location: 0, length: ns.length))
+        .map { ns.substring(with: $0.range(at: 1)) }
+    let binding = try #require(bound.count == 1 ? bound.first : nil, """
+        main.swift binds the result of service.arm() \(bound.count) time(s): \
+        \(bound). It calls arm and throws the answer away, so whatever it prints \
+        is not what the journal kept.
+        """)
+
+    #expect(line.contains("\\(\(binding))"), """
+        the probe announces the arm with
+          \(line.trimmingCharacters(in: .whitespaces))
+        which does not print `\(binding)`, the hold arm reported.
+        """)
+
+    #expect(!line.contains("invocation."), """
+        the probe announces the arm with
+          \(line.trimmingCharacters(in: .whitespaces))
+        `invocation` is argv. JournalRecord clamps the TTL to \
+        \(JournalRecord.maxTTLSeconds)s on the way to disk, so `--ttl 999999` \
+        prints a number the machine will not honour — and site/docs.html tells \
+        the same user the cap is eight hours.
+        """)
+}
+
 // MARK: - Rollback
 
 @Test func armRestoresThePriorValueFromTheRecordAfterTheSettingAlreadyChanged() throws {
