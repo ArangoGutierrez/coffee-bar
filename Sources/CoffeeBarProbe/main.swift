@@ -158,7 +158,13 @@ case .arm:
         supervisor: LaunchDaemonInstaller(runner: runner),
         display: PmsetDisplaySleeper(runner: runner))
     do {
-        try service.arm(ttlSeconds: invocation.ttlSeconds)
+        // ANNOUNCED FROM THE JOURNAL, never from argv. `JournalRecord` clamps
+        // the TTL to eight hours (§8.2(5)), so `--ttl 999999` used to print
+        // "up to 999999s" about a hold `WatchdogDecision.decide` ends at
+        // 28800 — and site/docs.html tells the same user the cap is eight
+        // hours. `arm` answers with the value it read back off the disk.
+        let held = try service.arm(ttlSeconds: invocation.ttlSeconds)
+        print("armed: sleep disabled for up to \(held)s, watchdog installed")
     } catch ArmError.journalPathRefused(let refusal) {
         // Nothing is held: the refusal lands before the first side effect.
         fail("""
@@ -181,7 +187,6 @@ case .arm:
     } catch {
         fail("could not arm: \(error)", code: 70)
     }
-    print("armed: sleep disabled for up to \(invocation.ttlSeconds)s, watchdog installed")
     exit(0)
 
 case .report:

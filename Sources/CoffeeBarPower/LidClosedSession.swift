@@ -125,7 +125,29 @@ public struct ArmService: Sendable {
         self.displayVerifyDelay = displayVerifyDelay
     }
 
-    public func arm(ttlSeconds: Int) throws {
+    /// Arms lid-closed mode and answers with the hold the JOURNAL kept.
+    ///
+    /// **The return value is read back off the disk, never handed straight
+    /// through.** `JournalRecord` clamps the TTL to §8.2(5)'s eight hours, so
+    /// the number a caller was given and the number the machine will honour are
+    /// different values whenever the request is over the cap — and the probe
+    /// printed the caller's one, telling a user their laptop would stay awake
+    /// for 999999s while `WatchdogDecision.decide` reverted it at 28800.
+    ///
+    /// It is the CONFIRMED record's value rather than `record.ttlSeconds`,
+    /// because the confirmation read is what already proves the file is there
+    /// and is the same read the daemon will make. Clamping a second time at the
+    /// print site would copy the rule instead, which drifts the moment the cap
+    /// moves and agrees with a record that was written wrong.
+    ///
+    /// `@discardableResult`, because the answer is a REPORT rather than the
+    /// point of the call: `arm` succeeds or throws, and a caller with nothing to
+    /// print is not making a mistake by ignoring it. `main.swift` is the one
+    /// caller that prints, and
+    /// `theProbePrintsTheHoldItTookAndNotTheNumberOnTheCommandLine` is what
+    /// keeps it printing this rather than argv.
+    @discardableResult
+    public func arm(ttlSeconds: Int) throws -> Int {
         // THE INVARIANT this function answers for:
         //
         //   `arm` never returns success while the system holds a setting the
@@ -199,9 +221,14 @@ public struct ArmService: Sendable {
             // possible; that residue belongs to the daemon's own next tick and
             // is recorded in the report rather than claimed as closed.
             let confirmed = (try? reader.read()) ?? nil
-            guard confirmed != nil else {
+            guard let confirmed else {
                 throw ArmError.journalVanished
             }
+
+            // The hold the machine is actually under, off the disk. Everything
+            // that ends this hold — the daemon's ticks, `revert`, `report` —
+            // reads this file, so it is the only value a caller may announce.
+            return confirmed.ttlSeconds
         } catch {
             rollBack(to: record.priorValue)
             throw error
