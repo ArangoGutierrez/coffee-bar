@@ -1076,6 +1076,62 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
     #expect(notifier.posted.isEmpty == false)
 }
 
+@Test func aRefusedJournalNotifiesBeforeTheBootoutThatEndsTheProcess() throws {
+    // The refusal path's half of the ordering `applyRevert` already pins.
+    //
+    // `uninstall()` boots out THIS daemon's own launchd job, so it does not
+    // return — the process is gone. Anything sequenced after it never runs.
+    // The refusal notification is the only account the user ever gets of why
+    // the machine stopped holding sleep, and a refusal is exactly the case
+    // where they are owed one: the journal was tampered with.
+    //
+    // `RecordingSupervisor` cannot see this. Its `uninstall` RETURNS, so the
+    // notification fires either way and the existing guard above passes on
+    // both orderings. `DyingSupervisor` blocks inside `uninstall` instead,
+    // which is what the real bootout does, and `try?` cannot absorb a call
+    // that never comes back — so the assertion runs at the last instant the
+    // reverting process is still alive.
+    let root = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let url = root.appending(path: "state/probe-journal.json")
+    let store = FileJournalStore(url: url)
+    try store.write(armedRecord(priorValue: true, ttlSeconds: 3600))
+
+    // The same tamper the guard above uses: a journal directory the store did
+    // not create, left writable by everyone, which the reader must refuse.
+    let stateDir = url.deletingLastPathComponent()
+    try FileManager.default.setAttributes([.posixPermissions: 0o777],
+                                          ofItemAtPath: stateDir.path)
+
+    let supervisor = DyingSupervisor()
+    let notifier = RecordingNotifier()
+    let service = WatchdogService(
+        reader: GuardedJournalReader(url: url, store: store, requiredOwner: getuid()),
+        power: RecordingPower(log: CallLog(), state: .init(true)),
+        supervisor: supervisor,
+        notifier: notifier,
+        environment: FakeEnvironment())
+
+    let thread = Thread {
+        _ = try? service.evaluate(now: fixedNow.addingTimeInterval(5),
+                                  lastHeartbeat: nil)
+    }
+    thread.start()
+    defer { supervisor.releaseTheCaller() }
+
+    #expect(supervisor.waitForUninstall(within: 10) == .success,
+            "the journal was refused and the watchdog never uninstalled the daemon")
+    let posted = notifier.posted
+    #expect(posted.count == 1
+            && posted[0].hasPrefix("refused the journal and restored sleep: "), """
+        the refusal reached `uninstall` having notified nothing. `bootout` ends \
+        this process, so a notification sequenced after it never fires: sleep \
+        comes back, the journal is quarantined, and the user is told neither.
+        posted: \(posted)
+        """)
+}
+
 @Test func revertNowUndoesAnArmedRunWhoseTTLHasHoursLeft() throws {
     // The developer escape hatch. A TTL of 8 h means `evaluate` would hold, so
     // this proves `revertNow` does not simply run the ordinary tick.
