@@ -152,88 +152,15 @@ public struct PanelView: View {
             // controls the brand doc assigns to `action`, which is web-only.
             .tint(brand(.state))
 
-            // The second control, and a SEPARATE question from the one above.
-            // That one says whether to hold at all; this says whether a hold
-            // covers the screen. Issue #12 settled that "coffee-bar never holds
-            // the display" is a DEFAULT and not a promise, so the user needs
-            // somewhere to change it — a setting nobody can find is a setting
-            // that does not exist.
-            //
-            // A fourth position on the Serving picker was the alternative and
-            // is rejected: it would make "keep my screen on" imply "hold
-            // unconditionally", which is not what a user asking for the screen
-            // means, and it would put the off switch and the screen on one
-            // control where they cannot be chosen independently.
-            //
-            // Same `.segmented` shape as above, and the labels come from the
-            // model for the same reason: `servingSummary` describes these two
-            // states in prose, and two literals here could drift from it with
-            // nothing to catch the drift (design §5.4).
-            Text("Display").font(.headline)
-
-            Picker("Display", selection: $model.holdDisplayAwake) {
-                Text(ServingModel.displayLabel(for: false)).tag(false)
-                Text(ServingModel.displayLabel(for: true)).tag(true)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .tint(brand(.state))
-
-            // The third control, and a third separate question: how much
-            // battery a hold may spend. Issue #11 made the floor a setting
-            // because 20% is a guess about somebody else's day — a user on a
-            // train wants it higher, a user beside a charger wants it lower —
-            // and a safety limit nobody can reach is one they work around by
-            // turning the product off.
-            //
-            // The segments come from `BatteryFloor.choices`, in CoffeeBarCore
-            // beside the permitted range, so an offered value the decision
-            // would bound away cannot be listed here. The labels come from the
-            // model for the reason the two controls above use it: design §5.4
-            // rules out asserting on rendered AppKit text, so a label written
-            // in this file is a label no check reads.
-            Text("Battery floor").font(.headline)
-
-            Picker("Battery floor", selection: $model.batteryFloorPercent) {
-                ForEach(BatteryFloor.choices, id: \.self) { percent in
-                    Text(ServingModel.floorLabel(for: percent)).tag(percent)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .tint(brand(.state))
-
-            // The fourth control, and a fourth separate question: what happens
-            // to everything that is NOT the agent. Issue #14 built the governor
-            // and shipped it with no caller at all, which is the shape issue
-            // #13 complains about one milestone earlier — so the user needs
-            // somewhere to turn it on, or it is a feature that does not exist.
-            //
-            // A TOGGLE and not a segmented picker, unlike the three controls
-            // above. Those choose between states of one thing: the screen
-            // sleeps or stays on, the floor is one of several percentages.
-            // This asks whether to do an extra thing at all, which is a binary
-            // opt-in, and the label carries the whole meaning.
-            //
-            // The label comes from the model, for the reason the others do:
-            // design §5.4 rules out asserting on rendered AppKit text, so a
-            // literal here is a literal no check reads — and the wording is
-            // constrained. macOS cannot promote a process, so any label
-            // implying a speed-up is a false claim (handoff §2.2).
-            //
-            // The SECOND of two opt-ins. It does nothing on its own: the
-            // demotable set is empty by default, and a user who has named
-            // nothing sees this switch change nothing whatever.
-            Text("Other apps").font(.headline)
-
-            Toggle(ServingModel.quietOthersLabel, isOn: $model.quietEverythingElse)
-                .toggleStyle(.switch)
-                .controlSize(.small)
-
-            // What is ACTUALLY held, beside the two controls that asked for it.
+            // What is ACTUALLY held, right under the control that asked for it.
             // The user has to be able to see that Auto is holding right now, or
-            // is not — the controls say what was asked for and this line says
+            // is not — the control says what was asked for and this line says
             // what happened.
+            //
+            // This matters MORE since the Display, Battery floor and Focus
+            // controls moved into the Preferences window, not less: their
+            // settings still decide what is held, and this is now the only
+            // place the panel reports the result of them.
             //
             // Rendered verbatim from the model, with no text built here. This
             // view composed the sentence until issue #12, and it read "the
@@ -326,30 +253,21 @@ public struct PanelView: View {
 
             Divider()
 
-            // Lid-closed mode, which this panel deliberately cannot switch on.
+            // NOTHING ABOUT LID-CLOSED MODE LIVES HERE, and this note is the
+            // whole of what replaced it. Issue #56: this panel rendered roughly
+            // 80 words explaining the mode, unconditionally, in a 260pt column.
             //
-            // It needs root, and coffee-bar never elevates its own privilege,
-            // so the honest surface is the command rather than a control. The
-            // sentence also says what the app CANNOT see: the journal is
-            // root-owned and unreadable here, measured, so a panel that stayed
-            // silent would read as "lid-closed mode is off" — a claim with no
-            // evidence behind it.
+            // It is neither live state nor a control, so it belongs to neither
+            // half of the split #50 established — this surface says what
+            // coffee-bar is doing NOW, and Preferences holds what the user
+            // configures. The short version moved to Preferences → Power beside
+            // the other power settings, and the explanation is on
+            // `site/docs.html`, which had none until that issue.
             //
-            // Rendered verbatim from the model, with no text built here, for
-            // the reason every other line in this file gives: M1 design §5.4
-            // forbids asserting on rendered AppKit text, so a sentence composed
-            // in this view is a sentence no check reads. The wording lives on
-            // `ServingModel.lidClosedAdvisory` and is asserted there.
-            //
-            // Unconditional, unlike the advisories above. There is no state to
-            // condition it on — that is the point of it.
-            Text(ServingModel.lidClosedAdvisory)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-
-            Divider()
+            // `theLidClosedSummaryIsInThePreferencesWindowAndNotInThePanel`
+            // holds both ends of that move and reads this file with its
+            // comments stripped, so this paragraph cannot satisfy it. Putting
+            // the render back turns it red.
 
             Label(batteryLine, systemImage: "bolt")
                 .font(.caption)
@@ -381,6 +299,43 @@ public struct PanelView: View {
             Link(PanelView.legalLine(), destination: PanelView.legalURL())
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            // The route to the Preferences window, and the only one this panel
+            // offers. Display, Battery floor and Focus are THERE now, so this
+            // link is the only way to reach three settings the panel used to
+            // carry — a control nobody can find is a control that does not
+            // exist, and this one link now stands for all three.
+            //
+            // Named precisely, because "they moved" without saying what moved
+            // sends the next reader back to the diff: `holdDisplayAwake`,
+            // `batteryFloorPercent` and `quietEverythingElse` are bound in
+            // `PreferencesView.swift`, not here.
+            //
+            // That sentence is also a FIXTURE, and deliberately so. This file
+            // must not NAME those three in code, and
+            // `eachMovedControlLivesInExactlyOneSurface` holds that by reading
+            // this file COMMENT-STRIPPED. Written raw, its negative half would
+            // fail on this correct tree — the paragraph you are reading is what
+            // would fail it. So this prose is load-bearing twice over: it tells
+            // a reader where the controls went, and it keeps that guard honest,
+            // because swapping the stripped read for a raw one turns the guard
+            // RED instead of quietly widening it.
+            //
+            // `SettingsLink` rather than a `Button` that sends an action:
+            // AppKit's selector for this has changed spelling across releases,
+            // so `NSApp.sendAction(Selector(("showSettingsWindow:")))` is a
+            // string that compiles on every OS and works on some. This is the
+            // typed equivalent, and it needs macOS 14 — which is already this
+            // package's deployment target.
+            //
+            // `SettingsLink` OPENS the window and does not ACTIVATE the app,
+            // and for an `LSUIElement` process those are different things —
+            // measured, see `PreferencesView.swift`, which is where the fix
+            // lives. NOTHING may be hung off this link to do it: a
+            // `simultaneousGesture` attached here was measured never to fire.
+            SettingsLink {
+                Text("Preferences…")
+            }
 
             Button("Quit coffee-bar") { NSApplication.shared.terminate(nil) }
                 .keyboardShortcut("q")

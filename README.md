@@ -35,15 +35,15 @@ exist; it reads session state from agent hooks and from nothing else.
 - Under `Auto`, holds `PreventUserIdleSystemSleep`, bound to live agent session
   state.
 - **Holds no display assertion by default.** Your screen sleeps normally while
-  the work continues. A Display control in the panel opts in when you do want
-  the screen kept on.
+  the work continues. A Display control in the Preferences window opts in when
+  you do want the screen kept on.
 - Under `Auto`, releases when every agent is blocked on a human, not when a
   timer expires.
 - Shows how many sessions are working, and which ones are waiting on you.
 - Retires a session whose agent crashed, so a dead process cannot pin the
   machine awake forever.
 - A Serving switch with Off, Auto and On. **Off is an absolute veto.**
-- A battery floor: at or below 20% on battery, it does not hold.
+- A battery floor: at or below 15% on battery, it does not hold.
 
 It has no Dock icon and opens no window. Look for the cup at the right end of
 the menu bar.

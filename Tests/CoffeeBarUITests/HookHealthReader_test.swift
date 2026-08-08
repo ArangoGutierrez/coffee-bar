@@ -364,9 +364,29 @@ private func scratchCopy(of fixture: String) throws -> URL {
 /// Calls that put bytes on disk. Not a proof that no other route exists — the
 /// behavioural checks above are the first line of defence, and this is the
 /// second.
-private let forbiddenWriteCalls = [
-    "write(to:",
-    ".write(",
+///
+/// Internal rather than `private`, which in Swift is scoped to this file.
+/// `PreferencesView_test.swift` holds the same no-write line over the window
+/// that offers the Copy button, and it is the same line for the same reason:
+/// design §6 says print, never write. ONE list in this target, not two — a
+/// second copy drifts from this one, and the two guards then disagree about
+/// what a write is while both read green.
+let forbiddenWriteCalls = [
+    // ONE TOKEN for the write itself, and the pair it replaces is why. This
+    // list held `write(to:` and `.write(`, which between them match
+    // `Data.write(to:)` and `handle.write(contentsOf:)` and MISS the POSIX
+    // form completely: `write(fd, bytes, count)` carries neither a `to:` label
+    // nor a leading dot. `creat()` plus a bare `write(fd, …)` is eleven
+    // characters of Darwin and it walked straight through both entries.
+    //
+    // `write(` matches all three spellings, and it costs nothing measurable —
+    // no file either this guard or
+    // `thePreferencesWindowNeverWritesAnAgentToolsSettingsFile` reads contains
+    // the substring anywhere, comments included. Every `write(` under
+    // `Sources/` today is in `CoffeeBarPower`, `CoffeeBarShim`,
+    // `CoffeeBarProbe` or `CoffeeBarGovernorHarness`, and none of those names
+    // a way to reach an agent tool's settings file.
+    "write(",
     "createFile",
     "createDirectory",
     "forWritingTo",
@@ -375,16 +395,79 @@ private let forbiddenWriteCalls = [
     "moveItem",
     "copyItem",
     "replaceItem",
+    // The DESCRIPTOR half of the same POSIX route. `fopen` was already here and
+    // `creat()` was not, so the one call that opens a file for writing without
+    // naming a flag this list knows was the gap `write(` alone would still let
+    // a reader argue about. It matches neither `createFile` nor
+    // `createDirectory` — those spell `creat` then `e`.
+    "creat(",
     "O_WRONLY",
     "O_RDWR",
     "O_CREAT",
     "fopen",
+    // SHELLING OUT IS A WRITE. Every entry above names a way to put bytes on
+    // disk from inside this process, and a reviewer defeated the whole list by
+    // stepping outside it: a Button running
+    // `/bin/sh -c 'printf %s "$SNIP" > "$TARGET"'` with
+    // `TARGET = HookHealthReader.defaultURL(for: tool).path` rewrote every
+    // tool's real settings file, and the full suite stayed green.
+    //
+    // That is design §6 phase 2 — "print, never write" — shipping with every
+    // check green, on the one invariant the Agent tools section exists to
+    // protect. `Process(` is the only way a Swift process starts a subprocess
+    // without an explicit `import Darwin`, so it is where that route has to be
+    // refused.
+    //
+    // It costs nothing on a correct tree: `Process(` appears in exactly one
+    // file under Sources/, `CoffeeBarPower/CommandRunner.swift`, and that file
+    // names neither `.claude/settings.json` nor `settingsURL`, so this loop
+    // never reads it.
+    "Process(",
+    // THE OTHER WAY OUT OF THE PROCESS. `Process(` above refuses the direct
+    // subprocess; `NSAppleScript(source: "do shell script …")` runs the same
+    // `/bin/sh` through a different framework and needs no `import Darwin` and
+    // no `Process` anywhere. It is the shape a reviewer reaches for once the
+    // obvious one is closed, and it appears nowhere under `Sources/` today.
+    "NSAppleScript",
+]
+
+/// How a source file GETS to an agent tool's settings file.
+///
+/// The list this guard enters its denylist loop on, and the distinction it
+/// draws is the whole point: REACHING the path, not SPELLING it. The first two
+/// entries were the whole condition once, and a measured mutation walked past
+/// them — a six-line `HookInstaller` appended to
+/// `Sources/CoffeeBarUI/ProcessGovernance.swift` calling
+/// `try? Data(snippet.utf8).write(to: HookHealthReader.defaultURL(for: tool))`,
+/// with a `Button("Install")` beside Reveal in the Preferences window. That
+/// build TRUNCATES AND OVERWRITES `~/.claude/settings.json`,
+/// `~/.codex/hooks.json` and `~/.cursor/hooks.json`, and the whole suite stayed
+/// green: `ProcessGovernance.swift` spells neither `.claude/settings.json` nor
+/// `settingsURL`, so the loop never read it.
+///
+/// The invariant is a PRODUCT rule — design §6, print never write — and it was
+/// enforced as a per-file substring ban. A file does not need to know how the
+/// path is spelled to overwrite it. It needs a function that hands the path
+/// over, and there are exactly two of those.
+///
+/// ADDING AN ENTRY IS THE MAINTENANCE COST, stated rather than hidden: a third
+/// accessor that returns one of these URLs belongs here the day it is written.
+/// The `knowsThePath` equality below is what makes that visible — a new caller
+/// of an accessor already listed turns it red rather than joining silently.
+let pathReachingTokens = [
+    ".claude/settings.json",
+    "settingsURL",
+    "HookHealthReader.defaultURL",
+    "HookHealth.settingsPath",
 ]
 
 @Test func noSourceFileThatKnowsTheSettingsPathCanWriteToIt() throws {
     // A behavioural check only covers the paths it drives. This one reads the
-    // sources instead: whichever file knows where `~/.claude/settings.json`
-    // lives must contain no call that puts bytes on disk.
+    // sources instead: whichever file can REACH `~/.claude/settings.json` must
+    // contain no call that puts bytes on disk.
+    //
+    // REACH, not spell — `pathReachingTokens` carries the measured reason, and
+    // it is the difference between this guard and the one a mutation defeated.
     let files = FileManager.default
     let sources = packageRoot.appending(path: "Sources")
 
@@ -399,13 +482,12 @@ private let forbiddenWriteCalls = [
     var knowsThePath: [String] = []
     for relative in swiftFiles {
         let source = try String(contentsOf: sources.appending(path: relative), encoding: .utf8)
-        guard source.contains(".claude/settings.json") || source.contains("settingsURL")
-        else { continue }
+        guard pathReachingTokens.contains(where: { source.contains($0) }) else { continue }
         knowsThePath.append((relative as NSString).lastPathComponent)
 
         for call in forbiddenWriteCalls {
             #expect(!source.contains(call), """
-                \(relative) knows where ~/.claude/settings.json lives and names \
+                \(relative) can reach an agent tool's settings file and names \
                 \(call). Design §6 forbids writing that file: print the snippet \
                 for the user to paste instead.
                 """)
@@ -428,9 +510,32 @@ private let forbiddenWriteCalls = [
     // the anchor rather than a cost of it — the loop above now holds the same
     // no-write line over the model that renders the advice as it does over the
     // reader that produced it.
+    //
+    // `HookSnippet.swift` joined it next, and it is the file design §6 exists
+    // for: it PRINTS what a writer would otherwise have written. The line that
+    // matches this scan is the one recording which file its MATCHER shape was
+    // measured from — not its command form, whose own comment cites
+    // `docs/QUICKSTART.md` but no SETTINGS path, which is what this scan looks
+    // for — and it is admitted rather than reworded, because a comment edited to
+    // slip past this anchor is how the next file that really does write one
+    // gets in.
+    //
+    // `PreferencesView.swift` joined when this scan started keying on the
+    // ACCESSORS rather than on the spelling, and it is the file the widening
+    // exists for. It names `HookHealth.settingsPath(for:)` to LABEL each tool's
+    // row and `HookHealthReader.defaultURL(for:)` to hand Finder something to
+    // select — two ways to hold the path of a file this window must never
+    // write, in the one surface that offers the button a helpful refactor would
+    // turn into an installer.
+    //
+    // It is also what stops the widening being undone quietly. Delete the label
+    // and the Reveal button and this window drops out of the scan; the equality
+    // below then goes RED rather than letting a file leave the loop in silence.
     #expect(knowsThePath.sorted() == ["HookHealth.swift",
                                       "HookHealthReader.swift",
+                                      "HookSnippet.swift",
+                                      "PreferencesView.swift",
                                       "ServingModel.swift",
                                       "TelemetryRecon.swift"],
-            "the set of files that know the settings path changed: \(knowsThePath.sorted())")
+            "the set of files that can reach the settings path changed: \(knowsThePath.sorted())")
 }

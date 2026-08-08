@@ -119,6 +119,58 @@ struct CoffeeBarMenuBarApp: App {
             MenuBarLabel(isServing: model.isServing)
         }
         .menuBarExtraStyle(.window)
+
+        // The Preferences window, as a `Settings` scene rather than a window
+        // this app opens for itself.
+        //
+        // `Settings` is what puts the standard ⌘, on it and what makes
+        // `SettingsLink` in the panel work at all; it also gives the window one
+        // identity, so the keyboard route and the panel button raise the SAME
+        // window instead of a second copy.
+        //
+        // The same `model` the panel holds, not a second one. Two models would
+        // each own a listener and a ticker, and a setting changed in this
+        // window would not reach the one enforcing the battery floor.
+        Settings {
+            PreferencesView(model: model)
+        }
+        // NO `.windowResizability(.contentMinSize)` HERE, and that absence is
+        // measured rather than an oversight. It is the obvious reach for a
+        // pinned settings window, it was tried, and it changes NOTHING for this
+        // scene: with it the window still reported `AXSize.settable=false`, and
+        // with the style mask fixed in `PreferencesView` it reports
+        // `AXSize.settable=true` WITHOUT it. Both directions were built and
+        // measured. A modifier that moves no measurement is a claim the next
+        // reader has to re-test, so it is not here.
+        //
+        // What does unpin the window is the style mask, in `PreferencesView`.
+        //
+        // The size the window OPENS at. `idealWidth`/`idealHeight` on the
+        // content did not decide it: with the flexible frame in place the
+        // window came up at 900x450, which is SwiftUI's own fallback and far
+        // too wide — a 900-point row stretches the battery-floor slider across
+        // the window and pushes the two buttons an inch from the path they act
+        // on.
+        //
+        // THE WIDTH IS THE MAINTAINER'S, THE HEIGHT IS THE MEASUREMENT'S.
+        // This opened at 520 first and his verdict was "you over did the width,
+        // the height is ok now", so the width is back to the 420 this window
+        // has always shipped at. His complaint was vertical scrolling; widening
+        // it was never part of the fix, and `maxWidth: .infinity` on the
+        // content means anyone who wants it wider drags it once and macOS
+        // remembers.
+        //
+        // 560 high is derived from the measurement, not chosen to look round.
+        // Content ran to 441 points inside a 360-point viewport, and
+        // `hookAdvisory` was NIL when that was measured, so an unwired tool
+        // adds a caption the height budget has to carry: the comparable caption
+        // below it measures 52 points plus 18 of stack spacing, and 441 + 70 is
+        // 511.
+        //
+        // This is a DEFAULT, and only the first launch sees it. Once the window
+        // is resizable macOS autosaves the frame, so a user who drags it keeps
+        // their size — which is the point of the whole change.
+        .defaultSize(width: 420, height: 560)
     }
 }
 

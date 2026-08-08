@@ -51,7 +51,11 @@ private func htmlUnescaped(_ text: String) -> String {
 ///
 /// Printing two whole `<nav>` blocks and leaving the reader to diff them by eye
 /// is how a real failure gets dismissed as noise.
-private func firstDifference(_ a: String, _ b: String) -> String {
+///
+/// Internal rather than private, for the reason `repoRoot()` is: it is shared
+/// with `DocsClaims_test.swift`, whose hook-block guard prints the same kind of
+/// two-block failure. A second copy would be a second thing to get wrong.
+func firstDifference(_ a: String, _ b: String) -> String {
     let left = a.split(separator: "\n", omittingEmptySubsequences: false)
     let right = b.split(separator: "\n", omittingEmptySubsequences: false)
     for i in 0..<max(left.count, right.count) {
@@ -193,7 +197,7 @@ private func publishedPolicyRows(_ page: String) throws -> [PolicyRow] {
 /// two columns would otherwise silently change what every cell means, and the
 /// comparison would go on passing against a table that now says something else.
 private let visibleTableHeadings = [
-    "Serving", "Display", "On battery at or below 20%", "An agent is working",
+    "Serving", "Display", "On battery at or below 15%", "An agent is working",
     "Holds the system awake", "Holds the display awake",
     "Held back by the battery floor",
 ]
