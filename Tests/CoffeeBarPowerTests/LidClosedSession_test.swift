@@ -1627,11 +1627,22 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
     // `WatchdogPolicy.init` calls rather than keeping its own clamp.
     //
     // This asserts the DAEMON honours the bounded value rather than the raw
-    // one. An absurd floor of 1000 bounds to the top of `permitted`, so a
-    // machine on battery AT that charge is at or below it and must revert. A
-    // second, unbounded path would compare against 1000, never fire, and leave
-    // the abort silently dead — the same class of defect as the unwired input
-    // above.
+    // one. An absurd floor of 1000 bounds to the top of `permitted`, which is
+    // 50.
+    //
+    // **THE SECOND READING IS THE ONE THAT DISCRIMINATES, and the first cannot.**
+    // The rule is `pct <= policy.batteryFloorPercent`. At 50 the bounded floor
+    // reverts (50 <= 50) and so does an unbounded 1000 (50 <= 1000), so a
+    // reading AT the floor gives the same answer either way. This comment
+    // previously claimed an unbounded path "would compare against 1000, never
+    // fire, and leave the abort silently dead" — that is backwards. An
+    // unbounded floor fires MORE often, never less, so no reading at or below
+    // 50 can tell the two apart, and the guard was passing for a reason
+    // unrelated to what it said it checked.
+    //
+    // 60 separates them: above the bounded floor, below the raw one. Bounded
+    // holds (60 > 50); unbounded reverts (60 <= 1000). Only the second reading
+    // fails when the defect is reintroduced.
     let root = try makeScratchRoot()
     defer { try? FileManager.default.removeItem(at: root) }
 
@@ -1639,18 +1650,41 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
     #expect(policy.batteryFloorPercent == BatteryFloor.bounded(1000))
     #expect(policy.batteryFloorPercent == BatteryFloor.permitted.upperBound)
 
-    let armed = try makeArmedWatchdog(
+    let atTheFloor = try makeArmedWatchdog(
         root: root, record: armedRecord(priorValue: false, ttlSeconds: 28_800),
         environment: FakeEnvironment(
             reading: PowerReading(source: .battery, percent: 50)),
         policy: policy)
 
-    #expect(try armed.service.evaluate(
+    #expect(try atTheFloor.service.evaluate(
         // `nil`, so the TTL-only substitution keeps the heartbeat guard quiet
         // and the input under test is the ONLY thing that can revert.
         now: fixedNow.addingTimeInterval(60),
         monotonicNow: uptime(after: 60), lastHeartbeat: nil)
         == .revert(.batteryFloor))
+
+    // A SECOND root: the revert above cleared the first journal, so reusing it
+    // would evaluate a machine with nothing armed and hold for that reason
+    // instead of the one under test.
+    let aboveRoot = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: aboveRoot) }
+
+    let aboveTheFloor = try makeArmedWatchdog(
+        root: aboveRoot, record: armedRecord(priorValue: false, ttlSeconds: 28_800),
+        environment: FakeEnvironment(
+            reading: PowerReading(source: .battery, percent: 60)),
+        policy: policy)
+
+    #expect(try aboveTheFloor.service.evaluate(
+        now: fixedNow.addingTimeInterval(60),
+        monotonicNow: uptime(after: 60), lastHeartbeat: nil)
+        == .hold, """
+        the daemon reverted at 60% against a floor that bounds to 50, so it is \
+        reading the RAW configured floor of 1000 rather than the bounded one. \
+        That is the defect `BatteryFloor.bounded` exists to prevent, and it \
+        makes the abort fire on machines that are nowhere near empty.
+        """)
+    #expect(aboveTheFloor.power.state.current == true)
 }
 
 @Test func theThermalMirrorMapsEveryStateProcessInfoCanReport() {
