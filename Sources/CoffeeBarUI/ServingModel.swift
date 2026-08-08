@@ -424,7 +424,53 @@ public final class ServingModel {
     /// `/Applications` fails, and the user would have followed the instructions
     /// and still met a refusal.
     nonisolated public static func lidClosedInstallCommand(probeAt path: String) -> String {
-        "sudo install -o root -g wheel -m 755 \(path) \(privilegedProbePath)"
+        "sudo install -o root -g wheel -m 755 "
+        + "\(shellQuoted(path)) \(shellQuoted(privilegedProbePath))"
+    }
+
+    /// `path` as exactly ONE operand of a shell command line.
+    ///
+    /// **Every command on this surface is printed to be pasted into a ROOT
+    /// shell**, so where the word boundaries fall is not cosmetic. The source
+    /// path is composed from `Bundle.main.executableURL` — the user never chose
+    /// it with a shell in mind, and `~/My Apps`, a `Coffee Bar.app` rename and
+    /// any home directory with a space in it each put a space in the middle of
+    /// a line that runs as uid 0. Interpolated bare, that line hands
+    /// `install(1)` four operands, which makes it read the last as a
+    /// destination DIRECTORY:
+    ///
+    ///     install: /Library/PrivilegedHelperTools/coffee-bar-probe: Not a directory
+    ///
+    /// The user is told their own destination is wrong about a file they were
+    /// told to create. An apostrophe in the path is worse — the shell refuses
+    /// the whole line — and a `$(…)` or a backtick is worse again, because that
+    /// substitution RUNS, as root, measured: `$(id -u)` in a fixture path
+    /// expanded to `502` before this existed.
+    ///
+    /// POSIX single quotes, because between them every byte is literal: no
+    /// expansion, no escape sequence, no globbing. The single quote is the one
+    /// character that cannot appear inside them, so it is closed, escaped and
+    /// reopened as `'\''` — what `shlex.quote` produces, and what `install`
+    /// then receives as one apostrophe.
+    ///
+    /// **Left alone when nothing needs quoting**, deliberately rather than as a
+    /// shortcut. This window's whole premise is that a user READS the command
+    /// before running it as root, and quotes around a path that does not need
+    /// them invite the reader to wonder what is being hidden. The bare-word set
+    /// is `shlex.quote`'s: alphanumerics and `_@%+=:,./-`. Everything else is
+    /// quoted whether or not this author can say what a shell would do with it,
+    /// which is the conservative direction — a path quoted needlessly still
+    /// installs, and one that needed it does not.
+    ///
+    /// `aShellFindsNoSyntaxInTheProbePathHoweverItIsSpelled` holds this against
+    /// a real `/bin/sh` rather than against a second implementation of these
+    /// rules.
+    nonisolated static func shellQuoted(_ path: String) -> String {
+        let bareWord = Set(
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@%+=:,./-")
+        guard !path.isEmpty else { return "''" }
+        guard path.contains(where: { !bareWord.contains($0) }) else { return path }
+        return "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     /// The command that arms lid-closed mode.
@@ -443,7 +489,7 @@ public final class ServingModel {
     /// first place, on a surface where no guard could see it because the model
     /// and the checks read the same value.
     nonisolated public static let lidClosedCommand =
-        "sudo \(privilegedProbePath) \(ProbeVerb.arm.rawValue)"
+        "sudo \(shellQuoted(privilegedProbePath)) \(ProbeVerb.arm.rawValue)"
 
     /// The command that prints what is currently armed.
     ///
@@ -469,7 +515,7 @@ public final class ServingModel {
     /// copy is root-owned `0755` under a root-only directory, and by the time
     /// anyone asks what is armed it is already there.
     nonisolated public static let lidClosedReportCommand =
-        "sudo \(privilegedProbePath) \(ProbeVerb.report.rawValue)"
+        "sudo \(shellQuoted(privilegedProbePath)) \(ProbeVerb.report.rawValue)"
 
     /// The short version of lid-closed mode, for the Preferences window.
     ///
