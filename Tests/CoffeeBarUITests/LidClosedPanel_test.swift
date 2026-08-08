@@ -807,3 +807,242 @@ private func declaredExecutables() throws -> [String] {
         type a path that is not on their machine.
         """)
 }
+
+// MARK: - Issue #79: the sentence is pasted into a root shell, so it has to
+//                    survive one
+
+/// What `/bin/sh` made of a command line, having run none of it.
+private struct ShellSplit {
+    let status: Int32
+    let words: [String]
+    let complaint: String
+}
+
+/// Splits `command` with a REAL shell, which executes nothing.
+///
+/// `printf '%s\0' <command>` hands every WORD of the command line to `printf(1)`
+/// as an argument, and `printf` prints its arguments. `sudo`, `install` and both
+/// paths arrive as data; no privileged verb is reached and nothing is installed.
+///
+/// **NUL-separated, and a newline separator was measured wrong here.** A path
+/// may contain a newline — APFS permits it — and `printf '%s\n'` then prints one
+/// correctly quoted operand across two lines, which is indistinguishable from
+/// two operands. The first draft of this helper counted that as 11 words for a
+/// command that was already right. NUL is the one byte a path cannot contain.
+///
+/// **A real `sh` rather than a splitter written here, and the difference is what
+/// makes this a test.** Quoting and splitting are inverse operations, so a
+/// hand-written splitter in this file would encode the same author's beliefs as
+/// the quoter under test and agree with it whether or not either matches a
+/// shell. This asks the program the user will actually paste into.
+///
+/// A non-zero status is a finding rather than a harness error: an unbalanced
+/// quote — which is what an unquoted apostrophe in a path produces — makes `sh`
+/// refuse the whole line, so it is returned and asserted on.
+private func shellSplit(of command: String) throws -> ShellSplit {
+    let sh = Process()
+    sh.executableURL = URL(fileURLWithPath: "/bin/sh")
+    sh.arguments = ["-c", "printf '%s\\0' \(command)"]
+
+    let out = Pipe()
+    let err = Pipe()
+    sh.standardOutput = out
+    sh.standardError = err
+    try sh.run()
+
+    // Both pipes drained before `waitUntilExit`: a shell that writes more than a
+    // pipe buffer while nobody reads deadlocks, and a diagnostic is exactly what
+    // gets written on the failing path this exists to report.
+    let printed = out.fileHandleForReading.readDataToEndOfFile()
+    let complained = err.fileHandleForReading.readDataToEndOfFile()
+    sh.waitUntilExit()
+
+    // `printf` writes the separator AFTER each word, so the split's last element
+    // is the empty tail rather than a word. `omittingEmptySubsequences: false`
+    // keeps an empty OPERAND — which a broken quoter can produce — visible.
+    let words = printed
+        .split(separator: 0, omittingEmptySubsequences: false)
+        .dropLast()
+        .map { String(decoding: $0, as: UTF8.self) }
+
+    return ShellSplit(
+        status: sh.terminationStatus,
+        words: words,
+        complaint: String(decoding: complained, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines))
+}
+
+@MainActor
+@Test func theInstallCommandKeepsTheProbePathAsOneOperandWhateverItIsSpelledLike() throws {
+    // Named bug this catches, and the user meets it as root. The window renders
+    // this command with `.textSelection(.enabled)` for the express purpose of
+    // being pasted into a root shell, and the path was interpolated bare. Give
+    // `install(1)` four operands and it reads the last as a destination
+    // DIRECTORY:
+    //
+    //   $ sudo install -o root -g wheel -m 755 /Users/x/My Apps/CoffeeBar.app/Contents/MacOS/coffee-bar-probe /Library/PrivilegedHelperTools/coffee-bar-probe
+    //   install: /Library/PrivilegedHelperTools/coffee-bar-probe: Not a directory
+    //
+    // The error names a path the user never typed, about a file they were told
+    // to create. `~/My Apps`, a `Coffee Bar.app` rename, and any home directory
+    // with a space in it all reach it.
+    //
+    // WHY NO GUARD SAW IT: `theProbePathIsDerivedFromTheBundleAndNotAHardcodedLiteral`
+    // and `theArmedProbeIsNeverTheCopyInsideTheAppBundle` drive four "real
+    // install" locations each, and not one of the eight contains a space. The
+    // fixtures below are those same installs with the one property that was
+    // missing, so this is the blind spot rather than a new surface.
+    let awkward: [(label: String, path: String)] = [
+        ("a folder with a space in it",
+         "/Users/somebody/My Apps/CoffeeBar.app/Contents/MacOS/coffee-bar-probe"),
+        ("an apostrophe in the home directory",
+         "/Users/o'brien/Desktop/CoffeeBar.app/Contents/MacOS/coffee-bar-probe"),
+    ]
+
+    // The operand COUNT is derived from a path that needs no quoting at all,
+    // rather than typed here: quoting changes how a path is SPELLED and must not
+    // change how many operands `install` is handed. A literal would also have to
+    // be kept in step with the command's flags, and drift there would look like
+    // a fault in the quoter.
+    let plain = ServingModel.documentedProbePath
+    let baseline = try shellSplit(of: ServingModel.lidClosedInstallCommand(probeAt: plain))
+
+    // ANTI-VACUITY on that baseline, and it is not optional: a splitter that
+    // returned nothing would make every comparison below pass.
+    #expect(baseline.status == 0,
+            "/bin/sh could not parse the command for a plain path: \(baseline.complaint)")
+    #expect(baseline.words.count == 10, """
+        the install command splits into \(baseline.words.count) words for a path \
+        that needs no quoting: \(baseline.words). This guard reads \
+        `sudo install -o root -g wheel -m 755 <source> <destination>`, which is 10.
+        """)
+    #expect(Array(baseline.words.suffix(2)) == [plain, ServingModel.privilegedProbePath], """
+        the last two words of the install command are \
+        \(Array(baseline.words.suffix(2))); they have to be the source the app \
+        ships and the destination root can trust.
+        """)
+
+    for probe in awkward {
+        let command = ServingModel.lidClosedInstallCommand(probeAt: probe.path)
+        let split = try shellSplit(of: command)
+
+        #expect(split.status == 0, """
+            for \(probe.label), /bin/sh cannot parse the line coffee-bar prints \
+            at all (exit \(split.status)): \(split.complaint)
+            It prints:
+              \(command)
+            and a user pastes that into a root shell.
+            """)
+
+        #expect(split.words.count == baseline.words.count, """
+            for \(probe.label), the printed command is \(split.words.count) shell \
+            operands where the same command for a plain path is \
+            \(baseline.words.count):
+              \(split.words)
+            install(1) reads its last operand as a destination directory once it \
+            is given more than two, so the user is told their own destination is \
+            "Not a directory". It prints:
+              \(command)
+            """)
+
+        #expect(Array(split.words.suffix(2)) == [probe.path, ServingModel.privilegedProbePath], """
+            for \(probe.label), the shell hands install(1) \
+            \(Array(split.words.suffix(2))) as its last two operands. The source \
+            has to arrive EXACTLY as the path is spelled on disk — a path the \
+            shell re-spells is a file that is not there. It prints:
+              \(command)
+            """)
+
+        // THE SENTENCE, which is what the user is actually handed. A fix that
+        // corrects a helper the summary stops calling is not a fix — the same
+        // reason `theArmedProbeIsNeverTheCopyInsideTheAppBundle` reads the
+        // summary rather than a command accessor.
+        #expect(ServingModel.lidClosedSummary(probeAt: probe.path).contains(command), """
+            for \(probe.label), the Preferences window does not print the install \
+            command this guard checked. It reads:
+            \(ServingModel.lidClosedSummary(probeAt: probe.path))
+            """)
+    }
+}
+
+@MainActor
+@Test func aShellFindsNoSyntaxInTheProbePathHoweverItIsSpelled() throws {
+    // A SPACE IS NOT THE BOUND, and this is where that is stated. Every
+    // character below is legal in an APFS file name and every one of them means
+    // something else to `sh`: `$(…)` and a backtick RUN what they enclose, `;`
+    // ends the command, `&` backgrounds it, `*` globs, `~` is expanded to
+    // somebody's home, and a newline is a command separator. The line under test
+    // is printed to be pasted into a ROOT shell, so a path is UNTRUSTED INPUT to
+    // a command that runs as uid 0 — the user's own path, but they did not
+    // choose it with a shell in mind.
+    //
+    // Driven through `lidClosedInstallCommand` rather than any quoting helper,
+    // deliberately: the property is about the command the window prints, and a
+    // check on a helper stays green when the command stops calling it.
+    //
+    // Round-tripped through /bin/sh rather than compared against an expected
+    // spelling, because several quotings are correct and only one behaviour is.
+    let hostile = [
+        "/Users/somebody/My Apps/CoffeeBar.app/Contents/MacOS/coffee-bar-probe",
+        "/Users/o'brien/CoffeeBar.app/Contents/MacOS/coffee-bar-probe",
+        "/Users/x/$(id -u)/CoffeeBar.app/Contents/MacOS/coffee-bar-probe",
+        "/Users/x/a;true/CoffeeBar.app/Contents/MacOS/coffee-bar-probe",
+        "/Users/x/back`tick`/CoffeeBar.app/Contents/MacOS/coffee-bar-probe",
+        "/Users/x/star*/CoffeeBar.app/Contents/MacOS/coffee-bar-probe",
+        "/Users/x/tilde~/CoffeeBar.app/Contents/MacOS/coffee-bar-probe",
+        "/Users/x/two\nlines/CoffeeBar.app/Contents/MacOS/coffee-bar-probe",
+        "/Users/x/\"double\"/CoffeeBar.app/Contents/MacOS/coffee-bar-probe",
+        "/Users/x/Ünïcode Apps/CoffeeBar.app/Contents/MacOS/coffee-bar-probe",
+        "/Applications/CoffeeBar.app/Contents/MacOS/coffee-bar-probe",
+    ]
+
+    for path in hostile {
+        let command = ServingModel.lidClosedInstallCommand(probeAt: path)
+        let split = try shellSplit(of: command)
+
+        #expect(split.status == 0, """
+            /bin/sh refused the whole line (exit \(split.status)) for
+              \(path)
+            complaining: \(split.complaint)
+            It prints:
+              \(command)
+            """)
+
+        #expect(split.words.count == 10, """
+            for
+              \(path)
+            the printed command is \(split.words.count) shell operands rather \
+            than 10:
+              \(split.words)
+            install(1) reads its last operand as a destination DIRECTORY the \
+            moment it is handed more than two. It prints:
+              \(command)
+            """)
+        #expect(Array(split.words.suffix(2)) == [path, ServingModel.privilegedProbePath], """
+            the shell hands install(1) \(Array(split.words.suffix(2))) \
+            where the path on disk is
+              \(path)
+            A path the shell re-spells — or one it EXPANDS, which is the case a \
+            count check alone would miss — names a file that is not there, and \
+            this runs as root. It prints:
+              \(command)
+            """)
+    }
+
+    // THE ASSUMPTION the arm and report commands rest on, pinned rather than
+    // trusted. Those two take no parameter — `privilegedProbePath` is the only
+    // path they can name — and guards in this file split them on spaces to read
+    // the binary out. That is sound only while the constant is one bare shell
+    // word, and `probeProductName` is what could change it. The safe set is
+    // written out here rather than read from the model, so this compares against
+    // an independent value.
+    let bareWord = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@%+=:,./-")
+    let unsafe = ServingModel.privilegedProbePath.filter { !bareWord.contains($0) }
+    #expect(unsafe.isEmpty, """
+        \(ServingModel.privilegedProbePath) contains "\(unsafe)", which a shell \
+        does not read as part of a bare word. The printed command may well still \
+        be safe — every path in it is quoted — but the guards that read the \
+        binary out of the arm command by splitting on spaces are not, and \
+        neither is anything else here that assumed the destination is one word.
+        """)
+}
