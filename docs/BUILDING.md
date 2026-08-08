@@ -42,6 +42,23 @@ first and invoke the binary directly:
     swift build
     sudo .build/debug/coffee-bar-probe report
 
+`report` is the one you can run that way. `arm`, `revert` and `watchdog` need
+more than uid 0: they install or remove a launchd job, and
+`LaunchDaemonInstaller` refuses a program path whose components are not
+root-owned and closed to everyone else. A build tree under `$HOME` fails that,
+and so does an installed app — macOS ships `/Applications` writable by every
+administrator account, which is issue #75. Install a copy where root can trust
+it and run that:
+
+    sudo install -o root -g wheel -m 755 \
+      /Applications/CoffeeBar.app/Contents/MacOS/coffee-bar-probe \
+      /Library/PrivilegedHelperTools/coffee-bar-probe
+    sudo /Library/PrivilegedHelperTools/coffee-bar-probe arm
+
+The refusal is the feature: launchd execs that file as root at every boot, so a
+job pointed at a binary another account can rewrite is root persistence for
+whoever gets there first.
+
 **coffee-bar itself never runs any of them.** The app never elevates its own
 privilege (design §6), so there is no control anywhere in it that arms the mode —
 you type the command yourself, in your own shell. That is the same posture the

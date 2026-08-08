@@ -55,21 +55,23 @@ private func uiPackageRoot() -> URL {
         .deletingLastPathComponent()    // the package root
 }
 
-/// The one probe location every check below composes its expectations from.
+/// The install this file drives `lidClosedSummary` with.
 ///
 /// **Fixed, and never this machine's.** The app derives the probe's path from
-/// its own bundle, so on a developer's Mac the printed command names a worktree
-/// and on a user's it names wherever they dragged the app. A check that read the
-/// live value would assert a different string on every machine and could not be
+/// its own bundle, so on a developer's Mac the summary names a worktree and on a
+/// user's it names wherever they dragged the app. A check that read the live
+/// value would assert a different string on every machine and could not be
 /// compared against a documentation page at all.
 ///
 /// `documentedProbePath` is the disk-image location, which is the one a page can
 /// print, and `theBundleTheScriptAssemblesCarriesTheProbe` holds it against the
-/// APP_NAME `scripts/build-app.sh` actually assembles. That two of these checks
-/// then read the SAME constant is not circular: what they hold is the composed
-/// COMMAND — the sudo, the verb, the ordering — and
-/// `theProbePathIsDerivedFromTheBundleAndNotAHardcodedLiteral` is what holds the
-/// derivation itself, against locations that are not this one.
+/// APP_NAME `scripts/build-app.sh` actually assembles.
+///
+/// **It is the install SOURCE, since issue #75, and no longer what gets
+/// `sudo`ed.** The arm and report commands take no path: `arm` validates its own
+/// program path and refuses every location an app can be installed to, so those
+/// two name `privilegedProbePath` on every machine. What still varies — and what
+/// this value stands in for — is the copy the user has to install FROM.
 private let documentedProbe = ServingModel.documentedProbePath
 
 @MainActor
@@ -84,11 +86,11 @@ private let documentedProbe = ServingModel.documentedProbePath
     // would otherwise restate. A command naming a verb the binary refuses is
     // the defect; a command naming the wrong REAL verb is the other one, so
     // both are asserted.
-    let words = ServingModel.lidClosedCommand(probeAt: documentedProbe).split(separator: " ").map(String.init)
+    let words = ServingModel.lidClosedCommand.split(separator: " ").map(String.init)
     let verb = words.last
 
     #expect(verb.flatMap { ProbeVerb(rawValue: $0) } == .arm, """
-        coffee-bar prints "\(ServingModel.lidClosedCommand(probeAt: documentedProbe))", whose last word is \
+        coffee-bar prints "\(ServingModel.lidClosedCommand)", whose last word is \
         \(words.last ?? "(none)"). ProbeVerb.arm is "\(ProbeVerb.arm.rawValue)".
         """)
 
@@ -96,8 +98,8 @@ private let documentedProbe = ServingModel.documentedProbePath
     // the command without `sudo` meets a permission error instead of the mode.
     #expect(ProbeVerb.arm.requiresRoot,
             "ProbeVerb.arm no longer requires root; the printed sudo is now wrong")
-    #expect(ServingModel.lidClosedCommand(probeAt: documentedProbe).hasPrefix("sudo "),
-            "coffee-bar prints \"\(ServingModel.lidClosedCommand(probeAt: documentedProbe))\", which does not start with sudo")
+    #expect(ServingModel.lidClosedCommand.hasPrefix("sudo "),
+            "coffee-bar prints \"\(ServingModel.lidClosedCommand)\", which does not start with sudo")
 }
 
 @MainActor
@@ -120,9 +122,9 @@ private let documentedProbe = ServingModel.documentedProbePath
     #expect(products.count >= 3,
             "parsed \(products.count) executable product(s) from Package.swift: \(products)")
 
-    let words = ServingModel.lidClosedCommand(probeAt: documentedProbe).split(separator: " ").map(String.init)
+    let words = ServingModel.lidClosedCommand.split(separator: " ").map(String.init)
     let invocation = try #require(words.dropFirst().first,
-                                  "the printed command has no binary: \(ServingModel.lidClosedCommand(probeAt: documentedProbe))")
+                                  "the printed command has no binary: \(ServingModel.lidClosedCommand)")
 
     // The LAST PATH COMPONENT, since issue #64. The command names an absolute
     // path now — the probe ships inside the bundle and is not on any PATH — so
@@ -189,14 +191,14 @@ private let documentedProbe = ServingModel.documentedProbePath
     // anywhere has been told nothing. Shortening the summary must not take it.
     let summary = ServingModel.lidClosedSummary(probeAt: documentedProbe)
 
-    #expect(summary.contains(ServingModel.lidClosedCommand(probeAt: documentedProbe)), """
-        the summary never prints \(ServingModel.lidClosedCommand(probeAt: documentedProbe)), so the user \
+    #expect(summary.contains(ServingModel.lidClosedCommand), """
+        the summary never prints \(ServingModel.lidClosedCommand), so the user \
         is told about a mode with no way to turn it on. It reads:
         \(summary)
         """)
 
-    #expect(summary.contains(ServingModel.lidClosedReportCommand(probeAt: documentedProbe)), """
-        the summary never prints \(ServingModel.lidClosedReportCommand(probeAt: documentedProbe)). The \
+    #expect(summary.contains(ServingModel.lidClosedReportCommand), """
+        the summary never prints \(ServingModel.lidClosedReportCommand). The \
         app cannot read the journal, so the command that CAN is the only \
         honest answer to "is it on?". It reads:
         \(summary)
@@ -339,7 +341,7 @@ private let documentedProbe = ServingModel.documentedProbePath
 
     // Both commands, verbatim from the model. The page and the window print one
     // string, and it is composed from `ProbeVerb` in exactly one place.
-    for command in [ServingModel.lidClosedCommand(probeAt: documentedProbe), ServingModel.lidClosedReportCommand(probeAt: documentedProbe)] {
+    for command in [ServingModel.lidClosedCommand, ServingModel.lidClosedReportCommand] {
         #expect(section.contains(command), """
             the lid-closed section of site/docs.html never prints "\(command)", \
             so the page documents a mode the reader cannot operate.
@@ -462,7 +464,7 @@ private func declaredExecutables() throws -> [String] {
         scripts/build-app.sh bundles \(products.sorted()). `coffee-bar-probe` is \
         not among them, so CoffeeBar.app — and the DMG built from it — ships \
         without the only entry point lid-closed mode has. The Preferences window \
-        prints "\(ServingModel.lidClosedCommand(probeAt: documentedProbe))" regardless.
+        prints "\(ServingModel.lidClosedCommand)" regardless.
         """)
 
     // A product name the manifest does not declare fails the BUILD, not this

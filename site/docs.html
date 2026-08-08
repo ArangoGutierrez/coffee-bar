@@ -239,18 +239,33 @@ what to paste and edits none of your files.</p>
 <p>The command is <code>coffee-bar-probe</code>, and it ships inside the app
 bundle beside coffee-bar itself. Nothing puts it on your <code>PATH</code>, so
 you invoke it by its full path. From the disk image that is
-<code>/Applications/CoffeeBar.app/Contents/MacOS/coffee-bar-probe</code>, and the
-commands below are written that way.</p>
+<code>/Applications/CoffeeBar.app/Contents/MacOS/coffee-bar-probe</code>.</p>
 
-<p>A Homebrew install lands in the Homebrew prefix rather than
-<code>/Applications</code>, so its path differs. The Preferences window prints
-these commands with the path this copy of coffee-bar actually has — it asks the
-running app where it is, which this page cannot do. Prefer the window's version
-if the two disagree.</p>
+<p><strong>You cannot arm it where it ships.</strong> Arming installs a launchd
+job that root runs and keeps running, so the probe refuses unless its own file is
+owned by root and sits in directories nobody else can write. No install location
+qualifies: macOS ships <code>/Applications</code> writable by every administrator
+account, and a Homebrew prefix, a build tree and a copy on your Desktop all belong
+to you. In any of them another process could swap the binary that root is about to
+run, and that is the refusal doing its job rather than a fault.</p>
+
+<p>So the mode is two commands. The first copies the probe to
+<code>/Library/PrivilegedHelperTools</code>, which macOS keeps root-owned for
+binaries a root process runs; the second arms that copy. Only the source path
+depends on where you installed coffee-bar, and the Preferences window prints the
+pair with the path this copy actually has — it asks the running app where it is,
+which this page cannot do. Prefer the window's version if the two disagree.</p>
 
 <h3>Arming it</h3>
 
-<p><code>sudo /Applications/CoffeeBar.app/Contents/MacOS/coffee-bar-probe arm</code> records what it is about to change,
+<p><code>sudo install -o root -g wheel -m 755 /Applications/CoffeeBar.app/Contents/MacOS/coffee-bar-probe /Library/PrivilegedHelperTools/coffee-bar-probe</code>
+puts the copy in place, owned by root and writable by nobody else.
+<code>install</code> rather than <code>cp</code> because it sets the ownership in
+the same call that writes the file, so the copy is never briefly there at yours.
+Run it again after you upgrade coffee-bar: replacing the app leaves the old copy
+behind, and it is the copy that gets armed.</p>
+
+<p><code>sudo /Library/PrivilegedHelperTools/coffee-bar-probe arm</code> records what it is about to change,
 installs a launchd watchdog, sets the system to stay awake with the lid shut,
 and forces the display off. The order matters: nothing is changed until the
 record is on disk and the watchdog that undoes it is loaded, so a process killed
@@ -279,12 +294,12 @@ hand to a root process, and they outrank a nicer window.</p>
 
 <p>So the app states the limit instead of inventing a reading, and the Preferences
 window carries the short version of this page beside the other power settings.
-The answer itself comes from <code>sudo /Applications/CoffeeBar.app/Contents/MacOS/coffee-bar-probe report</code>, which
+The answer itself comes from <code>sudo /Library/PrivilegedHelperTools/coffee-bar-probe report</code>, which
 prints what is armed, since when, and until when.</p>
 
 <h3>Ending it early</h3>
 
-<p><code>sudo /Applications/CoffeeBar.app/Contents/MacOS/coffee-bar-probe revert</code> restores the sleep setting you had
+<p><code>sudo /Library/PrivilegedHelperTools/coffee-bar-probe revert</code> restores the sleep setting you had
 and removes the watchdog. You do not need it for an ordinary hold, which ends on
 its own.</p>
 
