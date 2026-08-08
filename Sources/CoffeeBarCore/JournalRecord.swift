@@ -43,8 +43,18 @@ public struct JournalRecord: Codable, Equatable, Sendable {
     /// live window used to be invisible to every rung of the ladder, and the
     /// hold outlived the 8-hour cap by the size of the step.
     ///
-    /// Meaningless across a reboot, which costs nothing: a journal older than
-    /// `kern.boottime` is reverted before any TTL arithmetic runs.
+    /// Meaningless across a reboot, and it does not need to survive one: a
+    /// deadline measured on a clock that restarts at boot cannot outlive that
+    /// boot, whatever else goes wrong.
+    ///
+    /// It does NOT make the reboot check itself honest, and an earlier draft of
+    /// this comment implied that it did. That check compares `setAt` against
+    /// `kern.boottime`, two WALL-clock values, and `kern.boottime` is stored as
+    /// realtime — so a backward step moves it while `setAt` stays put, which
+    /// makes the comparison HARDER to satisfy and can suppress a revert that
+    /// should have fired. This field bounds how long a hold lasts; closing that
+    /// other gap needs the stamp to carry a boot identity, and is tracked on
+    /// its own.
     public let setAtMonotonic: TimeInterval
     public let ttlSeconds: Int
     public let armedBy: ArmProvenance

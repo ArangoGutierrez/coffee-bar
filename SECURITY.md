@@ -194,10 +194,16 @@ policy:
   check the daemon made, and it extended the hold by its own size — far past the
   bound stated above, and without limit for a large enough step (#77).
 - The monotonic stamp means nothing across a reboot and never has to survive
-  one: a journal older than `kern.boottime` is reverted before any TTL
-  arithmetic runs at all. Adding it moved the journal's `schemaVersion` on, so a
-  journal an older build left behind is refused rather than judged against a
-  reference it never recorded.
+  one: a deadline measured on a clock that restarts at boot cannot outlive that
+  boot. **What it does not do** is make the reboot check itself clock-proof.
+  That check compares the journal's own timestamp against `kern.boottime`, and
+  both are wall-clock values — `kern.boottime` is stored as realtime, so moving
+  the clock backward moves it too while the journal's timestamp stays put. The
+  comparison then gets harder to satisfy, which suppresses a revert rather than
+  causing one. The cap above is bounded regardless; this remaining gap is
+  tracked on its own and is not claimed as closed here. Adding the stamp also
+  moved the journal's `schemaVersion` on, so a journal an older build left
+  behind is refused rather than judged against a reference it never recorded.
 - Supervision is **TTL-only**. There is no heartbeat channel, because there is
   no channel at all. Nothing cuts a hold short when the work finishes early, so
   the 30-minute default is deliberately the worst case rather than the cap.
