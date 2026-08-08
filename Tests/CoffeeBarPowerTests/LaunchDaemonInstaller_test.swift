@@ -109,6 +109,48 @@ private final class LaunchctlFake: CommandRunning, @unchecked Sendable {
     }
 }
 
+/// A `launchctl` model in which `bootout` NEVER RETURNS.
+///
+/// `LaunchctlFake` hands `bootout` a `CommandResult`, which is what the real
+/// command does for a caller that is not the job. `uninstall()` runs INSIDE the
+/// job: `bootout system/<label>` terminates the very process issuing it, so no
+/// statement sequenced after that call is reached. Modelling it as a call that
+/// comes back is what let bootout-then-unlink pass a green suite while, measured
+/// on the machine, `launchctl print system/com.coffeebar.probewatchdog` said
+/// "Could not find service" and
+/// `/Library/LaunchDaemons/com.coffeebar.probewatchdog.plist` was still on disk
+/// with `RunAtLoad` and `KeepAlive` set — so launchd started the daemon again at
+/// the next boot.
+///
+/// Modelled as a call that BLOCKS FOREVER rather than one that throws. The call
+/// site is `_ = try? runner.run(…)`, which swallows a throw and carries straight
+/// on to the next statement, so a throwing fake is green on both orderings and
+/// proves nothing. Blocking is the one shape `try?` cannot absorb.
+private final class DyingLaunchctlFake: CommandRunning, @unchecked Sendable {
+    private let issued = DispatchSemaphore(value: 0)
+    private let release = DispatchSemaphore(value: 0)
+
+    /// Blocks until `bootout` is issued — the last instant at which the code
+    /// under test is still running in production.
+    func waitForBootout(within seconds: Double) -> DispatchTimeoutResult {
+        issued.wait(timeout: .now() + seconds)
+    }
+
+    /// Lets the modelled process finish, so the test leaves no thread parked on
+    /// the semaphore.
+    func releaseTheCaller() { release.signal() }
+
+    func run(_ executable: String, _ arguments: [String],
+             timeout: TimeInterval) throws -> CommandResult {
+        guard arguments.first == "bootout" else {
+            return CommandResult(exitCode: 0, stdout: "", stderr: "")
+        }
+        issued.signal()
+        release.wait()
+        return CommandResult(exitCode: 0, stdout: "", stderr: "")
+    }
+}
+
 /// A genuinely root-owned, non-group-writable program, standing in for an
 /// installed `coffee-bar-probe`. Verified on macOS: `/`, `/usr`, `/usr/bin`
 /// and `/usr/bin/true` are all root:wheel 0755, so this is the only kind of
@@ -550,6 +592,13 @@ private func insecureComponents(of path: String) throws -> [InsecurePathComponen
             == ["/bin/launchctl", "bootout", "system/com.coffeebar.probewatchdog"])
     #expect(!fake.isLoaded(LaunchDaemonInstaller.label))
     #expect(!FileManager.default.fileExists(atPath: url.path))
+    // And the plist was ALREADY gone when that last bootout was issued. The end
+    // state above is reachable only in a test, where the call returns; in
+    // production it kills the caller, so the removal has to precede it.
+    #expect(fake.plistOnDiskAtCall.last == false, """
+        the bootout was issued with the plist still on disk: \
+        \(fake.plistOnDiskAtCall)
+        """)
 }
 
 @Test func theBootoutTargetNamesTheServiceThePlistDeclares() throws {
@@ -595,6 +644,43 @@ private func insecureComponents(of path: String) throws -> [InsecurePathComponen
     // Nothing was ever loaded, so the modelled bootout genuinely failed here.
     #expect(fake.calls.count == 1)
     #expect(!FileManager.default.fileExists(atPath: url.path))
+    #expect(fake.plistOnDiskAtCall == [false], """
+        the plist was still on disk when the bootout was issued: \
+        \(fake.plistOnDiskAtCall)
+        """)
+}
+
+@Test func uninstallRemovesThePlistBeforeIssuingTheBootoutThatEndsTheProcess() throws {
+    // #76, observed on the real machine after a TTL revert: the service was
+    // gone — `launchctl print system/com.coffeebar.probewatchdog` answered
+    // "Could not find service" — and the plist was still in
+    // /Library/LaunchDaemons with `RunAtLoad => true` and `KeepAlive => true`.
+    // launchd bootstraps that directory at every boot, so the revert undid
+    // nothing durable and the daemon came back for good.
+    //
+    // Named bug this catches: the removal sequenced AFTER the bootout.
+    // `bootout system/<label>` ends the process that issues it when that
+    // process IS the job, so the only work that counts is the work already done
+    // at the moment of the call — which is exactly where the assertion is
+    // taken. The end-state checks above cannot see this, because their fake
+    // returns from a call production never returns from.
+    let url = try scratchPlist()
+    try Data("placeholder".utf8).write(to: url)
+    let fake = DyingLaunchctlFake()
+    let installer = LaunchDaemonInstaller(runner: fake, plistURL: url,
+                                          programPath: rootOwnedProgram)
+
+    let thread = Thread { try? installer.uninstall() }
+    thread.start()
+    defer { fake.releaseTheCaller() }
+
+    #expect(fake.waitForBootout(within: 10) == .success,
+            "uninstall never issued a bootout at all")
+    #expect(!FileManager.default.fileExists(atPath: url.path), """
+        uninstall issued `bootout system/com.coffeebar.probewatchdog` with the \
+        plist still on disk. That call does not return, so the removal after it \
+        never runs and launchd starts the daemon again at every boot.
+        """)
 }
 
 // MARK: - DisplayStateProbe (spike S2)

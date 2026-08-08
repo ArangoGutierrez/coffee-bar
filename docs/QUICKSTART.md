@@ -40,6 +40,30 @@ Homebrew prefix and the install prints the one command that links it there.
 
 ## 2. Wire the Claude Code hooks
 
+**Let coffee-bar write the entries for you.** Open Preferences… from the foot of
+the panel, or press ⌘, while coffee-bar is frontmost. Under **Agent tools** each
+settings file is listed with a **Copy hook snippet** button beside it. Click the
+one next to `~/.claude/settings.json` and the whole block is on your pasteboard,
+ready to merge into the file.
+
+Prefer that button to the block printed below, and not only because it saves
+typing. It is generated from `HookHealth.requiredEvents(for:)` — the same
+constant the health check reads — so it cannot tell you to wire a set the panel
+then reports as missing. It carries the ingest endpoint belonging to the tool
+you picked, which is how an arriving payload is attributed to that tool at all,
+and it puts the `matcher` key on exactly the events that need one. The JSON
+below explains none of that, and a hook config wrong in any of those ways fails
+silently: the app sees nothing and the panel still says the file is wired.
+
+**Copy hook snippet never touches your settings file.** It writes to the
+pasteboard and stops there. Merging is yours, because that file is yours.
+
+### Or paste the block by hand
+
+Worth doing if you want to read what you are pasting before it goes in, or if
+coffee-bar is not running yet. This is the Claude Code block; the button is the
+only route that prints the Codex and Cursor ones.
+
 Add these to `~/.claude/settings.json`:
 
 ```json
@@ -50,7 +74,7 @@ Add these to `~/.claude/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+            "command": "curl -sS -o /dev/null --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
           }
         ]
       }
@@ -61,7 +85,7 @@ Add these to `~/.claude/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+            "command": "curl -sS -o /dev/null --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
           }
         ]
       }
@@ -72,7 +96,7 @@ Add these to `~/.claude/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+            "command": "curl -sS -o /dev/null --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
           }
         ]
       }
@@ -82,7 +106,7 @@ Add these to `~/.claude/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+            "command": "curl -sS -o /dev/null --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
           }
         ]
       }
@@ -92,7 +116,7 @@ Add these to `~/.claude/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+            "command": "curl -sS -o /dev/null --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
           }
         ]
       }
@@ -102,6 +126,12 @@ Add these to `~/.claude/settings.json`:
 ```
 
 The two tool events take `"matcher": "*"`; the other three take no matcher.
+
+**Keep `-o /dev/null`.** It pairs with `--fail-with-body`, which exists to print
+the server's error body rather than swallow it — and `curl` prints a body to
+standard output, which is where Claude Code looks for a hook's decision. Without
+the redirect, an ingest error reaches your agent as something to act on. The
+exit status, which is the part `--fail-with-body` is wanted for, is unaffected.
 
 **If your settings file already has a `hooks` key, merge these entries into it.**
 Pasting the block whole replaces whatever hooks you already run.
@@ -120,7 +150,7 @@ it removes a delay. Add this entry beside them:
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+            "command": "curl -sS -o /dev/null --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
           }
         ]
       }
@@ -185,7 +215,8 @@ on standard error by its status code and never by its content. Run
 
 **Measured on the machine that wrote this page**, as the best of 5 runs of 100
 posts each against a running coffee-bar. The shim took 1.16 s, so about 12 ms a
-post. The `curl` line above took 1.66 s over the same work. About 5 ms of either
+post. The `curl` line took 1.66 s over the same work, measured before
+`-o /dev/null` joined it. About 5 ms of either
 is the cost of starting any process at all: 100 runs of `/usr/bin/true` took
 0.54 s. Your machine will differ, and a loaded machine differs a lot — measure
 it rather than trusting these.
@@ -214,9 +245,10 @@ Then confirm the assertion behaves:
     pmset -g assertions | grep coffee-bar
 
 While an agent is working you should see `PreventUserIdleSystemSleep` named
-`"coffee-bar is serving"`. With the panel's Display control on its default
-position you should see **no** display assertion from coffee-bar. Move that
-control to the other position and a second line appears while an agent works:
+`"coffee-bar is serving"`. With the Display control in the Preferences window on
+its default position you should see **no** display assertion from coffee-bar.
+Move that control to the other position and a second line appears while an agent
+works:
 `PreventUserIdleDisplaySleep`, named
 `"coffee-bar is keeping the display awake"`.
 
@@ -224,20 +256,58 @@ control to the other position and a second line appears while an agent works:
 
 coffee-bar has no Dock icon and opens no window. It is a menu-bar app, so after
 it starts, look for the cup at the right end of the menu bar, near the clock.
-Click the cup to open the panel. If your menu bar is full, macOS drops status
-items silently and the cup will not appear.
+Click the cup to open the panel.
 
-The panel holds three controls, a battery line, the Waiting on you list, the
-version, and Quit.
+### The cup does not appear
 
-| Control | What it decides |
-|---|---|
-| Serving | Whether to hold at all. Off is an absolute veto. |
-| Display | Whether a hold covers the screen as well as the machine. |
-| Battery floor | How much battery a hold may spend. |
+The app is almost certainly running. On a full menu bar the cup is there and you
+cannot see it, and on a MacBook with a notch it is usually behind the notch.
 
-The Battery floor control ships at 20%.
-On battery, coffee-bar does not hold at or below 20%.
+macOS fills menu-bar slots right to left in launch order, so the newest arrival
+sits furthest left. On a bar that already carries a dozen items, furthest left is
+underneath the notch. Measured on a notched MacBook: coffee-bar's item at x=929
+on a 1728-point screen whose notch spans roughly 774 to 954, with a neighbouring
+app's item visible at x=1186. The item was fully functional the whole time — a
+click at its coordinates opened the panel normally.
+
+First, confirm the app is running rather than broken. This is the question the UI
+cannot answer for you:
+
+    pgrep -fl CoffeeBar.app
+
+Output means it is running and the cup is hidden, not missing. No output means it
+is not running, and that is a different problem — launch it again.
+
+Then get the item out from under the notch. Any of these works, and the first two
+need nothing installed:
+
+- **Quit coffee-bar and start it again.** It rejoins the bar in a different slot.
+  Measured on the same machine: a relaunch moved the item from x=929 to x=1016,
+  clear of the notch.
+- **⌘-drag** any visible menu-bar item a little way along the bar. That reshuffles
+  the row and can push coffee-bar out from behind the notch.
+- Quit another menu-bar app to free a slot.
+- A menu-bar manager — Ice, Bartender — fixes it for good.
+
+`MenuBarExtra` gives an app no say in where its item lands, so there is nothing
+coffee-bar can change here. It is documented rather than fixed.
+
+The panel holds the Serving control, a battery line, the Waiting on you list,
+the version, Preferences…, and Quit.
+
+Display, Battery floor and Quiet everything else live in the Preferences window.
+Open it with Preferences… at the foot of the panel, or with ⌘, once coffee-bar is
+frontmost.
+
+| Control | Where it lives | What it decides |
+|---|---|---|
+| Serving | The panel | Whether to hold at all. Off is an absolute veto. |
+| Display | Preferences | Whether a hold covers the screen as well as the machine. |
+| Battery floor | Preferences | How much battery a hold may spend. |
+| Quiet everything else | Preferences | Whether processes you have named are demoted while an agent works. |
+
+The Battery floor control ships at 15%.
+On battery, coffee-bar does not hold at or below 15%.
 Move it up if you want the machine to sleep sooner, or down if you are beside a
 charger. The floor governs every Serving position, including Auto, and it
 outranks the Display control — a screen held below the floor drains the battery

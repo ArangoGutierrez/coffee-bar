@@ -183,13 +183,44 @@ policy:
   minutes when you name none, and `JournalRecord.maxTTLSeconds` caps it at 8
   hours however much you ask for. A root process still holding a setting after
   whatever armed it has gone is the failure the watchdog exists to prevent.
+- **That cap is counted in elapsed time, not on the clock you can set.** The
+  journal records a monotonic since-boot stamp beside its wall-clock one, and
+  `WatchdogDecision.decide` measures the TTL against the first of the two. Both
+  ends of that subtraction come from `mach_continuous_time`, which nothing in
+  userspace can move and which keeps counting while a lidded machine naps. So
+  putting the system clock back while a hold is live buys no extra hold: the
+  daemon reports the step as a clock anomaly and ends the hold there. Until this
+  shipped, a backward step landing inside a live window was invisible to every
+  check the daemon made, and it extended the hold by its own size — far past the
+  bound stated above, and without limit for a large enough step (#77).
+- The monotonic stamp means nothing across a reboot and never has to survive
+  one: a deadline measured on a clock that restarts at boot cannot outlive that
+  boot. **What it does not do** is make the reboot check itself clock-proof.
+  That check compares the journal's own timestamp against `kern.boottime`, and
+  both are wall-clock values — `kern.boottime` is stored as realtime, so moving
+  the clock backward moves it too while the journal's timestamp stays put. The
+  comparison then gets harder to satisfy, which suppresses a revert rather than
+  causing one. The cap above is bounded regardless; this remaining gap is
+  tracked on its own and is not claimed as closed here. Adding the stamp also
+  moved the journal's `schemaVersion` on, so a journal an older build left
+  behind is refused rather than judged against a reference it never recorded.
 - Supervision is **TTL-only**. There is no heartbeat channel, because there is
   no channel at all. Nothing cuts a hold short when the work finishes early, so
   the 30-minute default is deliberately the worst case rather than the cap.
-- The daemon uses the built-in battery floor of 20% and **does not read your
+- The daemon uses the built-in battery floor of 15% and **does not read your
   `batteryFloorPercent` setting**. A root process reading an unprivileged user's
   preferences is a new data flow into a privileged process, and it deserves its
   own review before it exists rather than after.
+- **This TTL model is scheduled to change (#74).** The intended default is a hold
+  that ends at the battery floor while on battery and continues indefinitely on
+  AC. Two things must move together when it does. The battery-floor check in
+  `WatchdogDecision.decide` is guarded by `inputs.onBattery`, so it cannot end an
+  AC-powered hold at all. And `LidClosedSession`'s `lastHeartbeat ?? now`
+  substitution is justified in place by the TTL being tested first, so removing
+  the TTL removes that justification with it. Until both are answered, an
+  AC-powered hold has only a thermal abort or a reboot left to end it. The
+  hazardous case — a closed machine in a bag — runs on battery, where the floor
+  still applies.
 - **A thermal or battery abort restores the setting you had, not a safe one.**
   The revert writes the journal's recorded `priorValue`, which is deliberate:
   the daemon undoes what it did and never overrides a choice it did not make.

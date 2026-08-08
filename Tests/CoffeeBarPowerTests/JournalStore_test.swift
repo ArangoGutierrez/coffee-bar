@@ -30,7 +30,7 @@ private let prov = ArmProvenance(pid: 7, binaryPath: "/x", uid: 501)
 private func sample(prior: Bool = false) -> JournalRecord {
     JournalRecord(intent: .sleepDisabled, priorValue: prior,
                   setAt: Date(timeIntervalSince1970: 1_000_000),
-                  ttlSeconds: 900, armedBy: prov)
+                  setAtMonotonic: 10_000, ttlSeconds: 900, armedBy: prov)
 }
 
 @Test func loadOnMissingFileReturnsNil() throws {
@@ -238,7 +238,7 @@ func anUncreatableTempFileSurfacesWriteFailed() throws {
     let fractional = JournalRecord(
         intent: .sleepDisabled, priorValue: false,
         setAt: Date(timeIntervalSince1970: 1_000_000.75),
-        ttlSeconds: 900, armedBy: prov)
+        setAtMonotonic: 10_000, ttlSeconds: 900, armedBy: prov)
     try store.write(fractional)
     let reloaded = try store.load()
     #expect(reloaded != fractional)                      // the lossy case
@@ -249,7 +249,7 @@ func anUncreatableTempFileSurfacesWriteFailed() throws {
     let whole = JournalRecord(
         intent: .sleepDisabled, priorValue: false,
         setAt: Date(timeIntervalSince1970: 1_000_000),
-        ttlSeconds: 900, armedBy: prov)
+        setAtMonotonic: 10_000, ttlSeconds: 900, armedBy: prov)
     try store.write(whole)
     #expect(try store.load() == whole)
 }

@@ -48,7 +48,7 @@ public enum BatteryFloor {
     /// `theBatteryFloorStatedIsTheRealDefault` reads the docs against the FIRST
     /// of those, so a drifting third would leave the app enforcing a floor the
     /// README does not describe while that guard stayed green.
-    public static let `default` = 20
+    public static let `default` = 15
 
     /// The floors a user may choose from.
     ///
@@ -62,23 +62,71 @@ public enum BatteryFloor {
     /// machine is already dead, so the floor would exist and do nothing. Above
     /// 100 is not a percentage at all, and it refuses every hold at every
     /// charge — the product silently stops working.
-    public static let permitted = 5...100
+    ///
+    /// Narrowed from `5...100` when the floor became a slider. Those were the
+    /// bounds of what is arithmetically a percentage; these are the bounds of
+    /// what is a useful floor. At 5 the machine is close enough to dead that
+    /// the floor arrives too late to be a safety limit, and above 50 the
+    /// product refuses to hold across half of every discharge — which a user
+    /// reads as "coffee-bar is broken" rather than as the floor they chose.
+    /// A value stored under the old policy is bounded, not trapped;
+    /// `aStoredFloorOutsideTheNewRangeIsClampedNotTrapped` pins that.
+    public static let permitted = 10...50
 
-    /// What the panel's control offers, coarsest question first.
+    /// The gap between offered floors.
     ///
-    /// A fixed list rather than a free number, and a short one. This is a
-    /// safety limit somebody sets once and forgets, so the difference between
-    /// 32 and 33 is not a choice worth a stepper — while a control with eleven
-    /// segments is one nobody reads.
+    /// Here beside `permitted` rather than in the view: two numbers a view
+    /// could restate are two numbers that can drift from the policy. The
+    /// slider in `PreferencesView.swift` is constructed over this and
+    /// `permitted`, so those two ARE the control's shape — `choices` below
+    /// only describes the result.
+    public static let step = 5
+
+    /// The STEP-ALIGNED POSITIONS the floor control can produce, derived from
+    /// `permitted` and `step` so it cannot disagree with either.
     ///
-    /// Here beside `permitted` rather than in the view, so the two cannot
-    /// drift. A choice outside the permitted range is a control position the
-    /// decision would silently change under the user: they pick it, the floor
-    /// becomes something else, and the control then matches no value at all.
-    /// `everyOfferedFloorSitsInsideThePermittedRange` goes red on that, and it
-    /// also holds `default` inside the list — a default a user cannot get back
-    /// to is a setting with no undo.
-    public static let choices = [10, 20, 30, 40, 50]
+    /// NO PRODUCTION CODE READS THIS, and that is correct rather than a gap.
+    /// The control is a `Slider` in `PreferencesView.swift`, constructed
+    /// `in: permitted, step: step`, so the values it yields are
+    /// `lowerBound + n * step` — exactly what the `stride` below computes. This
+    /// is a derived DESCRIPTION of that control, never a source of truth for
+    /// it.
+    ///
+    /// So editing this changes nothing the user sees. If you want to change
+    /// what the control offers, change `permitted` or `step`; the slider is
+    /// built over those two and this follows. Editing the derivation here
+    /// without touching them makes this DISAGREE with the control while the
+    /// checks that read it stay green — which is the one way this symbol can
+    /// do harm. `theOfferedFloorsAreDerivedFromTheRangeAndStep` goes red on it.
+    ///
+    /// It earns its place by being what the policy guards assert against.
+    /// `everyOfferedFloorSitsInsideThePermittedRange` holds two properties of
+    /// the constants that a `Slider` makes no less real:
+    ///
+    ///   1. `step` divides the range, so `permitted.upperBound` sits on a step
+    ///      boundary and the user can reach the most conservative floor the app
+    ///      accepts. Under `step = 7` the top position is 45 while
+    ///      `defaults write` can still set 50 — a floor the product honours and
+    ///      the control cannot express.
+    ///   2. `default` sits on a boundary too, so a user who moves off it can
+    ///      get back. A default with no undo is not a default.
+    ///
+    /// LIMIT, stated rather than implied: those are properties of these
+    /// NUMBERS, not observations of SwiftUI. What a stepped `Slider` snaps to
+    /// is not asserted anywhere in this package — M1 design §5.4 rules out
+    /// asserting on the rendered control — so the rendering rides on the manual
+    /// acceptance pass. A step that divides the range is reachable under any
+    /// sane rounding rule, which is the strongest claim available from here.
+    ///
+    /// Was a literal list, and read "what the control offers" until the picker
+    /// it described was deleted. A literal let `default` sit outside the
+    /// offered set: `[10, 20, 30, 40, 50]` cannot reach 15. Deriving it removes
+    /// the class of defect rather than the one instance.
+    public static var choices: [Int] {
+        Array(stride(from: permitted.lowerBound,
+                     through: permitted.upperBound,
+                     by: step))
+    }
 
     /// `percent` brought inside `permitted`.
     ///

@@ -260,7 +260,7 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     #expect(model.isServing == true)
 
     // Bug 1: the controller latches the intent away under the model.
-    reader.set(source: .battery, percent: 19)
+    reader.set(source: .battery, percent: 14)
     model.refresh()
     #expect(model.isServing == false)
     #expect(model.intent == .auto,
@@ -307,11 +307,11 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
 
 @MainActor
 @Test func crossingTheBatteryFloorReleasesTheAssertion() {
-    // 21% holds, 19% does not. Named bug this catches: a `refresh()` that
+    // 16% holds, 14% does not. Named bug this catches: a `refresh()` that
     // updates `isServing` from the decision but never tells the holder, so the
     // switch reads off while the machine is still pinned awake by a live IOKit
     // assertion — exactly the failure a user cannot see and cannot undo.
-    let reader = FakeReader(source: .battery, percent: 21)
+    let reader = FakeReader(source: .battery, percent: 16)
     let spy = SpyHolder()
     let model = ServingModel(holder: spy, reader: reader,
                              health: fixtureHealth(), settings: FakeSettings())
@@ -320,7 +320,7 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     #expect(model.isServing == true)
     #expect(spy.releaseCount == 0)
 
-    reader.set(source: .battery, percent: 19)
+    reader.set(source: .battery, percent: 14)
     model.refresh()
 
     #expect(model.isServing == false)
@@ -334,7 +334,7 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // `HoldController` each call, or reading the user's intent from
     // `isServing`, either of which switches the hold back on by itself when the
     // battery recovers.
-    let reader = FakeReader(source: .battery, percent: 21)
+    let reader = FakeReader(source: .battery, percent: 16)
     let spy = SpyHolder()
     let model = ServingModel(holder: spy, reader: reader,
                              health: fixtureHealth(), settings: FakeSettings())
@@ -342,11 +342,11 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     model.intent = .serve
     #expect(spy.acquireCount == 1)
 
-    reader.set(source: .battery, percent: 19)
+    reader.set(source: .battery, percent: 14)
     model.refresh()
     #expect(model.isServing == false)
 
-    reader.set(source: .battery, percent: 21)
+    reader.set(source: .battery, percent: 16)
     model.refresh()
 
     #expect(model.isServing == false)
@@ -358,16 +358,16 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
 @MainActor
 @Test func theSuppressionLineNamesTheMeasuredPercent() {
     // Design §5.4: the reason is asserted on the enum, never on rendered text.
-    let reader = FakeReader(source: .battery, percent: 21)
+    let reader = FakeReader(source: .battery, percent: 16)
     let spy = SpyHolder()
     let model = ServingModel(holder: spy, reader: reader,
                              health: fixtureHealth(), settings: FakeSettings())
 
     model.intent = .serve
-    reader.set(source: .battery, percent: 19)
+    reader.set(source: .battery, percent: 14)
     model.refresh()
 
-    #expect(model.suppression == .batteryFloor(percent: 19, floor: 20))
+    #expect(model.suppression == .batteryFloor(percent: 14, floor: 15))
 
     // The line reports the reading that RELEASED the hold, not the newest one.
     // Named bug this catches: publishing the current sample instead of the
@@ -376,20 +376,20 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     reader.set(source: .battery, percent: 12)
     model.refresh()
 
-    #expect(model.suppression == .batteryFloor(percent: 19, floor: 20))
+    #expect(model.suppression == .batteryFloor(percent: 14, floor: 15))
     #expect(model.reading.percent == 12)
 }
 
 @MainActor
 @Test func theSuppressionLineSurvivesAtExactlyTheFloor() {
     // The boundary, where the panel and the broker must agree. `PowerBroker`
-    // suppresses at `percent <= floor`, so 20% releases the hold. The filter in
+    // suppresses at `percent <= floor`, so 15% releases the hold. The filter in
     // `ServingModel.reason` has to use the same comparison.
     //
     // Named bug this catches: `percent < floor` in that filter. The battery
-    // sits at exactly 20%, the switch refuses to stay on, and the panel drops
+    // sits at exactly 15%, the switch refuses to stay on, and the panel drops
     // the one sentence that says why. The user gets a refusal with no reason.
-    let reader = FakeReader(source: .battery, percent: 21)
+    let reader = FakeReader(source: .battery, percent: 16)
     let spy = SpyHolder()
     let model = ServingModel(holder: spy, reader: reader,
                              health: fixtureHealth(), settings: FakeSettings())
@@ -397,30 +397,30 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     model.intent = .serve
     #expect(model.isServing == true)
 
-    reader.set(source: .battery, percent: 20)
+    reader.set(source: .battery, percent: 15)
     model.refresh()
 
     #expect(model.isServing == false)
-    #expect(model.suppression == .batteryFloor(percent: 20, floor: 20))
+    #expect(model.suppression == .batteryFloor(percent: 15, floor: 15))
 }
 
 @MainActor
 @Test func theSuppressionLineSurvivesARecoveryToExactlyTheFloor() {
     // The filter compares the NEWEST reading against the FLOOR. Every other
-    // filter test here latches at 19 with floor 20, or at 20 with floor 20, so
+    // filter test here latches at 14 with floor 15, or at 15 with floor 15, so
     // the latched percent and the floor are either equal or one apart and no
     // reading ever lands between them. That leaves the region
-    // `latched < reading <= floor` — here the single value 20 after a release
-    // at 19 — untested, and it is the only region where the two operands
-    // disagree.
+    // `latched < reading <= floor` — here the single value 15, reached by
+    // recovering from a release at 14 — untested, and it is the only region
+    // where the two operands disagree.
     //
     // Named bug this catches: `percent <= latched` in place of
-    // `percent <= floor`. The hold releases at 19%, the battery recovers a
-    // point to 20%, and the line vanishes — but 20% is still at the floor, so
+    // `percent <= floor`. The hold releases at 14%, the battery recovers a
+    // point to 15%, and the line vanishes — but 15% is still at the floor, so
     // the switch goes on refusing. The user gets a refusal with no reason,
     // which is the same defect `theSuppressionLineSurvivesAtExactlyTheFloor`
     // catches from the side where the reading crosses the floor directly.
-    let reader = FakeReader(source: .battery, percent: 21)
+    let reader = FakeReader(source: .battery, percent: 16)
     let spy = SpyHolder()
     let model = ServingModel(holder: spy, reader: reader,
                              health: fixtureHealth(), settings: FakeSettings())
@@ -428,21 +428,21 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     model.intent = .serve
     #expect(model.isServing == true)
 
-    reader.set(source: .battery, percent: 19)
+    reader.set(source: .battery, percent: 14)
     model.refresh()
     // Precondition: the latch is BELOW the floor, so the two operands differ
     // for the reading below. Without it this test repeats the equal-operand
     // fixtures it exists to complement.
-    #expect(model.suppression == .batteryFloor(percent: 19, floor: 20))
+    #expect(model.suppression == .batteryFloor(percent: 14, floor: 15))
     #expect(model.isServing == false)
 
-    reader.set(source: .battery, percent: 20)
+    reader.set(source: .battery, percent: 15)
     model.refresh()
 
     // Still at or below the floor, so the reason is still true and still shown.
     // It names the reading that RELEASED the hold, not the newest one.
-    #expect(model.suppression == .batteryFloor(percent: 19, floor: 20))
-    #expect(model.reading.percent == 20)
+    #expect(model.suppression == .batteryFloor(percent: 14, floor: 15))
+    #expect(model.reading.percent == 15)
     // And the switch still refuses, which is what makes a missing line a bug
     // rather than a cosmetic difference.
     #expect(model.isServing == false)
@@ -453,19 +453,19 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // The line explains a condition that is still true. Once the machine is
     // back on AC it is no longer true, so the line goes. The latch does not:
     // `isServing` stays false until the user toggles again.
-    let reader = FakeReader(source: .battery, percent: 21)
+    let reader = FakeReader(source: .battery, percent: 16)
     let spy = SpyHolder()
     let model = ServingModel(holder: spy, reader: reader,
                              health: fixtureHealth(), settings: FakeSettings())
 
     model.intent = .serve
-    reader.set(source: .battery, percent: 19)
+    reader.set(source: .battery, percent: 14)
     model.refresh()
     // Precondition: without a line to clear, the assertion below would hold for
     // a model that never publishes one at all.
     #expect(model.suppression != nil)
 
-    reader.set(source: .ac, percent: 19)
+    reader.set(source: .ac, percent: 14)
     model.refresh()
 
     #expect(model.suppression == nil)
@@ -476,45 +476,45 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
 @Test func theSuppressionLineClearsOnePointAboveTheFloor() {
     // The mirror of `theSuppressionLineSurvivesAtExactlyTheFloor`, at the first
     // percentage the filter must let go of. `PowerBroker` suppresses at
-    // `percent <= floor`, so 21% is above the floor and the line must clear.
+    // `percent <= floor`, so 16% is above the floor and the line must clear.
     //
     // Named bug this catches: `percent <= floor + 1` in the filter. The macOS
     // battery reading is an estimate and does climb a point or two as the load
-    // falls, with no charger attached. The hold releases at 19%, the reading
-    // recovers to 21%, and the panel keeps showing "At 19% — coffee-bar does
-    // not hold at or below 20%" beside a battery line that reads 21%. That is
+    // falls, with no charger attached. The hold releases at 14%, the reading
+    // recovers to 16%, and the panel keeps showing "At 14% — coffee-bar does
+    // not hold at or below 15%" beside a battery line that reads 16%. That is
     // the stale-reason defect this filter exists to prevent, from the side the
-    // 19% -> 40% test cannot see: 40% is twenty points clear of the floor, so a
+    // 14% -> 40% test cannot see: 40% is twenty-five points clear of the floor, so a
     // one-point error stays green there.
-    let reader = FakeReader(source: .battery, percent: 21)
+    let reader = FakeReader(source: .battery, percent: 16)
     let spy = SpyHolder()
     let model = ServingModel(holder: spy, reader: reader,
                              health: fixtureHealth(), settings: FakeSettings())
 
     model.intent = .serve
-    reader.set(source: .battery, percent: 19)
+    reader.set(source: .battery, percent: 14)
     model.refresh()
     // Precondition: without a line to clear, the assertion below would hold for
     // a model that never publishes one at all.
-    #expect(model.suppression == .batteryFloor(percent: 19, floor: 20))
+    #expect(model.suppression == .batteryFloor(percent: 14, floor: 15))
 
-    reader.set(source: .battery, percent: 21)
+    reader.set(source: .battery, percent: 16)
     model.refresh()
 
     #expect(model.suppression == nil)
-    #expect(model.reading.percent == 21)
+    #expect(model.reading.percent == 16)
     #expect(model.isServing == false)
 }
 
 @MainActor
 @Test func theSuppressionLineClearsWhenTheBatteryRisesAboveTheFloor() {
-    let reader = FakeReader(source: .battery, percent: 21)
+    let reader = FakeReader(source: .battery, percent: 16)
     let spy = SpyHolder()
     let model = ServingModel(holder: spy, reader: reader,
                              health: fixtureHealth(), settings: FakeSettings())
 
     model.intent = .serve
-    reader.set(source: .battery, percent: 19)
+    reader.set(source: .battery, percent: 14)
     model.refresh()
     #expect(model.suppression != nil)
 
@@ -546,7 +546,7 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     //
     // Nothing here calls `refresh()`. The only route from the reader's new
     // value to the holder is the tick.
-    let reader = FakeReader(source: .battery, percent: 21)
+    let reader = FakeReader(source: .battery, percent: 16)
     let spy = SpyHolder()
     let model = ServingModel(holder: spy, reader: reader,
                              health: fixtureHealth(), settings: FakeSettings(),
@@ -564,7 +564,7 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     defer { model.timer?.invalidate() }
 
     // The battery crosses the floor with the panel shut.
-    reader.set(source: .battery, percent: 19)
+    reader.set(source: .battery, percent: 14)
 
     // Bounded, so a regression fails rather than hangs the suite.
     let deadline = Date().addingTimeInterval(2.0)
@@ -579,7 +579,7 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // loop's business. One release is the whole claim.
     #expect(spy.releaseCount >= 1,
             "the model reported the hold down without telling the holder")
-    #expect(model.suppression == .batteryFloor(percent: 19, floor: 20),
+    #expect(model.suppression == .batteryFloor(percent: 14, floor: 15),
             "the tick released the hold without recording why")
 }
 
@@ -711,11 +711,11 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     #expect(stopped.displaySleepAssertion == false)
 
     model.intent = .serve
-    reader.set(source: .battery, percent: 19)
+    reader.set(source: .battery, percent: 14)
     model.refresh()
     let suppressed = try #require(model.desired)
     #expect(suppressed.idleSleepAssertion == model.isServing)
-    #expect(suppressed.suppression == .batteryFloor(percent: 19, floor: 20))
+    #expect(suppressed.suppression == .batteryFloor(percent: 14, floor: 15))
     #expect(suppressed.idleSleepAssertion == false)
     #expect(suppressed.displaySleepAssertion == false)
 }
@@ -1199,7 +1199,7 @@ private struct DisagreeingHealth: HookHealthProviding {
     // Named bug this catches: rendering the battery sentence alone. The picker
     // snaps back to Auto and no sentence says the app moved it, so a user who
     // clicked On reads a line about the battery and believes On is honoured.
-    let reader = FakeReader(source: .battery, percent: 19)
+    let reader = FakeReader(source: .battery, percent: 14)
     let model = ServingModel(holder: SpyHolder(), reader: reader,
                              health: fixtureHealth(), settings: FakeSettings())
 
@@ -1207,7 +1207,7 @@ private struct DisagreeingHealth: HookHealthProviding {
 
     #expect(model.intent == .auto, "the I4 fix must still return the control to the standing position")
     #expect(model.suppressionAdvisory == """
-        At 19% — coffee-bar does not hold at or below 20%. Your On click was \
+        At 14% — coffee-bar does not hold at or below 15%. Your On click was \
         refused, so the control is back on Auto.
         """)
 }
@@ -1220,16 +1220,16 @@ private struct DisagreeingHealth: HookHealthProviding {
     // Named bug this catches: situation B borrowing situation A's sentence. The
     // panel tells a user who touched nothing that their click was refused, and
     // points at a control that is exactly where they left it.
-    let reader = FakeReader(source: .battery, percent: 19)
+    let reader = FakeReader(source: .battery, percent: 14)
     let model = ServingModel(holder: SpyHolder(), reader: reader,
                              health: fixtureHealth(), settings: FakeSettings())
 
     model.ingest(from: .claudeCode, HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
 
     #expect(model.intent == .auto, "no click happened")
-    #expect(model.suppression == .batteryFloor(percent: 19, floor: 20),
+    #expect(model.suppression == .batteryFloor(percent: 14, floor: 15),
             "precondition: without a live suppression there is no sentence to get wrong")
-    #expect(model.suppressionAdvisory == "At 19% — coffee-bar does not hold at or below 20%.")
+    #expect(model.suppressionAdvisory == "At 14% — coffee-bar does not hold at or below 15%.")
 }
 
 @MainActor
@@ -1240,7 +1240,7 @@ private struct DisagreeingHealth: HookHealthProviding {
     // Named bug this catches: latching the refusal outside the filter in
     // `reason(_:stillTrueOf:)`. The battery recovers, the floor stops refusing
     // anything, and the panel goes on telling the user their click was refused.
-    let reader = FakeReader(source: .battery, percent: 19)
+    let reader = FakeReader(source: .battery, percent: 14)
     let model = ServingModel(holder: SpyHolder(), reader: reader,
                              health: fixtureHealth(), settings: FakeSettings())
 
@@ -1281,13 +1281,13 @@ private struct DisagreeingHealth: HookHealthProviding {
     #expect(model.isServing == true, "precondition: the click was honoured and the Mac is held")
     #expect(model.suppressionAdvisory == nil, "precondition: nothing is refusing anything yet")
 
-    reader.set(source: .battery, percent: 19)
+    reader.set(source: .battery, percent: 14)
     model.refresh()
 
     #expect(model.isServing == false, "precondition: the floor released the hold")
     #expect(model.intent == .auto)
     #expect(model.suppressionAdvisory == """
-        At 19% — coffee-bar does not hold at or below 20%. coffee-bar released \
+        At 14% — coffee-bar does not hold at or below 15%. coffee-bar released \
         the hold from your On click, so the control is back on Auto.
         """)
 }
@@ -1311,12 +1311,12 @@ private struct DisagreeingHealth: HookHealthProviding {
     model.intent = .serve
     #expect(model.isServing == true, "precondition: the click was honoured from the Off position")
 
-    reader.set(source: .battery, percent: 19)
+    reader.set(source: .battery, percent: 14)
     model.refresh()
 
     #expect(model.intent == .stop, "the veto survives a released hold")
     #expect(model.suppressionAdvisory == """
-        At 19% — coffee-bar does not hold at or below 20%. coffee-bar released \
+        At 14% — coffee-bar does not hold at or below 15%. coffee-bar released \
         the hold from your On click, so the control is back on Off.
         """)
 }
@@ -1342,13 +1342,13 @@ private struct DisagreeingHealth: HookHealthProviding {
     #expect(model.desired?.idleSleepAssertion == true,
             "precondition: the hold was DESIRED, so only the acquisition failed")
 
-    reader.set(source: .battery, percent: 19)
+    reader.set(source: .battery, percent: 14)
     model.refresh()
 
     #expect(model.suppressionAdvisory?.contains("released the hold") == false,
             "claims a hold was released when none was ever taken: \(model.suppressionAdvisory ?? "nil")")
     #expect(model.suppressionAdvisory == """
-        At 19% — coffee-bar does not hold at or below 20%. Your On click was \
+        At 14% — coffee-bar does not hold at or below 15%. Your On click was \
         refused, so the control is back on Auto.
         """)
 }
@@ -1381,14 +1381,14 @@ private struct DisagreeingHealth: HookHealthProviding {
     #expect(model.isServing == true, "precondition: .auto holds the machine for the session")
 
     // The reading falls, and the user clicks On before any refresh sees it.
-    reader.set(source: .battery, percent: 19)
+    reader.set(source: .battery, percent: 14)
     model.intent = .serve
 
     #expect(model.isServing == false)
     #expect(model.suppressionAdvisory?.contains("released the hold") == false,
             "credits .auto's hold to a click that never held: \(model.suppressionAdvisory ?? "nil")")
     #expect(model.suppressionAdvisory == """
-        At 19% — coffee-bar does not hold at or below 20%. Your On click was \
+        At 14% — coffee-bar does not hold at or below 15%. Your On click was \
         refused, so the control is back on Auto.
         """)
 }
@@ -1402,7 +1402,7 @@ private struct DisagreeingHealth: HookHealthProviding {
     // read, or one that `userToggled(to: .serve)` clears and nothing re-arms.
     // The second refusal is then silent, which is the failure this whole task
     // exists to remove.
-    let reader = FakeReader(source: .battery, percent: 19)
+    let reader = FakeReader(source: .battery, percent: 14)
     let model = ServingModel(holder: SpyHolder(), reader: reader,
                              health: fixtureHealth(), settings: FakeSettings())
 
@@ -1414,7 +1414,7 @@ private struct DisagreeingHealth: HookHealthProviding {
 
     #expect(model.intent == .auto)
     #expect(model.suppressionAdvisory == """
-        At 19% — coffee-bar does not hold at or below 20%. Your On click was \
+        At 14% — coffee-bar does not hold at or below 15%. Your On click was \
         refused, so the control is back on Auto.
         """)
 }
@@ -1437,7 +1437,7 @@ private struct DisagreeingHealth: HookHealthProviding {
 
     #expect(model.intent == .stop)
     #expect(model.suppressionAdvisory == """
-        At 15% — coffee-bar does not hold at or below 20%. Your On click was \
+        At 15% — coffee-bar does not hold at or below 15%. Your On click was \
         refused, so the control is back on Off.
         """)
 }
@@ -1463,7 +1463,7 @@ private struct DisagreeingHealth: HookHealthProviding {
     // refuses it, and the user is left with the battery line alone — the line a
     // user who touched NOTHING gets. The disclosure is then inoperative in
     // exactly the case it exists for.
-    let reader = FakeReader(source: .battery, percent: 19)
+    let reader = FakeReader(source: .battery, percent: 14)
     let model = ServingModel(holder: SpyHolder(), reader: reader,
                              health: fixtureHealth(), settings: FakeSettings())
 
@@ -1471,7 +1471,7 @@ private struct DisagreeingHealth: HookHealthProviding {
     model.intent = .serve
 
     let refusal = """
-        At 19% — coffee-bar does not hold at or below 20%. Your On click was \
+        At 14% — coffee-bar does not hold at or below 15%. Your On click was \
         refused, so the control is back on Auto.
         """
     #expect(model.suppressionAdvisory == refusal, "precondition: the refusal reached the panel")
@@ -1479,7 +1479,7 @@ private struct DisagreeingHealth: HookHealthProviding {
     // The next hook event. The session is still working, so the floor refuses a
     // hold this user never asked for — and that must not speak for their click.
     model.ingest(from: .claudeCode, HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
-    #expect(model.suppression == .batteryFloor(percent: 19, floor: 20),
+    #expect(model.suppression == .batteryFloor(percent: 14, floor: 15),
             "precondition: that refresh really did suppress")
     #expect(model.suppressionAdvisory == refusal)
 
@@ -1493,22 +1493,22 @@ private struct DisagreeingHealth: HookHealthProviding {
 @Test func aRefusalAtExactlyTheFloorStillSaysItWasRefused() {
     // The boundary of that lifetime rule, and the mirror of
     // `theSuppressionLineSurvivesAtExactlyTheFloor` for the record rather than
-    // for the reason. `PowerBroker` suppresses at `percent <= floor`, so 20%
+    // for the reason. `PowerBroker` suppresses at `percent <= floor`, so 15%
     // refuses the click, and the rule that decides how long the record lives has
     // to use the same comparison.
     //
     // Named bug this catches: `percent < floor` in that rule. It throws the
     // record away in the very call that wrote it, so the user clicks On at
-    // exactly 20%, the control snaps back to Auto on its own, and the one
-    // sentence that says why is missing — while every check at 19% stays green.
-    let reader = FakeReader(source: .battery, percent: 20)
+    // exactly 15%, the control snaps back to Auto on its own, and the one
+    // sentence that says why is missing — while every check at 14% stays green.
+    let reader = FakeReader(source: .battery, percent: 15)
     let model = ServingModel(holder: SpyHolder(), reader: reader,
                              health: fixtureHealth(), settings: FakeSettings())
 
     model.intent = .serve
 
     let refusal = """
-        At 20% — coffee-bar does not hold at or below 20%. Your On click was \
+        At 15% — coffee-bar does not hold at or below 15%. Your On click was \
         refused, so the control is back on Auto.
         """
     #expect(model.intent == .auto)
@@ -1518,7 +1518,7 @@ private struct DisagreeingHealth: HookHealthProviding {
     // cannot test the boundary: `userToggled` clears `lastSuppression`, so the
     // rule that ends the episode has no record to judge on the very call that
     // writes one. Only a LATER reading puts `percent > floor` to the test, and
-    // 20% is the one value where `>` and `>=` disagree.
+    // 15% is the one value where `>` and `>=` disagree.
     model.refresh()
     #expect(model.suppressionAdvisory == refusal)
 }
@@ -1547,12 +1547,12 @@ private struct DisagreeingHealth: HookHealthProviding {
 
     // The battery recovers past the floor, on battery power throughout. The line
     // goes, and the record behind it has to go with it.
-    reader.set(source: .battery, percent: 21)
+    reader.set(source: .battery, percent: 16)
     model.refresh()
     #expect(model.suppressionAdvisory == nil, "precondition: the episode ended")
 
     // A later drain, days on. Nothing was clicked in between.
-    reader.set(source: .battery, percent: 19)
+    reader.set(source: .battery, percent: 14)
     model.refresh()
 
     #expect(model.cancelledServe == nil)
@@ -1560,7 +1560,7 @@ private struct DisagreeingHealth: HookHealthProviding {
     // the reading the DECISION was made on, which is what
     // `theSuppressionLineNamesTheMeasuredPercent` pins. Only the claim about the
     // user's click is stale, so only that claim goes.
-    #expect(model.suppressionAdvisory == "At 5% — coffee-bar does not hold at or below 20%.")
+    #expect(model.suppressionAdvisory == "At 5% — coffee-bar does not hold at or below 15%.")
 }
 
 @MainActor
@@ -1585,14 +1585,14 @@ private struct DisagreeingHealth: HookHealthProviding {
     #expect(model.isServing == true, "precondition: the click was honoured and the Mac is held")
 
     // The reading falls between ticks. The user, seeing nothing yet, taps the On
-    // segment again — and that write arrives before any refresh sees 19%.
-    reader.set(source: .battery, percent: 19)
+    // segment again — and that write arrives before any refresh sees 14%.
+    reader.set(source: .battery, percent: 14)
     model.intent = .serve
 
     #expect(model.isServing == false, "precondition: the floor released the hold")
     #expect(model.intent == .auto)
     #expect(model.suppressionAdvisory == """
-        At 19% — coffee-bar does not hold at or below 20%. coffee-bar released \
+        At 14% — coffee-bar does not hold at or below 15%. coffee-bar released \
         the hold from your On click, so the control is back on Auto.
         """)
 }
@@ -1698,7 +1698,7 @@ private struct DisagreeingHealth: HookHealthProviding {
     #expect(model.isServing == true, "precondition: the hold was honoured above the floor")
     #expect(spy.displaySleepRequests == [true], "precondition: the display went up with it")
 
-    reader.set(source: .battery, percent: 19)
+    reader.set(source: .battery, percent: 14)
     model.refresh()
 
     #expect(model.isServing == false)
@@ -1834,7 +1834,7 @@ private struct DisagreeingHealth: HookHealthProviding {
     #expect(model.servingSummary == "Holding the system awake, and the display with it.",
             "precondition: the opt-in reached the panel above the floor")
 
-    reader.set(source: .battery, percent: 19)
+    reader.set(source: .battery, percent: 14)
     model.refresh()
 
     #expect(model.holdDisplayAwake == true, "precondition: the setting itself did not change")
@@ -1861,7 +1861,7 @@ private struct DisagreeingHealth: HookHealthProviding {
     // `BatteryFloor.default`. The setting would round-trip through the
     // preferences perfectly and change nothing about when the Mac sleeps.
     //
-    // 35% is ABOVE the 20 default and BELOW the stored 40, so the two floors
+    // 35% is ABOVE the 15 default and BELOW the stored 40, so the two floors
     // give opposite answers here. A model still on the default holds.
     let reader = FakeReader(source: .battery, percent: 35)
     let model = ServingModel(
@@ -1887,18 +1887,18 @@ private struct DisagreeingHealth: HookHealthProviding {
     // document against `PowerInputs`'s own default — so these two have to be
     // the same number or the docs describe a floor the app does not enforce.
     let atFloor = ServingModel(holder: SpyHolder(),
-                               reader: FakeReader(source: .battery, percent: 20),
+                               reader: FakeReader(source: .battery, percent: 15),
                                health: fixtureHealth(), settings: FakeSettings())
     atFloor.intent = .serve
-    #expect(atFloor.isServing == false, "an unset floor did not refuse at 20%")
+    #expect(atFloor.isServing == false, "an unset floor did not refuse at 15%")
 
     // The control. Without it a model whose unset floor read as 100 would pass
     // the line above and never hold on battery again.
     let above = ServingModel(holder: SpyHolder(),
-                             reader: FakeReader(source: .battery, percent: 21),
+                             reader: FakeReader(source: .battery, percent: 16),
                              health: fixtureHealth(), settings: FakeSettings())
     above.intent = .serve
-    #expect(above.isServing == true, "an unset floor refused at 21%")
+    #expect(above.isServing == true, "an unset floor refused at 16%")
 
     #expect(above.batteryFloorPercent == BatteryFloor.default)
 }
@@ -1910,25 +1910,30 @@ private struct DisagreeingHealth: HookHealthProviding {
     // ever wrote, and 0 is a legitimate percentage — so a fresh install would
     // silently run with no floor at all.
     //
-    // The DISCRIMINATING pair, both read at 10% on battery:
-    //   unset  -> 20, so 10% is at or below the floor and the hold is refused;
-    //   stored 0 -> bounded to 5, so 10% clears it and the hold stands.
+    // The DISCRIMINATING pair, both read at 11% on battery:
+    //   unset    -> 15, so 11% is at or below the floor and the hold is refused;
+    //   stored 0 -> bounded to 10, so 11% clears it and the hold stands.
     // A model that folded the two together cannot satisfy both lines.
+    //
+    // The reading is 11 and not 10 BY NECESSITY: the bounded minimum IS 10, so
+    // at a 10% reading `10 <= 10` suppresses under both branches and the pair
+    // collapses into two identical refusals that would pass for a model with no
+    // distinction at all.
     let unset = ServingModel(holder: SpyHolder(),
-                             reader: FakeReader(source: .battery, percent: 10),
+                             reader: FakeReader(source: .battery, percent: 11),
                              health: fixtureHealth(), settings: FakeSettings())
     unset.intent = .serve
     #expect(unset.isServing == false, "an unset floor behaved like a stored 0")
 
     let storedZero = ServingModel(
-        holder: SpyHolder(), reader: FakeReader(source: .battery, percent: 10),
+        holder: SpyHolder(), reader: FakeReader(source: .battery, percent: 11),
         health: fixtureHealth(),
         settings: FakeSettings([SettingsKey.batteryFloorPercent: 0]))
     storedZero.intent = .serve
     #expect(storedZero.isServing == true, "a deliberately stored 0 behaved like an unset key")
 
     // And the stored 0 is still BOUNDED on the way to the decision, so the
-    // lowest floor a user can reach is 5 rather than a floor that never fires.
+    // lowest floor a user can reach is 10 rather than a floor that never fires.
     // Stated as the positive. `desired?.suppression == nil` is also satisfied by
     // a `desired` that is itself nil, so it would pass for a model that never
     // decided anything.
@@ -1938,7 +1943,7 @@ private struct DisagreeingHealth: HookHealthProviding {
         health: fixtureHealth(),
         settings: FakeSettings([SettingsKey.batteryFloorPercent: 0]))
     dead.intent = .serve
-    #expect(dead.desired?.suppression == .batteryFloor(percent: 5, floor: 5))
+    #expect(dead.desired?.suppression == .batteryFloor(percent: 5, floor: 10))
 }
 
 @MainActor
@@ -2008,29 +2013,70 @@ private struct DisagreeingHealth: HookHealthProviding {
 
 @MainActor
 @Test func everyOfferedFloorSitsInsideThePermittedRange() {
-    // The picker's segments come from `BatteryFloor.choices`, and a choice
-    // outside `BatteryFloor.permitted` is a control position the decision would
-    // silently change under the user: they pick 120, the floor becomes 100, and
-    // the picker then matches no value at all.
-    #expect(BatteryFloor.choices.isEmpty == false, "the picker would render no segments")
-    for choice in BatteryFloor.choices {
-        #expect(BatteryFloor.permitted.contains(choice),
-                "\(choice) is offered but not permitted")
-        #expect(BatteryFloor.bounded(choice) == choice,
-                "\(choice) is offered but the decision would change it")
-    }
+    // What this guard can no longer do, stated so nobody over-trusts it.
+    //
+    // It used to sweep `choices` asserting `permitted.contains(choice)` and
+    // `bounded(choice) == choice`. Those were real while `choices` was the
+    // hand-written literal [10, 20, 30, 40, 50] — the literal could name 120.
+    // `choices` is now DERIVED, `stride` from `permitted.lowerBound` through
+    // `permitted.upperBound`, so both hold BY CONSTRUCTION for every value of
+    // `step` and neither can ever fail. Keeping them would be theater: they
+    // would report coverage this test no longer has. They are deleted rather
+    // than left green, and this paragraph is why their absence is not a gap.
+    //
+    // What the derivation does NOT give for free is below.
+    //
+    // THE CONTROL IS A SLIDER, not a picker, since the floor moved into the
+    // Preferences window. `choices` describes the STEP-ALIGNED POSITIONS that
+    // slider can produce — it is built `in: permitted, step: step`, so the
+    // values it yields are `lowerBound + n * step`, which is what `stride`
+    // computes. Nothing renders `choices`; it is a derived DESCRIPTION of the
+    // control, never a source of truth for it.
+    //
+    // So both assertions below are properties of the POLICY CONSTANTS, and
+    // they survived the picker's deletion because they were never about a
+    // picker. The wording was, and that is what changed here.
+    #expect(BatteryFloor.choices.isEmpty == false,
+            "permitted and step yield no position at all, so the slider can express nothing")
 
-    // The shipped default has to be reachable from the control, or a user who
-    // moves off it can never get back.
-    #expect(BatteryFloor.choices.contains(BatteryFloor.default))
+    // 1. The most conservative floor must be REACHABLE. `stride(through:)`
+    //    stops short whenever `step` does not divide the range: a step of 7
+    //    offers 10…45, so the user can never pick 50 while the app goes on
+    //    accepting 50 from `defaults write`. The control would then be unable
+    //    to express a floor the product honours, which is the same class of
+    //    defect as a default outside the offered set.
+    //
+    //    What this proves and what it does not. It proves the POLICY property
+    //    — `step` divides the range, so `upperBound` sits on a step boundary
+    //    and is reachable under any sane rounding. It does NOT prove what
+    //    SwiftUI's stepped `Slider` actually snaps to; design §5.4 rules out
+    //    asserting on the rendered control, so no check here can watch it. The
+    //    rendering rides on the manual acceptance pass.
+    #expect(BatteryFloor.choices.last == BatteryFloor.permitted.upperBound,
+            """
+            the control tops out at \
+            \(BatteryFloor.choices.last.map(String.init(describing:)) ?? "nothing"), \
+            but the app accepts floors up to \(BatteryFloor.permitted.upperBound). \
+            `step` (\(BatteryFloor.step)) does not divide the permitted range.
+            """)
+
+    // 2. The shipped default has to be reachable from the control, or a user who
+    //    moves off it can never get back.
+    #expect(BatteryFloor.choices.contains(BatteryFloor.default),
+            "the default \(BatteryFloor.default) is not offered: \(BatteryFloor.choices)")
 }
 
 @MainActor
 @Test func theFloorLabelsAreDistinctAndNameTheirPercentage() {
-    // The picker's segments read from here, so a check can see what the control
+    // The slider's READOUT reads from here, so a check can see what the control
     // says — design §5.4 rules out asserting on the rendered view. Named bug
-    // this catches: one label for every segment, which makes the control
-    // unusable and which nothing else in this package could see.
+    // this catches: one label for every position, which makes the readout
+    // useless and which nothing else in this package could see.
+    //
+    // It matters MORE for a slider than it did for the picker it replaces. The
+    // picker drew every position at once, so a duplicated label was visible on
+    // screen; the slider shows one value at a time, and two positions reading
+    // "20%" look like a control that has stopped responding to the drag.
     let labels = BatteryFloor.choices.map { ServingModel.floorLabel(for: $0) }
     #expect(Set(labels).count == BatteryFloor.choices.count,
             "two floors share a label: \(labels)")
@@ -2059,7 +2105,7 @@ private struct DisagreeingHealth: HookHealthProviding {
     model.ingest(from: .claudeCode, HookEvent(hookEventName: "PreToolUse", sessionID: "s1"))
 
     #expect(model.isServing == false, "precondition: the default floor refused at 15%")
-    #expect(model.suppressionAdvisory == "At 15% — coffee-bar does not hold at or below 20%.",
+    #expect(model.suppressionAdvisory == "At 15% — coffee-bar does not hold at or below 15%.",
             "precondition: the panel explained that refusal")
 
     model.batteryFloorPercent = 10
@@ -2103,21 +2149,21 @@ private struct DisagreeingHealth: HookHealthProviding {
     // Named bug this catches: a user raises the floor, nothing is running to
     // produce a fresh suppression, and the leftover line keeps quoting the old
     // number — so the change they just made appears not to have taken.
-    let reader = FakeReader(source: .battery, percent: 19)
+    let reader = FakeReader(source: .battery, percent: 14)
     let model = ServingModel(holder: SpyHolder(), reader: reader,
                              health: fixtureHealth(), settings: FakeSettings())
 
     // A refused On click, which leaves a record and no session behind it.
     model.intent = .serve
     #expect(model.intent == .auto, "precondition: the refused click landed back on Auto")
-    #expect(model.suppressionAdvisory?.contains("at or below 20%") == true,
+    #expect(model.suppressionAdvisory?.contains("at or below 15%") == true,
             "precondition: the panel explained the refusal under the old floor")
 
     model.batteryFloorPercent = 30
 
     // Nothing wants a hold, so no fresh suppression was produced and only the
     // latched record is left. It must still describe the policy in force.
-    #expect(model.suppression == .batteryFloor(percent: 19, floor: 30))
+    #expect(model.suppression == .batteryFloor(percent: 14, floor: 30))
     #expect(model.suppressionAdvisory?.contains("at or below 30%") == true,
             "the leftover line quotes a floor nobody is enforcing: \(model.suppressionAdvisory ?? "nil")")
 }
@@ -2142,13 +2188,13 @@ private struct DisagreeingHealth: HookHealthProviding {
     model.intent = .serve
 
     #expect(model.isServing == false, "precondition: the bounded floor refused at 50%")
-    #expect(model.desired?.suppression == .batteryFloor(percent: 50, floor: 100),
+    #expect(model.desired?.suppression == .batteryFloor(percent: 50, floor: 50),
             "precondition: the decision bounded the floor")
 
     // The panel must agree with the decision it is reporting.
-    #expect(model.suppression == .batteryFloor(percent: 50, floor: 100))
+    #expect(model.suppression == .batteryFloor(percent: 50, floor: 50))
     let line = model.suppressionAdvisory ?? ""
-    #expect(line.contains("at or below 100%"), "the panel quoted a floor nobody enforced: \(line)")
+    #expect(line.contains("at or below 50%"), "the panel quoted a floor nobody enforced: \(line)")
     #expect(!line.contains("1000%"), "the panel printed a percentage that cannot exist: \(line)")
 }
 
@@ -2156,7 +2202,7 @@ private struct DisagreeingHealth: HookHealthProviding {
 @Test func aFloorHandWrittenBelowTheMinimumStillExplainsTheRefusal() {
     // The other half of the same regression, and the worse half. With the raw
     // setting used as the filter, `3 <= 0` is false, so the whole reason is
-    // dropped — while the DECISION refuses on the bounded floor of 5.
+    // dropped — while the DECISION refuses on the bounded floor of 10.
     //
     // Named bug this catches: coffee-bar refuses the click, moves the user's
     // control back to Auto on its own, and says NOTHING. `cancelledServe` is
@@ -2170,14 +2216,14 @@ private struct DisagreeingHealth: HookHealthProviding {
     model.intent = .serve
 
     #expect(model.isServing == false, "precondition: the bounded floor refused at 3%")
-    #expect(model.desired?.suppression == .batteryFloor(percent: 3, floor: 5),
+    #expect(model.desired?.suppression == .batteryFloor(percent: 3, floor: 10),
             "precondition: the decision refused on the bounded floor")
     #expect(model.intent == .auto, "precondition: the refused click snapped back")
 
     // A control the product moved on the user's behalf, with a reason.
-    #expect(model.suppression == .batteryFloor(percent: 3, floor: 5))
+    #expect(model.suppression == .batteryFloor(percent: 3, floor: 10))
     let line = model.suppressionAdvisory ?? ""
-    #expect(line.contains("at or below 5%"), "no reason for the refusal: \(line)")
+    #expect(line.contains("at or below 10%"), "no reason for the refusal: \(line)")
     #expect(line.contains("was refused"),
             "the control snapped back to Auto with no explanation: \(line)")
 }

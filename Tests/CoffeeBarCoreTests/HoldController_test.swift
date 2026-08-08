@@ -39,19 +39,19 @@ private func session(_ state: SessionState) -> AgentSession {
 }
 
 @Test func recoveringBatteryDoesNotReArmTheHold() {
-    // The whole point of the latch. 21 -> 20 -> 21 must release exactly once
+    // The whole point of the latch. 16 -> 15 -> 16 must release exactly once
     // and must NOT come back on by itself: re-arming is a behaviour the user
     // did not ask for and cannot see coming.
     var c = HoldController()
     c.userToggled(to: .serve)
 
-    #expect(c.evaluate(powerSource: .battery, batteryPercent: 21).idleSleepAssertion == true)
+    #expect(c.evaluate(powerSource: .battery, batteryPercent: 16).idleSleepAssertion == true)
 
-    let atFloor = c.evaluate(powerSource: .battery, batteryPercent: 20)
+    let atFloor = c.evaluate(powerSource: .battery, batteryPercent: 15)
     #expect(atFloor.idleSleepAssertion == false)
-    #expect(atFloor.suppression == .batteryFloor(percent: 20, floor: 20))
+    #expect(atFloor.suppression == .batteryFloor(percent: 15, floor: 15))
 
-    let recovered = c.evaluate(powerSource: .battery, batteryPercent: 21)
+    let recovered = c.evaluate(powerSource: .battery, batteryPercent: 16)
     #expect(recovered.idleSleepAssertion == false)
 
     // The controller falls back to the STANDING position the user was on before
@@ -88,12 +88,12 @@ private func session(_ state: SessionState) -> AgentSession {
 
     // Precondition: `.auto` is genuinely holding, so the release below is a
     // release and not a hold that never started.
-    #expect(c.evaluate(powerSource: .battery, batteryPercent: 21,
+    #expect(c.evaluate(powerSource: .battery, batteryPercent: 16,
                        sessions: working).idleSleepAssertion == true)
 
-    let atFloor = c.evaluate(powerSource: .battery, batteryPercent: 20, sessions: working)
+    let atFloor = c.evaluate(powerSource: .battery, batteryPercent: 15, sessions: working)
     #expect(atFloor.idleSleepAssertion == false)
-    #expect(atFloor.suppression == .batteryFloor(percent: 20, floor: 20))
+    #expect(atFloor.suppression == .batteryFloor(percent: 15, floor: 15))
 
     // The intent SURVIVES the suppression. This is the assertion the M1 latch
     // fails: it reads `.stop` there.
@@ -134,7 +134,7 @@ private func session(_ state: SessionState) -> AgentSession {
     c.userToggled(to: .serve)
     let out = c.evaluate(powerSource: .battery, batteryPercent: 5)
     #expect(out.idleSleepAssertion == false)
-    #expect(out.suppression == .batteryFloor(percent: 5, floor: 20))
+    #expect(out.suppression == .batteryFloor(percent: 5, floor: 15))
     // Refused, and the control returns to the standing position rather than to
     // the absolute veto. `.auto` is the default this controller started on.
     #expect(c.intent == .auto)
@@ -147,7 +147,7 @@ private func session(_ state: SessionState) -> AgentSession {
     c.userToggled(to: .serve)
     _ = c.evaluate(powerSource: .battery, batteryPercent: 12)
     _ = c.evaluate(powerSource: .ac, batteryPercent: 90)
-    #expect(c.lastSuppression == .batteryFloor(percent: 12, floor: 20))
+    #expect(c.lastSuppression == .batteryFloor(percent: 12, floor: 15))
 }
 
 @Test func evaluateForwardsTheSessionsAndTheKnobToTheBroker() {
@@ -212,10 +212,10 @@ private func session(_ state: SessionState) -> AgentSession {
     // A reason the user has not read yet must survive the same off switch.
     c.userToggled(to: .serve)
     _ = c.evaluate(powerSource: .battery, batteryPercent: 12)
-    #expect(c.lastSuppression == .batteryFloor(percent: 12, floor: 20))
+    #expect(c.lastSuppression == .batteryFloor(percent: 12, floor: 15))
 
     c.userToggled(to: .stop)
-    #expect(c.lastSuppression == .batteryFloor(percent: 12, floor: 20))
+    #expect(c.lastSuppression == .batteryFloor(percent: 12, floor: 15))
 }
 
 @Test func evaluateForwardsAnExplicitBatteryFloor() {
@@ -251,10 +251,10 @@ private func session(_ state: SessionState) -> AgentSession {
     // 2-3. The battery is under the floor. The user clicks On, and the floor
     // refuses the hold.
     c.userToggled(to: .serve)
-    let refused = c.evaluate(powerSource: .battery, batteryPercent: 15,
+    let refused = c.evaluate(powerSource: .battery, batteryPercent: 12,
                              sessions: working)
     #expect(refused.idleSleepAssertion == false)
-    #expect(refused.suppression == .batteryFloor(percent: 15, floor: 20))
+    #expect(refused.suppression == .batteryFloor(percent: 12, floor: 15))
 
     // The one-off request is gone, and the standing position is back.
     #expect(c.intent == .auto,
@@ -375,7 +375,7 @@ private func session(_ state: SessionState) -> AgentSession {
     #expect(c.cancelledServe == nil, "a fresh controller has refused nothing")
 
     c.userToggled(to: .serve)
-    _ = c.evaluate(powerSource: .battery, batteryPercent: 19)
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 14)
 
     #expect(c.intent == .auto)
     #expect(c.cancelledServe == .refused(returnedTo: .auto))
@@ -403,7 +403,7 @@ private func session(_ state: SessionState) -> AgentSession {
     // evaluate above asked for. The controller decides what should happen and
     // IOKit decides what did, so this fact can only come from the caller —
     // `aHoldThatWasNeverTakenIsNotCalledAReleasedHold` covers the other answer.
-    _ = c.evaluate(powerSource: .battery, batteryPercent: 19, assertionIsHeld: true)
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 14, assertionIsHeld: true)
 
     #expect(c.intent == .auto)
     #expect(c.cancelledServe == .released(returnedTo: .auto))
@@ -415,7 +415,7 @@ private func session(_ state: SessionState) -> AgentSession {
     //
     // Named bug this catches: `userToggled(to: .serve)` not clearing the "this
     // request has held" memory. The user serves happily at 50%, goes back to
-    // Auto, and later clicks On at 19% — a click that is refused outright and
+    // Auto, and later clicks On at 14% — a click that is refused outright and
     // never holds for a second. The panel reports it as a released hold, so it
     // describes a hold that never existed.
     var c = HoldController()
@@ -435,7 +435,7 @@ private func session(_ state: SessionState) -> AgentSession {
 
     // A fresh click, below the floor this time. It is refused, never served.
     c.userToggled(to: .serve)
-    _ = c.evaluate(powerSource: .battery, batteryPercent: 19)
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 14)
 
     #expect(c.intent == .auto)
     #expect(c.cancelledServe == .refused(returnedTo: .auto))
@@ -451,19 +451,19 @@ private func session(_ state: SessionState) -> AgentSession {
     // suppression branch. The user clicks On below the floor and reads the
     // refusal; the working session asks for the same hold one hook event later,
     // the same floor refuses it, and the sentence explaining THEIR click
-    // disappears. Audit finding 1, measured on the panel at 19% with one working
+    // disappears. Audit finding 1, measured on the panel at 14% with one working
     // session, where a hook event lands sub-second.
     var c = HoldController()
     c.userToggled(to: .serve)
-    _ = c.evaluate(powerSource: .battery, batteryPercent: 19)
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 14)
     #expect(c.cancelledServe == .refused(returnedTo: .auto), "precondition: a cancel is on record")
 
     // No click. A working session asks for the hold under `.auto`, and the same
     // floor refuses it.
-    _ = c.evaluate(powerSource: .battery, batteryPercent: 19,
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 14,
                    sessions: [session(.working)])
 
-    #expect(c.lastSuppression == .batteryFloor(percent: 19, floor: 20),
+    #expect(c.lastSuppression == .batteryFloor(percent: 14, floor: 15),
             "precondition: that evaluate really did suppress")
     #expect(c.cancelledServe == .refused(returnedTo: .auto))
 
@@ -472,7 +472,7 @@ private func session(_ state: SessionState) -> AgentSession {
     // early with no suppression at all under `.auto` with nothing to hold for.
     // The floor is still the reason the user's click was refused, and the
     // battery has not moved.
-    _ = c.evaluate(powerSource: .battery, batteryPercent: 19)
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 14)
     #expect(c.cancelledServe == .refused(returnedTo: .auto))
 }
 
@@ -500,10 +500,10 @@ private func session(_ state: SessionState) -> AgentSession {
 
     // Days later the battery drains under the floor again, with the control
     // still standing where the cancel left it. The cancel must NOT come back.
-    _ = c.evaluate(powerSource: .battery, batteryPercent: 19,
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 14,
                    sessions: [session(.working)])
 
-    #expect(c.lastSuppression == .batteryFloor(percent: 19, floor: 20),
+    #expect(c.lastSuppression == .batteryFloor(percent: 14, floor: 15),
             "precondition: the later drain really did suppress")
     #expect(c.cancelledServe == nil, "a refusal from an earlier episode replayed onto a later one")
 }
@@ -515,14 +515,14 @@ private func session(_ state: SessionState) -> AgentSession {
     //
     // Named bug this catches: reading `lastSuppression` AFTER the branch has
     // overwritten it. The record is then judged against a floor it never met, so
-    // a refusal from a 20% floor survives into an episode of a 30% floor and the
+    // a refusal from a 15% floor survives into an episode of a 30% floor and the
     // panel explains a click with the wrong constraint. `ServingModel` passes no
-    // floor today, so the shipping app runs at a constant 20 and cannot reach
+    // floor today, so the shipping app runs at a constant 15 and cannot reach
     // this — but `WatchdogDecision.batteryFloorPercent` is already configurable,
     // so the settings surface that exposes the floor makes it live.
     var c = HoldController()
     c.userToggled(to: .serve)
-    _ = c.evaluate(powerSource: .battery, batteryPercent: 19)
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 14)
     #expect(c.cancelledServe == .refused(returnedTo: .auto), "precondition: a cancel is on record")
 
     // The floor moves to 30 and the battery sits at 28: ABOVE the floor that
@@ -534,7 +534,7 @@ private func session(_ state: SessionState) -> AgentSession {
     #expect(c.lastSuppression == .batteryFloor(percent: 28, floor: 30),
             "precondition: a NEW episode really did start")
     #expect(c.cancelledServe == nil,
-            "a refusal from the 20% floor was judged against the 30% floor and survived")
+            "a refusal from the 15% floor was judged against the 30% floor and survived")
 }
 
 @Test func aReadingWithNoPercentageDoesNotKillALiveRefusal() {
@@ -551,7 +551,7 @@ private func session(_ state: SessionState) -> AgentSession {
     // only HIDES the line and restores it on the next real reading.
     var c = HoldController()
     c.userToggled(to: .serve)
-    _ = c.evaluate(powerSource: .battery, batteryPercent: 19)
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 14)
     #expect(c.cancelledServe == .refused(returnedTo: .auto), "precondition: a cancel is on record")
 
     _ = c.evaluate(powerSource: .battery, batteryPercent: nil)
@@ -560,7 +560,7 @@ private func session(_ state: SessionState) -> AgentSession {
     // The next real reading is still under the floor. The control is still on
     // Auto because coffee-bar moved it, so the sentence is still the true
     // explanation of what the user is looking at.
-    _ = c.evaluate(powerSource: .battery, batteryPercent: 19)
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 14)
     #expect(c.cancelledServe == .refused(returnedTo: .auto))
 }
 
@@ -577,17 +577,17 @@ private func session(_ state: SessionState) -> AgentSession {
     // through the door that the missing-percentage fix opens.
     var c = HoldController()
     c.userToggled(to: .serve)
-    _ = c.evaluate(powerSource: .battery, batteryPercent: 19)
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 14)
     #expect(c.cancelledServe == .refused(returnedTo: .auto), "precondition: a cancel is on record")
 
     // The charger goes in. The reading does not move, so the power source is the
     // only thing that can end the episode here.
-    _ = c.evaluate(powerSource: .ac, batteryPercent: 19)
+    _ = c.evaluate(powerSource: .ac, batteryPercent: 14)
     #expect(c.cancelledServe == nil)
 
     // Unplugged again, still under the floor, with a session asking for a hold.
     // The click is two power transitions old and must not come back.
-    _ = c.evaluate(powerSource: .battery, batteryPercent: 19,
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 14,
                    sessions: [session(.working)])
     #expect(c.cancelledServe == nil, "a refusal replayed across a charge")
 }
@@ -617,7 +617,7 @@ private func session(_ state: SessionState) -> AgentSession {
 
     // The re-tap.
     c.userToggled(to: .serve)
-    _ = c.evaluate(powerSource: .battery, batteryPercent: 19, assertionIsHeld: false)
+    _ = c.evaluate(powerSource: .battery, batteryPercent: 14, assertionIsHeld: false)
 
     #expect(c.intent == .auto)
     #expect(c.cancelledServe == .released(returnedTo: .auto),
@@ -640,7 +640,7 @@ private func session(_ state: SessionState) -> AgentSession {
     c.userToggled(to: .stop)
 
     #expect(c.cancelledServe == nil)
-    #expect(c.lastSuppression == .batteryFloor(percent: 12, floor: 20),
+    #expect(c.lastSuppression == .batteryFloor(percent: 12, floor: 15),
             "the reason the user has not read yet must still survive an Off click")
 }
 
@@ -654,16 +654,16 @@ private func session(_ state: SessionState) -> AgentSession {
     // reports the value the DECISION was actually given.
     //
     // Named bug this catches: a panel quoting "at or below 1000%", a percentage
-    // that cannot exist, while the decision refuses on 100.
+    // that cannot exist, while the decision refuses on the capped floor.
     var above = HoldController()
     _ = above.evaluate(powerSource: .battery, batteryPercent: 50,
                        batteryFloorPercent: 1000)
-    #expect(above.floorInForce == 100)
+    #expect(above.floorInForce == 50)
 
     var below = HoldController()
     _ = below.evaluate(powerSource: .battery, batteryPercent: 50,
                        batteryFloorPercent: 0)
-    #expect(below.floorInForce == 5)
+    #expect(below.floorInForce == 10)
 
     // The control. Without an in-range case a property hard-coded to a bound
     // would satisfy both lines above.

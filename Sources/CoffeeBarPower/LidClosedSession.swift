@@ -96,6 +96,7 @@ public struct ArmService: Sendable {
     private let supervisor: any WatchdogSupervising
     private let display: any DisplaySleepForcing
     private let clock: @Sendable () -> Date
+    private let monotonicClock: @Sendable () -> TimeInterval
     private let displayVerifyDelay: TimeInterval
 
     /// `clock` and `displayVerifyDelay` stay injectable so tests need no wall
@@ -111,6 +112,8 @@ public struct ArmService: Sendable {
                 supervisor: any WatchdogSupervising,
                 display: any DisplaySleepForcing,
                 clock: @escaping @Sendable () -> Date = HostInfo.now,
+                monotonicClock: @escaping @Sendable () -> TimeInterval
+                    = SystemMonotonicClock.now,
                 displayVerifyDelay: TimeInterval = 5) {
         self.journal = journal
         self.reader = reader
@@ -118,10 +121,33 @@ public struct ArmService: Sendable {
         self.supervisor = supervisor
         self.display = display
         self.clock = clock
+        self.monotonicClock = monotonicClock
         self.displayVerifyDelay = displayVerifyDelay
     }
 
-    public func arm(ttlSeconds: Int) throws {
+    /// Arms lid-closed mode and answers with the hold the JOURNAL kept.
+    ///
+    /// **The return value is read back off the disk, never handed straight
+    /// through.** `JournalRecord` clamps the TTL to §8.2(5)'s eight hours, so
+    /// the number a caller was given and the number the machine will honour are
+    /// different values whenever the request is over the cap — and the probe
+    /// printed the caller's one, telling a user their laptop would stay awake
+    /// for 999999s while `WatchdogDecision.decide` reverted it at 28800.
+    ///
+    /// It is the CONFIRMED record's value rather than `record.ttlSeconds`,
+    /// because the confirmation read is what already proves the file is there
+    /// and is the same read the daemon will make. Clamping a second time at the
+    /// print site would copy the rule instead, which drifts the moment the cap
+    /// moves and agrees with a record that was written wrong.
+    ///
+    /// `@discardableResult`, because the answer is a REPORT rather than the
+    /// point of the call: `arm` succeeds or throws, and a caller with nothing to
+    /// print is not making a mistake by ignoring it. `main.swift` is the one
+    /// caller that prints, and
+    /// `theProbePrintsTheHoldItTookAndNotTheNumberOnTheCommandLine` is what
+    /// keeps it printing this rather than argv.
+    @discardableResult
+    public func arm(ttlSeconds: Int) throws -> Int {
         // THE INVARIANT this function answers for:
         //
         //   `arm` never returns success while the system holds a setting the
@@ -148,6 +174,10 @@ public struct ArmService: Sendable {
             intent: .sleepDisabled,
             priorValue: priorValue,
             setAt: clock(),
+            // Sampled beside `setAt`, and it is what the cap is measured
+            // against. The wall stamp stays because a human reading `report`
+            // needs a date, not a since-boot number.
+            setAtMonotonic: monotonicClock(),
             ttlSeconds: ttlSeconds,
             armedBy: Self.provenance())
 
@@ -191,9 +221,14 @@ public struct ArmService: Sendable {
             // possible; that residue belongs to the daemon's own next tick and
             // is recorded in the report rather than claimed as closed.
             let confirmed = (try? reader.read()) ?? nil
-            guard confirmed != nil else {
+            guard let confirmed else {
                 throw ArmError.journalVanished
             }
+
+            // The hold the machine is actually under, off the disk. Everything
+            // that ends this hold — the daemon's ticks, `revert`, `report` —
+            // reads this file, so it is the only value a caller may announce.
+            return confirmed.ttlSeconds
         } catch {
             rollBack(to: record.priorValue)
             throw error
@@ -322,8 +357,14 @@ public struct WatchdogService: Sendable {
     /// `evaluate(now:)` — so §8.1's two aborts could not fire in production
     /// however hot the machine got or however low the charge fell. Reading them
     /// from the injected environment removes the caller's chance to forget.
+    ///
+    /// `monotonicNow` is REQUIRED and has no default, for that same reason: a
+    /// default is how an input ships unwired. It is also the only reading here
+    /// a wall clock cannot move, so a caller that quietly skipped it would put
+    /// the 8-hour cap back on the clock issue #77 showed can be stepped.
     @discardableResult
     public func evaluate(now: Date,
+                         monotonicNow: TimeInterval,
                          lastHeartbeat: Date? = nil) throws -> WatchdogDecision {
         switch readJournal() {
         case .refused:
@@ -337,6 +378,7 @@ public struct WatchdogService: Sendable {
             let inputs = WatchdogInputs(
                 journal: record,
                 now: now,
+                monotonicNow: monotonicNow,
                 // No heartbeat channel means TTL-ONLY supervision, not an
                 // instant revert. `decide()` treats a nil heartbeat as
                 // `.heartbeatLost`, which is right when a channel exists and
@@ -417,8 +459,14 @@ public struct WatchdogService: Sendable {
         } catch {
             try? power.set(false)
             try? reader.clear()
-            try? supervisor.uninstall()
+            // Notify BEFORE the bootout. `uninstall()` ends this process, so
+            // anything sequenced after it never runs — and this notification is
+            // the only account the user gets of why the machine stopped holding
+            // sleep, in the one case where the journal was tampered with. Both
+            // mutations the message describes are already done above, so it is
+            // true at the moment it is posted.
             notifier.notify("refused the journal and restored sleep: \(error)")
+            try? supervisor.uninstall()
             return .refused
         }
     }
@@ -428,11 +476,16 @@ public struct WatchdogService: Sendable {
         // recorded `priorValue`.
         try power.set(record.priorValue)
         try reader.clear()
-        // Best-effort, and last: `bootout` ends the very process running this,
-        // so anything after it may not run. A failure to unload must not leave
-        // the revert half-done.
-        try? supervisor.uninstall()
+        // Before the uninstall, not after it. `bootout` ends the very process
+        // running this, so a notification sequenced after it never fires — and
+        // this is the ONLY output a revert produces that a user can observe,
+        // since every rung of the ladder merely returns `.revert(reason)`. Both
+        // mutations it describes are already done above, so the message is
+        // still true at the moment it is posted.
         notifier.notify("reverted SleepDisabled to \(record.priorValue): \(reason.rawValue)")
+        // Best-effort, and last: a failure to unload must not leave the revert
+        // half-done, and this call may not return at all.
+        try? supervisor.uninstall()
     }
 }
 

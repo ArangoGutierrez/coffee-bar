@@ -138,6 +138,31 @@ doing from Claude Code hooks and from nothing else, so until these entries
 exist the app runs and no session event ever reaches it. coffee-bar never
 writes your settings file for you.</p>
 
+<h3>Let coffee-bar write the entries</h3>
+
+<p>Open Preferences… from the foot of the panel, or press ⌘, while coffee-bar
+is frontmost. Under <strong>Agent tools</strong> each settings file is listed
+with a <strong>Copy hook snippet</strong> button beside it. Click the one next
+to <code>~/.claude/settings.json</code> and the whole block is on your
+pasteboard, ready to merge into the file.</p>
+
+<p>Prefer that button to the block below. It is generated from the same constant
+the health check reads, so it cannot tell you to wire a set the panel then
+reports as missing. It carries the ingest endpoint belonging to the tool you
+picked, which is how an arriving payload is attributed to that tool at all, and
+it puts the <code>matcher</code> key on exactly the events that need one. The
+block below explains none of that, and a hook config wrong in any of those ways
+fails silently: the app sees nothing and the panel still says the file is
+wired.</p>
+
+<p>The button writes to the pasteboard and stops there. Merging is yours,
+because that file is yours.</p>
+
+<h3>Or paste the block by hand</h3>
+
+<p>Worth doing if you want to read what you are pasting before it goes in, or if
+coffee-bar is not running yet.</p>
+
 <p>Add these to <code>~/.claude/settings.json</code>:</p>
 
 <pre class="hooks">{
@@ -147,7 +172,7 @@ writes your settings file for you.</p>
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+            "command": "curl -sS -o /dev/null --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
           }
         ]
       }
@@ -158,7 +183,7 @@ writes your settings file for you.</p>
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+            "command": "curl -sS -o /dev/null --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
           }
         ]
       }
@@ -169,7 +194,7 @@ writes your settings file for you.</p>
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+            "command": "curl -sS -o /dev/null --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
           }
         ]
       }
@@ -179,7 +204,7 @@ writes your settings file for you.</p>
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+            "command": "curl -sS -o /dev/null --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
           }
         ]
       }
@@ -189,7 +214,7 @@ writes your settings file for you.</p>
         "hooks": [
           {
             "type": "command",
-            "command": "curl -sS --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
+            "command": "curl -sS -o /dev/null --fail-with-body --max-time 5 --unix-socket \"$HOME/Library/Application Support/coffee-bar/ingest.sock\" -X POST --data-binary @- http://localhost/event"
           }
         ]
       }
@@ -198,6 +223,13 @@ writes your settings file for you.</p>
 }</pre>
 
 <p>The two tool events take a matcher; the other three take none.</p>
+
+<p><strong>Keep <code>-o /dev/null</code>.</strong> It pairs with
+<code>--fail-with-body</code>, which exists to print the server's error body
+rather than swallow it — and <code>curl</code> prints a body to standard output,
+which is where Claude Code looks for a hook's decision. Without the redirect, an
+ingest error reaches your agent as something to act on. The exit status, which
+is the part <code>--fail-with-body</code> is wanted for, is unaffected.</p>
 
 <p><strong>If your settings file already has a <code>hooks</code> key, merge
 these entries into it.</strong> Pasting the block whole replaces whatever
@@ -216,12 +248,14 @@ questions, so the panel answers them on two different lines.</p>
 
 <p>coffee-bar has no Dock icon and opens no window. Look for the cup at the
 right end of the menu bar, near the clock, and click it to open the panel. If
-your menu bar is full, macOS drops status items silently and the cup does not
-appear.</p>
+you cannot see the cup, the app is almost certainly running: on a full menu bar
+the cup is there and you cannot see it, and on a MacBook with a notch it is
+usually behind the notch.</p>
 
 <div class="note">
-<p>Read <a href="docs.html">the Docs page</a> next. It defines what each panel
-control does, what coffee-bar asks macOS for, and when it refuses to hold.</p>
+<p>Read <a href="docs.html">the Docs page</a> next. It defines all three
+controls — Serving in the panel, Display and Battery floor in the Preferences
+window — what coffee-bar asks macOS for, and when it refuses to hold.</p>
 </div>
 
 <h2 class="eyebrow">Requirements</h2>

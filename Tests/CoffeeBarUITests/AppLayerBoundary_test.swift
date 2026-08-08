@@ -167,6 +167,7 @@ private let expectedAppLayerEntries = [
     "Sources/CoffeeBarUI/HookHealthReader.swift",
     "Sources/CoffeeBarUI/MenuBarGlyphs.swift",
     "Sources/CoffeeBarUI/PanelView.swift",
+    "Sources/CoffeeBarUI/PreferencesView.swift",
     "Sources/CoffeeBarUI/ProcessGovernance.swift",
     "Sources/CoffeeBarUI/ServingModel.swift",
 ]
@@ -420,7 +421,13 @@ private func describePackage() throws -> ResolvedPackage {
 /// `#"…"#` strings, all of which are what the scanned targets contain today. A
 /// BARE REGEX LITERAL (`/…/`) would confuse it; the package uses none, and
 /// `swiftCodeWithoutCommentsKeepsCodeAndDropsComments` pins the behaviour.
-private func swiftCodeWithoutComments(_ source: String) -> String {
+///
+/// Internal rather than `private`, which in Swift is scoped to this file.
+/// `PreferencesView_test.swift` needs the same discriminator for the same
+/// reason: the surfaces it scans explain the version seam in prose, so a raw
+/// `contains` there is satisfied by the comment describing the render it
+/// deleted. One tested stripper in this target, not two.
+func swiftCodeWithoutComments(_ source: String) -> String {
     let characters = Array(source)
     var kept: [Character] = []
     kept.reserveCapacity(characters.count)
@@ -564,7 +571,43 @@ private func argumentSpans(of call: String, in code: String) -> [String] {
 /// literals, so a `{` or `}` inside one would misbalance the count. Nothing this
 /// reads carries a brace in a literal today. It is a structural reader and not
 /// the Swift grammar.
-private func braceBlock(after needle: String, in code: String)
+/// Internal rather than `private`, which in Swift is scoped to this file.
+/// `PreferencesView_test.swift` scopes its version check to a `body` block with
+/// it, for the reason this one exists: a `contains` over a whole file is
+/// satisfied by any call site, including one no rendered surface reaches. One
+/// tested brace reader in this target, not two — a second could disagree with
+/// this one, and the two guards would then argue about what a block is.
+///
+/// It finds the FIRST `{` after `needle`, so a needle appearing more than once
+/// in a file scopes to the earliest match. `PreferencesView_test.swift` composes
+/// two calls — type first, then `body` — because `PanelView.swift` declares two
+/// `View`s and the first `var body: some View` in it belongs to `MenuBarLabel`.
+/// How many braces are still open where `needle` first appears, or `nil` when it
+/// does not appear at all.
+///
+/// The unit of comparison for "is this line as conditional as that one". Two
+/// siblings in the same container sit at the same depth; wrapping one in an
+/// `if`, a `switch` or a closure adds a brace and moves it. That is the whole
+/// mechanism, and it is what tells a live render from a render that is merely
+/// SPELLED — `if false { Text(x) }` keeps every `contains` check green.
+///
+/// `nil` rather than `0` for a missing needle, so a caller cannot compare two
+/// absences and find them equal.
+///
+/// It counts every brace, string literals included, which is a real limit and
+/// the caller's job to know about: `swiftCodeWithoutComments` strips comments
+/// and keeps strings, so a `{` inside a literal ahead of the needle miscounts.
+func braceDepth(atFirst needle: String, in code: String) -> Int? {
+    guard let found = code.range(of: needle) else { return nil }
+    var depth = 0
+    for character in code[code.startIndex ..< found.lowerBound] {
+        if character == "{" { depth += 1 }
+        if character == "}" { depth -= 1 }
+    }
+    return depth
+}
+
+func braceBlock(after needle: String, in code: String)
     -> (block: String, rest: String)? {
     guard let found = code.range(of: needle),
           let open = code[found.upperBound...].firstIndex(of: "{")
@@ -886,48 +929,61 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     }
 }
 
-@Test func thePanelOffersTheQuietOthersControl() throws {
-    // PRESENCE, the same tripwire shape as `thePanelOffersTheDisplayHoldControl`
-    // and for the same reason: `ServingModel` can store the switch,
-    // `ProcessGovernance` can weigh it and `ProcGovernor` can act on it with
-    // every check green while the panel offers no way to turn it on.
+@Test func thePreferencesWindowOffersTheQuietOthersControl() throws {
+    // RETARGETED from `PanelView.swift` to `PreferencesView.swift` when the
+    // control moved into the Preferences window. The invariant did not change
+    // and is not about the panel: the user has to be able to FIND the switch.
+    // The surface that offers it did change, so this follows it rather than
+    // being deleted — a findability guard pointed at the wrong surface reports
+    // a control missing while it works, and one deleted reports nothing at all.
+    //
+    // PRESENCE, the same tripwire shape as
+    // `thePreferencesWindowOffersTheDisplayHoldControl` and for the same
+    // reason: `ServingModel` can store the switch, `ProcessGovernance` can
+    // weigh it and `ProcGovernor` can act on it with every check green while
+    // no surface offers a way to turn it on.
     //
     // That is not hypothetical on this branch. `ProcGovernor` landed with 2853
     // lines of tested code and ZERO production callers, and issue #13 exists
     // partly to complain that `LaunchDaemonInstaller` shipped the same way.
     //
-    // LIMIT, stated rather than hidden: this proves the panel NAMES the
+    // LIMIT, stated rather than hidden: this proves the window NAMES the
     // binding, not that it draws a usable control. Design §5.4 rules out
-    // asserting on rendered AppKit text.
+    // asserting on rendered AppKit text. Wrapping the toggle in `if false { … }`
+    // was measured leaving this check green over a window with no switch in it;
+    // `everyMovedControlIsRenderedAsUnconditionallyAsTheHeadingsAboveIt`
+    // (`PreferencesView_test.swift`) holds the reachability half.
     //
     // COMMENT-STRIPPED, unlike the three panel tripwires above it. Those state
     // that a mention in a comment satisfies them; this one refuses that,
     // because commenting the control out is the likeliest way it disappears and
     // the surrounding prose would keep naming it. A presence guard that a
-    // comment satisfies passes over the deletion it exists to catch.
+    // comment satisfies passes over the deletion it exists to catch. That
+    // matters more since the move, not less: `PreferencesView.swift` explains
+    // this control in prose several lines long.
     let files = try appLayerSources()
     #expect(files.count == expectedSourceCount,
             "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
 
-    let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
-                             "the app layer no longer compiles a PanelView.swift")
-    let source = swiftCodeWithoutComments(try String(contentsOf: panel, encoding: .utf8))
+    let window = try #require(files.first { $0.lastPathComponent == "PreferencesView.swift" },
+                              "the app layer no longer compiles a PreferencesView.swift")
+    let source = swiftCodeWithoutComments(try String(contentsOf: window, encoding: .utf8))
 
     // The BINDING, not the property. `model.quietEverythingElse` would be
     // satisfied by a line that merely displays the value, and a switch the user
     // can read and not flip is not a switch.
     #expect(source.contains("$model.quietEverythingElse"), """
-        PanelView.swift binds no control to model.quietEverythingElse, so the \
-        governor can be wired, stored and honoured and the user can never turn \
-        it on.
+        PreferencesView.swift binds no control to model.quietEverythingElse, so \
+        the governor can be wired, stored and honoured and the user can never \
+        turn it on.
         """)
 
     // The label comes from the model, where a check can read it. The wording is
     // constrained — macOS cannot promote a process — so a literal composed in
     // this view is a claim nothing in this package could ever check.
     #expect(source.contains("ServingModel.quietOthersLabel"), """
-        PanelView.swift names its own label for the quiet-others control. It \
-        belongs on ServingModel beside the other control labels, where \
+        PreferencesView.swift names its own label for the quiet-others control. \
+        It belongs on ServingModel beside the other control labels, where \
         theQuietOthersLabelNamesWhatIsQuietedAndClaimsNoSpeedUp reads it.
         """)
 }
@@ -1003,6 +1059,62 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
         the processes it was holding down stay there and the journal it wrote is \
         the only record naming them. docs/ACCEPTED-RISKS.md says the launch \
         recovery is what closes that window.
+        """)
+}
+
+@Test func theAppDeclaresTheSettingsSceneThePanelLinksTo() throws {
+    // PRESENCE, the same tripwire shape as the panel affordances below, and the
+    // one thing no other check in this repository can see: the Preferences
+    // window has to be REACHABLE.
+    //
+    // Deleting the `Settings` block still COMPILES. `MenuBarExtra` alone
+    // satisfies `some Scene`, and `main.swift` is top-level code no test target
+    // can import, so nothing else in this package would notice. Measured: the
+    // whole suite stays green while `SettingsLink` goes inert, `⌘,` does
+    // nothing, and the window cannot be opened at all — a window nobody can
+    // open is a window that does not exist, which is the shape issue #13
+    // complains about and the shape `ProcGovernor` shipped in.
+    //
+    // Here rather than in the task that fills the window. Task 5 moves the
+    // panel's controls INTO `PreferencesView`, and its own source scans read
+    // `PreferencesView.swift` — so a scene deleted before then leaves those
+    // scans green over controls sitting in a window nobody can reach. A
+    // tripwire added later lands behind the work it protects.
+    //
+    // COMMENT-STRIPPED, for the reason `thePanelOffersTheQuietOthersControl`
+    // gives: commenting the scene out is the likeliest way it disappears, and
+    // the prose around it in `main.swift` explains the scene at length. A
+    // presence guard that a comment satisfies passes over the deletion it
+    // exists to catch.
+    //
+    // LIMIT, stated rather than hidden: this proves `main.swift` NAMES the
+    // scene in code, never that macOS opens a window. Design §5.4 rules out
+    // asserting on rendered AppKit anything, and the z-order question — whether
+    // the window comes to the front for an `LSUIElement` app — is not visible
+    // to any check in this package.
+    let files = try appLayerSources()
+    #expect(files.count == expectedSourceCount,
+            "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
+
+    let main = try #require(files.first { $0.lastPathComponent == "main.swift" },
+                            "the app layer no longer compiles a main.swift")
+    let code = swiftCodeWithoutComments(try String(contentsOf: main, encoding: .utf8))
+
+    #expect(code.contains("Settings {"), """
+        main.swift declares no Settings scene, so SettingsLink in the panel is \
+        inert and ⌘, does nothing. The Preferences window cannot be opened by \
+        any route. This still compiles: MenuBarExtra alone satisfies some Scene.
+        """)
+
+    // The app's OWN model, not a second one. `PreferencesView(model:)` alone
+    // would be satisfied by `Settings { PreferencesView(model: ServingModel()) }`,
+    // and a second model owns a second listener and a second ticker: a setting
+    // changed in the window would never reach the model enforcing the battery
+    // floor, and the window would show state the panel does not have.
+    #expect(code.contains("PreferencesView(model: model)"), """
+        main.swift's Settings scene does not build PreferencesView from the app's \
+        own model. A second ServingModel owns a second listener and ticker, so \
+        settings changed in the window never reach the model that enforces them.
         """)
 }
 
@@ -1828,60 +1940,161 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // END attention-list scroll tripwire.
 }
 
-@Test func thePanelTellsTheUserHowToArmLidClosedMode() throws {
-    // The same tripwire as the three checks above, for issue #13's panel half.
+@Test func theLidClosedSummaryIsInThePreferencesWindowAndNotInThePanel() throws {
+    // TWO SURFACES, and the negative half is the point of issue #56.
     //
-    // Lid-closed mode is the one capability with NO control in this panel, and
-    // that is deliberate: it needs root, and coffee-bar never elevates its own
-    // privilege. What is left is telling the user the command — so if
-    // `PanelView` never reads the property, the feature reaches the user
-    // nowhere at all and the app simply has no lid-closed mode as far as anyone
-    // can tell.
+    // Lid-closed mode is the one capability with NO control anywhere, and that
+    // is deliberate: it needs root, and coffee-bar never elevates its own
+    // privilege. What is left is telling the user the command — so if NO view
+    // reads the property, the feature reaches the user nowhere at all and the
+    // app simply has no lid-closed mode as far as anyone can tell. That is what
+    // the positive half below refuses.
+    //
+    // The panel is the wrong surface for it, and the reason is not taste. The
+    // panel is 260pt wide and reports what coffee-bar is doing NOW; this
+    // sentence is neither live state nor a control, and it rendered as roughly
+    // 80 words of documentation inside that column. It belongs beside the other
+    // power settings, where somebody configuring behaviour is already looking,
+    // and the long explanation belongs on `site/docs.html`.
     //
     // The property carries the command AND the statement that this app cannot
     // read whether the mode is armed. Both halves matter and they are one
     // property for that reason; see
-    // `theLidClosedAdvisoryCarriesBothTheCommandAndWhatTheAppCannotSee`.
+    // `theLidClosedSummaryCarriesBothTheCommandAndWhatTheAppCannotSee`.
     //
     // Same LIMIT as the checks above, stated rather than hidden: this proves
-    // the panel NAMES the property, not that it renders it. M1 design §5.4
-    // forbids asserting on rendered AppKit text.
+    // which file NAMES the property, not what either surface renders. M1
+    // design §5.4 forbids asserting on rendered AppKit text.
     let files = try appLayerSources()
     #expect(files.count == expectedSourceCount,
             "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
 
+    let window = try #require(files.first { $0.lastPathComponent == "PreferencesView.swift" },
+                              "the app layer no longer compiles a PreferencesView.swift")
     let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
                              "the app layer no longer compiles a PanelView.swift")
 
-    // CODE, never the raw file. A mutation caught this: deleting the whole
-    // `Text(ServingModel.lidClosedAdvisory)` render and its modifier chain left
-    // this check GREEN, because the doc comment sitting above that render also
-    // names the property. The guard was reading its own explanation and
-    // reporting the feature present. Stripping comments first is what makes it
-    // discriminate; `swiftCodeWithoutComments` keeps string literals, and the
-    // render is code, so the correct tree stays green.
-    let code = swiftCodeWithoutComments(try String(contentsOf: panel, encoding: .utf8))
+    // CODE, never the raw file, and this file learned that from a mutation:
+    // deleting the whole `Text(ServingModel.lidClosedAdvisory)` render and its
+    // modifier chain left the old check GREEN, because the doc comment sitting
+    // above that render also named the property. The guard was reading its own
+    // explanation and reporting the feature present.
+    //
+    // The negative half needs it even more than the positive one. `PanelView`
+    // still CARRIES a comment saying where this moved and why — deliberately,
+    // so the next reader does not put it back — and a raw-file check would read
+    // that note and report the prose still rendered.
+    let windowCode = swiftCodeWithoutComments(try String(contentsOf: window, encoding: .utf8))
+    let panelCode = swiftCodeWithoutComments(try String(contentsOf: panel, encoding: .utf8))
 
-    // `ServingModel.lidClosedAdvisory` rather than `model.lidClosedAdvisory`:
-    // the sentence depends on no instance state — only on `ProbeVerb` — so it
-    // is a static, exactly like `ServingModel.displayLabel`. Requiring the
-    // instance spelling would have forced a property that ignores its own
-    // instance, which reads as though the panel were reporting live state. It
-    // is not, and that is the whole point of this surface.
-    #expect(code.contains("ServingModel.lidClosedAdvisory"), """
-        PanelView.swift never reads ServingModel.lidClosedAdvisory in code, so \
-        the only route a user has to lid-closed mode — the command to run — \
+    // `ServingModel.lidClosedSummary` rather than `model.lidClosedSummary`: the
+    // sentence depends on no instance state — only on `ProbeVerb` — so it is a
+    // static, exactly like `ServingModel.displayLabel`. Requiring the instance
+    // spelling would have forced a property that ignores its own instance,
+    // which reads as though the window were reporting live state. It is not,
+    // and that is the whole point of this surface.
+    #expect(windowCode.contains("ServingModel.lidClosedSummary"), """
+        PreferencesView.swift never reads ServingModel.lidClosedSummary in code, \
+        so the only route a user has to lid-closed mode — the command to run — \
         reaches them nowhere. Render it, or delete the property and the checks \
         on its text. A comment naming the property does not satisfy this.
         """)
+
+    // WIRED, not merely SPELLED. `contains` proves the property is named in
+    // code; it cannot tell a live render from a dead one, and the difference is
+    // invisible to every other check here because design §5.4 rules out reading
+    // the drawn window.
+    //
+    // Named bug this catches, and it is not hypothetical — the same shape
+    // defeated a sibling guard in this repository:
+    //
+    //     if false {
+    //         Text(ServingModel.lidClosedSummary)
+    //     }
+    //
+    // The property is spelled, the assertion above is green, and the user meets
+    // nothing. Any disabling condition does it, not just `false`.
+    //
+    // The test is BRACE DEPTH against an unconditional neighbour. Both renders
+    // are direct children of the same `VStack`, so they sit at the same depth;
+    // wrapping either in an `if`, a `switch` or a closure adds one. `Text("Power")`
+    // is the anchor because it is the section heading — a build where THAT is
+    // conditional is not a build where this check is the problem.
+    //
+    // LIMIT, stated rather than hidden: this counts braces over comment-stripped
+    // code, and `swiftCodeWithoutComments` keeps string literals. A brace inside
+    // a string in this file would miscount. There is none today — the strings
+    // are labels like "Power" and "Battery floor" — and if one arrives, this
+    // guard is what has to change.
+    //
+    // It also cannot prove the VStack itself is reachable. It proves this row is
+    // no more conditional than the heading above it, which is the property that
+    // was actually at risk.
+    let anchorDepth = try #require(braceDepth(atFirst: "Text(\"Power\")", in: windowCode), """
+        PreferencesView.swift no longer contains Text("Power"), so this guard has \
+        no unconditional neighbour to compare against and measured nothing.
+        """)
+    let summaryDepth = try #require(braceDepth(atFirst: "ServingModel.lidClosedSummary",
+                                               in: windowCode))
+
+    // ANTI-VACUITY. `body`, `ScrollView` and `VStack` are three braces before
+    // either render, plus the struct. A depth of nought means the counter read
+    // something that is not this view at all, and two zeroes would compare equal
+    // and pass.
+    #expect(anchorDepth >= 3, """
+        the unconditional anchor in PreferencesView.swift sits at brace depth \
+        \(anchorDepth), which is shallower than the struct, body, ScrollView and \
+        VStack that must enclose it. This guard is reading the wrong thing.
+        """)
+
+    #expect(summaryDepth == anchorDepth, """
+        PreferencesView.swift spells ServingModel.lidClosedSummary at brace depth \
+        \(summaryDepth) while the unconditional Text("Power") beside it sits at \
+        \(anchorDepth). The summary is inside something the heading is not — an \
+        `if`, a `switch`, a closure — so the text is present in the file and the \
+        user may never see it. The lid-closed summary is unconditional: there is \
+        no state to condition it on, and silence reads as "lid-closed mode is off".
+        """)
+
+    // The negative half. Issue #56: the panel keeps NOTHING about lid-closed
+    // mode, so both the current property and the one it replaced are refused.
+    // Naming the OLD spelling too is not belt and braces — a revert that
+    // restores `lidClosedAdvisory` is the most likely way this comes back, and
+    // a guard that only knew the new name would pass over it.
+    for property in ["lidClosedSummary", "lidClosedAdvisory"] {
+        #expect(!panelCode.contains(property), """
+            PanelView.swift reads \(property) in code. Issue #56: the Serving \
+            panel keeps nothing about lid-closed mode — it is neither live \
+            state nor a control, and it rendered as a paragraph of \
+            documentation in a 260pt column. The short version belongs in \
+            PreferencesView.swift and the explanation on site/docs.html.
+            """)
+    }
+
+    // The literal, not only the symbol. A sentence pasted straight into the
+    // panel as a string carries no property name at all, and the two checks
+    // above would both pass while the paragraph was back on screen — the
+    // failure mode M1 design §5.4 makes invisible to every other check here.
+    // `swiftCodeWithoutComments` keeps string literals, which is what makes
+    // this readable at all.
+    #expect(!panelCode.contains("Lid-closed"), """
+        PanelView.swift carries the literal "Lid-closed" in code, so the prose \
+        is back in the panel as a string rather than as a property. Issue #56: \
+        that surface keeps nothing about lid-closed mode.
+        """)
 }
 
-@Test func thePanelOffersTheDisplayHoldControl() throws {
+@Test func thePreferencesWindowOffersTheDisplayHoldControlAndThePanelReportsItsResult() throws {
+    // TWO SURFACES, and that split is the point of the name. The control moved
+    // into the Preferences window; the line reporting what it achieved stayed
+    // in the panel. Both halves are findability, and they are now findable in
+    // different places, so a guard reading one file can no longer hold them.
+    //
     // Issue #12's acceptance, and the one thing no other check in this
     // repository can see: the user has to be able to FIND the setting.
     // `ServingModel` can store it, `PowerBroker` can weigh it and
-    // `AssertionHolder` can raise it with every check green while the panel
-    // offers no way to turn it on — which is a feature that does not exist.
+    // `AssertionHolder` can raise it with every check green while no surface
+    // offers a way to turn it on — which is a feature that does not exist.
     //
     // That is not hypothetical here. Commit 5116326 landed the hook health
     // check, the model published it, and `PanelView` read it nowhere; the
@@ -1892,12 +2105,21 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // control. M1 design §5.4 forbids asserting on rendered AppKit text, so no
     // check in this package can watch the picker appear. It is a tripwire
     // against deleting the control, not proof the control is right.
+    //
+    // AND IT IS SATISFIED BY A DEAD RENDER, which is not a limit that can be
+    // left at "stated": wrapping this picker in `if false { … }` was measured
+    // leaving this check green over a window with no Display control in it.
+    // `everyMovedControlIsRenderedAsUnconditionallyAsTheHeadingsAboveIt`
+    // (`PreferencesView_test.swift`) holds the reachability half by brace
+    // depth. This one holds the naming half, and neither is sufficient alone.
     let files = try appLayerSources()
     #expect(files.count == expectedSourceCount,
             "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
 
     let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
                              "the app layer no longer compiles a PanelView.swift")
+    let window = try #require(files.first { $0.lastPathComponent == "PreferencesView.swift" },
+                              "the app layer no longer compiles a PreferencesView.swift")
 
     // CODE, never the raw file, and this check is the one that PROVED the need.
     // Two mutations were run against the raw-file version: deleting the Display
@@ -1906,26 +2128,31 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // the user has to be able to FIND the setting — was therefore unproven
     // against anyone who deleted the control and said so in a comment. The
     // raw-file version was sound only by the accident that no comment in
-    // `PanelView.swift` happened to name the binding.
+    // `PanelView.swift` happened to name the binding, and that accident is
+    // spent: the panel now explains in prose that this control moved.
     let code = swiftCodeWithoutComments(try String(contentsOf: panel, encoding: .utf8))
+    let windowCode = swiftCodeWithoutComments(try String(contentsOf: window, encoding: .utf8))
 
     // The BINDING, not the property. `model.holdDisplayAwake` would be
     // satisfied by a line that merely displays the value, and a setting the
     // user can read and not change is not a setting.
-    #expect(code.contains("$model.holdDisplayAwake"), """
-        PanelView.swift binds no control to model.holdDisplayAwake in code, so \
-        the display hold can be stored and honoured and the user can never turn \
-        it on. Issue #12 asks for a control they can see. A comment naming the \
-        binding does not satisfy this.
+    #expect(windowCode.contains("$model.holdDisplayAwake"), """
+        PreferencesView.swift binds no control to model.holdDisplayAwake in \
+        code, so the display hold can be stored and honoured and the user can \
+        never turn it on. Issue #12 asks for a control they can see. A comment \
+        naming the binding does not satisfy this.
         """)
 
     // The labels come from the model, for the reason the Serving picker's do:
-    // a second list of literals in this view can drift from the sentence
-    // `servingSummary` writes, and design §5.4 rules out catching that.
-    #expect(code.contains("ServingModel.displayLabel"), """
-        PanelView.swift names its own labels for the display control. They \
-        belong on ServingModel beside the Serving labels, where a check can \
-        read them.
+    // a second list of literals in the view can drift from the sentence
+    // `servingSummary` writes, and design §5.4 rules out catching that. The
+    // move made this sharper rather than looser — the labels stayed on
+    // `ServingModel` while the control crossed to another file, which is the
+    // whole benefit of their living there.
+    #expect(windowCode.contains("ServingModel.displayLabel"), """
+        PreferencesView.swift names its own labels for the display control. \
+        They belong on ServingModel beside the Serving labels, where a check \
+        can read them.
         """)
 
     // And the line that says what is actually held has to be the model's, not
@@ -1935,5 +2162,160 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
         PanelView.swift never reads model.servingSummary in code, so the line \
         telling the user what is held is composed in the view where no check \
         reads it.
+        """)
+}
+
+@Test func thePanelOffersTheRouteToThePreferencesWindow() throws {
+    // PRESENCE, the same tripwire shape as the two checks above and for the
+    // same stated reason: the user has to be able to FIND the setting. The
+    // scene can be declared, the window can be built and every check can be
+    // green while the panel offers no way in — and this panel is the only route
+    // the product ships. An `LSUIElement` app has no Dock icon and no menu bar
+    // of its own, so a user who cannot reach Preferences from here has ⌘, and
+    // nothing else, and nothing tells them that.
+    //
+    // `theAppDeclaresTheSettingsSceneThePanelLinksTo` holds the other half.
+    // Either one alone leaves the feature unreachable: a scene with no link, or
+    // a link with no scene.
+    //
+    // COMMENT-STRIPPED, for the reason `thePanelOffersTheQuietOthersControl`
+    // gives, and this file is the case that proves the need — the block above
+    // records a mutation where a deleted control left a raw-text guard GREEN
+    // because a comment still named it. `PanelView.swift` explains this route
+    // in a comment that names both the API used and the one refused.
+    //
+    // LIMIT, stated rather than hidden: this proves the panel NAMES the link in
+    // code, not that it draws a usable control, and not that the window comes to
+    // the front when clicked. Design §5.4 rules out asserting on rendered AppKit
+    // text; the z-order behaviour is verifiable only by hand.
+    let files = try appLayerSources()
+    #expect(files.count == expectedSourceCount,
+            "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
+
+    let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
+                             "the app layer no longer compiles a PanelView.swift")
+    let code = swiftCodeWithoutComments(try String(contentsOf: panel, encoding: .utf8))
+
+    #expect(code.contains("SettingsLink"), """
+        PanelView.swift offers no SettingsLink, so the panel has no route to the \
+        Preferences window. The scene can be declared and the view built with \
+        every check green while the only affordance the product ships is gone.
+        """)
+
+    // The MECHANISM, not only the presence, because the wrong one fails at
+    // runtime on some releases and compiles on all of them. AppKit's selector
+    // for this window has changed spelling across macOS releases, so
+    // `NSApp.sendAction(Selector(("showSettingsWindow:")))` is a string that
+    // always builds and sometimes works — a silent failure on exactly the
+    // machines the maintainer is not sitting at. `SettingsLink` is the typed
+    // equivalent and needs macOS 14, which is already this package's target.
+    //
+    // THE COMMENT STRIPPING IS LOAD-BEARING HERE, NOT STYLISTIC. Read this
+    // before changing `swiftCodeWithoutComments` out of the line above.
+    //
+    // `PanelView.swift` spells this selector out, in the comment explaining why
+    // it is refused. So over the RAW file this expectation is not merely blind
+    // the way the version guard was — it is INVERTED. It reports a CORRECT
+    // implementation as a violation, and the obvious way to make a red build
+    // green again is to delete the comment that documents the decision. The
+    // guard would then have destroyed the record of the reason it exists,
+    // leaving the next person free to reach for the selector with nothing left
+    // to warn them off it.
+    //
+    // A guard that is wrong on a correct tree is worse than no guard: it
+    // teaches people to silence it.
+    #expect(!code.contains("showSettingsWindow:"), """
+        PanelView.swift reaches the Preferences window through the string \
+        selector showSettingsWindow:. That spelling has changed across macOS \
+        releases, so it compiles everywhere and works somewhere. SettingsLink is \
+        the typed route and macOS 14 is already the deployment target.
+        """)
+}
+
+@Test func theSettingsWindowTakesTheForegroundAndGivesItBack() throws {
+    // MEASURED, not anticipated. At 0.1.1-31-g7949c51 clicking Preferences…
+    // opened the window and left the app in the background:
+    //
+    //     before=Finder | after=Finder | windows=[coffee-bar Settings]
+    //
+    // coffee-bar is `LSUIElement`, and macOS 14 made activation cooperative: an
+    // `.accessory` app that asks for the foreground is declined. So the window
+    // drew over whatever the user was in, with a grey title bar, taking none of
+    // their keystrokes.
+    //
+    // BOTH HALVES, and the second is the one a fix forgets. Becoming `.regular`
+    // is what lets the app activate; going back to `.accessory` when the window
+    // closes is what stops a menu-bar-only product keeping a Dock icon for the
+    // rest of the session. A tree with the first and not the second passes the
+    // acceptance script and is still wrong.
+    //
+    // THE REAL CHECK FOR THIS IS NOT HERE, and saying so is the point.
+    // `scripts/preferences-activation-acceptance.sh` drives the running app
+    // through the accessibility API and reads which process is frontmost — the
+    // only way to observe it, because M1 design §5.4 rules out asserting on
+    // rendered AppKit state and the fault lives in the window server's notion of
+    // which application is active. That script needs Accessibility permission
+    // and a running build, so it cannot run in CI. This guard is the CI-side net
+    // for it: it proves the calls the script measured are still there. It cannot
+    // prove they work.
+    //
+    // COMMENT-STRIPPED, and this file's own history is why that is not optional.
+    // The paragraph you are reading names both calls while explaining them, so
+    // read raw this expectation would pass on the strength of its own
+    // documentation — the blind direction, exactly as the version guard failed.
+    let files = try appLayerSources()
+    #expect(files.count == expectedSourceCount,
+            "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
+
+    let window = try #require(files.first { $0.lastPathComponent == "PreferencesView.swift" },
+                              "the app layer no longer compiles a PreferencesView.swift")
+    let code = swiftCodeWithoutComments(try String(contentsOf: window, encoding: .utf8))
+
+    #expect(code.contains("NSApp.activate("), """
+        PreferencesView.swift never asks for the foreground. coffee-bar is \
+        LSUIElement: the window then draws in front of whatever the user was \
+        in, with a grey title bar, and their keystrokes go to the other app. \
+        Measured at 0.1.1-31-g7949c51 as before=Finder/after=Finder with the \
+        Settings window present.
+        """)
+
+    #expect(code.contains("setActivationPolicy(.regular)"), """
+        PreferencesView.swift calls NSApp.activate without becoming .regular \
+        first. Measured on macOS 26.5: under .accessory that call does nothing \
+        — the window sits in NSApp.windows and keyWindow stays nil, with or \
+        without makeKeyAndOrderFront. Re-run \
+        scripts/preferences-activation-acceptance.sh before changing this.
+        """)
+
+    // SCOPED TO `.onDisappear`, and the unscoped `contains` this replaces was
+    // defeated BY EXECUTION rather than by argument. The mutant: delete
+    // `.onDisappear` and put `if false { setActivationPolicy(.accessory) }`
+    // inside `onAppear`. The string is still in the file, the old assertion
+    // still passed, and the call can never run — so a permanent Dock icon
+    // shipped with CI green, which is the exact failure the message below
+    // claims to prevent.
+    //
+    // That is not a hypothetical mutation. The revert is the SOLE condition on
+    // which a Dock icon was accepted into a menu-bar-only product at all, so
+    // this is the one assertion in this test that has to hold by wiring rather
+    // than by spelling.
+    //
+    // `braceBlock(after:in:)` is the reader the version guard and the
+    // attention-list guard already use. One tested brace reader in this target,
+    // never a second — two could disagree about what a block is.
+    let restore = try #require(braceBlock(after: ".onDisappear", in: code)?.block, """
+        PreferencesView.swift opens no `.onDisappear` block, so nothing restores \
+        the activation policy when the Preferences window closes. The app turns \
+        .regular to take the foreground and never turns back: a menu-bar-only \
+        product then keeps a Dock icon for the rest of the session.
+        """)
+
+    #expect(restore.contains("setActivationPolicy(.accessory)"), """
+        PreferencesView.swift's .onDisappear does not call \
+        setActivationPolicy(.accessory), so a Dock icon outlives the window that \
+        needed it and a menu-bar-only app keeps one for the rest of the session. \
+        The restore belongs on the window's own disappearance, which is the only \
+        event that knows it has gone. A call ANYWHERE ELSE in the file does not \
+        satisfy this — an unreachable one is what this scoping was added to catch.
         """)
 }

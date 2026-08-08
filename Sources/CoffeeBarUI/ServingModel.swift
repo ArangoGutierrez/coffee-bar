@@ -306,25 +306,235 @@ public final class ServingModel {
         return "\(opening) \(refusal)"
     }
 
+    /// The probe's product name, spelled once.
+    ///
+    /// `Package.swift` declares it and `scripts/build-app.sh` copies it into the
+    /// bundle; `theLidClosedCommandNamesARealExecutableProduct` holds this
+    /// against the manifest, so a rename that misses this line goes red.
+    nonisolated public static let probeProductName = "coffee-bar-probe"
+
+    /// Where a disk-image install puts the probe.
+    ///
+    /// **For DOCUMENTS, and for nothing that can ask a running process.** A page
+    /// has to print one path, and this is the one a reader who downloaded the
+    /// DMG will have. Anything with a `Bundle` in hand uses
+    /// `probePath(besideExecutable:)` instead and gets the truth for that
+    /// machine.
+    ///
+    /// The `CoffeeBar.app` spelling is `APP_NAME` in `scripts/build-app.sh`, and
+    /// `theBundleTheScriptAssemblesCarriesTheProbe` pins the two together rather
+    /// than trusting this line.
+    nonisolated public static let documentedProbePath =
+        "/Applications/CoffeeBar.app/Contents/MacOS/\(probeProductName)"
+
+    /// The probe that sits beside `executable`.
+    ///
+    /// **Derived, because a literal is correct for one install out of four.**
+    /// `scripts/build-app.sh` puts both binaries in the same `Contents/MacOS`,
+    /// so the probe is always the app's own neighbour — and that holds wherever
+    /// the app ended up. A hardcoded `/Applications` path is right for the disk
+    /// image and wrong for a Homebrew prefix (`docs/QUICKSTART.md` states that
+    /// Homebrew formulae do not write to `/Applications`), wrong for a
+    /// `swift build` tree, and wrong for a copy dragged to the Desktop. Each of
+    /// those users would be handed a path their shell cannot find.
+    ///
+    /// **PURE, and it touches no filesystem.** It composes a path and does not
+    /// ask whether anything is there. A check that stat'd the disk would assert
+    /// a different thing on every machine, and this is the seam a test has to be
+    /// able to drive with a location that is not this one —
+    /// `theProbePathIsDerivedFromTheBundleAndNotAHardcodedLiteral` drives four.
+    ///
+    /// The caller supplies the URL, mirroring
+    /// `PanelView.versionLine(from: Bundle.main.infoDictionary)`: the view reads
+    /// `Bundle.main`, the model stays pure. Reading `Bundle.main` in here would
+    /// resolve to the TEST RUNNER under `swift test`, which is neither this app
+    /// nor an error anything could detect.
+    ///
+    /// `nil` — which `Bundle.main.executableURL` is documented to allow — falls
+    /// back to `documentedProbePath`. An app that cannot locate itself still has
+    /// to print a command, and the disk-image location is the likeliest true
+    /// answer at that point.
+    nonisolated public static func probePath(besideExecutable executable: URL?) -> String {
+        guard let executable else { return documentedProbePath }
+        return executable
+            .deletingLastPathComponent()
+            .appendingPathComponent(probeProductName)
+            .path
+    }
+
+    /// Where the probe has to be before root will run it.
+    ///
+    /// **The only kind of place `arm` can succeed from, and this is measured.**
+    /// `arm` reaches `LaunchDaemonInstaller.install()`, which puts its own
+    /// program path through `PathSecurity.validate` before it writes anything:
+    /// every component must be root-owned and neither group- nor
+    /// other-writable, because launchd execs that file as uid 0 with
+    /// `RunAtLoad` and `KeepAlive`. Measured on macOS 26.5.2, `/`, `/Library`
+    /// and `/Library/PrivilegedHelperTools` are all `drwxr-xr-x root:wheel`, so
+    /// the chain passes.
+    ///
+    /// **`/Applications` measurably cannot, which is issue #75.** Apple ships
+    /// it `drwxrwxr-x root:admin`, so `PathSecurity` refuses it and everything
+    /// below it. NO app installed there can arm in place, and the window used
+    /// to print that command anyway:
+    ///
+    ///     $ sudo /Applications/CoffeeBar.app/Contents/MacOS/coffee-bar-probe arm
+    ///     coffee-bar-probe: could not arm: programPathInsecure(...)
+    ///       /Applications                groupOrOtherWritable: true
+    ///       /Applications/CoffeeBar.app  notOwnedByRoot: true
+    ///
+    /// The refusal is correct and is not the bug: a root LaunchDaemon pointed
+    /// at a binary every member of `admin` can rewrite is root persistence
+    /// handed to whoever gets there first. What was wrong is what the app told
+    /// the user to type.
+    ///
+    /// **A LITERAL, unlike `probePath(besideExecutable:)`, and the contrast is
+    /// the point.** Where the probe SHIPS depends on the install and has to be
+    /// derived. Where it is ARMED cannot depend on the install at all, and it
+    /// is the same directory on every Mac.
+    /// `theArmedProbeIsNeverTheCopyInsideTheAppBundle` drives four installs and
+    /// requires one answer.
+    ///
+    /// `/Library/PrivilegedHelperTools` is where macOS puts binaries a root
+    /// process is meant to exec. coffee-bar installs nothing there itself — it
+    /// never elevates its own privilege, so the user runs the copy in their own
+    /// shell — but the directory's ownership is what this needs, and the
+    /// convention is what makes the path recognisable to anyone auditing their
+    /// own machine.
+    nonisolated public static let privilegedProbePath =
+        "/Library/PrivilegedHelperTools/\(probeProductName)"
+
+    /// The command that copies the probe from `path` to where root can run it.
+    ///
+    /// **The step issue #75 was missing.** Without it the arm command names a
+    /// binary that is not on the machine; with the old arm command in its place
+    /// it names one root refuses to exec. The two are one procedure and neither
+    /// half works alone.
+    ///
+    /// The path is a PARAMETER, and this is the one command here that still
+    /// takes one: the SOURCE is wherever this copy of the app lives, which is
+    /// what `probePath(besideExecutable:)` answers, and it differs for a disk
+    /// image, a Homebrew prefix, a build tree and a copy on the Desktop. The
+    /// DESTINATION is fixed for all four.
+    ///
+    /// `install(1)` rather than `cp`: it sets owner, group and mode in the same
+    /// call that writes the file, so the copy is never briefly present at the
+    /// wrong ownership. `-o root -g wheel -m 755` is what makes the leaf pass
+    /// `PathSecurity` — a copy left owned by the user fails the same check
+    /// `/Applications` fails, and the user would have followed the instructions
+    /// and still met a refusal.
+    nonisolated public static func lidClosedInstallCommand(probeAt path: String) -> String {
+        "sudo install -o root -g wheel -m 755 "
+        + "\(shellQuoted(path)) \(shellQuoted(privilegedProbePath))"
+    }
+
+    /// `path` as exactly ONE operand of a shell command line.
+    ///
+    /// **Every command on this surface is printed to be pasted into a ROOT
+    /// shell**, so where the word boundaries fall is not cosmetic. The source
+    /// path is composed from `Bundle.main.executableURL` — the user never chose
+    /// it with a shell in mind, and `~/My Apps`, a `Coffee Bar.app` rename and
+    /// any home directory with a space in it each put a space in the middle of
+    /// a line that runs as uid 0. Interpolated bare, that line hands
+    /// `install(1)` four operands, which makes it read the last as a
+    /// destination DIRECTORY:
+    ///
+    ///     install: /Library/PrivilegedHelperTools/coffee-bar-probe: Not a directory
+    ///
+    /// The user is told their own destination is wrong about a file they were
+    /// told to create. An apostrophe in the path is worse — the shell refuses
+    /// the whole line — and a `$(…)` or a backtick is worse again, because that
+    /// substitution RUNS, as root, measured: `$(id -u)` in a fixture path
+    /// expanded to `502` before this existed.
+    ///
+    /// POSIX single quotes, because between them every byte is literal: no
+    /// expansion, no escape sequence, no globbing. The single quote is the one
+    /// character that cannot appear inside them, so it is closed, escaped and
+    /// reopened as `'\''` — what `shlex.quote` produces, and what `install`
+    /// then receives as one apostrophe.
+    ///
+    /// **Left alone when nothing needs quoting**, deliberately rather than as a
+    /// shortcut. This window's whole premise is that a user READS the command
+    /// before running it as root, and quotes around a path that does not need
+    /// them invite the reader to wonder what is being hidden. The bare-word set
+    /// is `shlex.quote`'s: alphanumerics and `_@%+=:,./-`. Everything else is
+    /// quoted whether or not this author can say what a shell would do with it,
+    /// which is the conservative direction — a path quoted needlessly still
+    /// installs, and one that needed it does not.
+    ///
+    /// `aShellFindsNoSyntaxInTheProbePathHoweverItIsSpelled` holds this against
+    /// a real `/bin/sh` rather than against a second implementation of these
+    /// rules.
+    nonisolated static func shellQuoted(_ path: String) -> String {
+        let bareWord = Set(
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@%+=:,./-")
+        guard !path.isEmpty else { return "''" }
+        guard path.contains(where: { !bareWord.contains($0) }) else { return path }
+        return "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
     /// The command that arms lid-closed mode.
     ///
     /// The verb comes from `ProbeVerb.arm` rather than being typed here. A
     /// literal drifts the moment the verb is renamed, and the drift lands on
     /// the user at the worst possible moment: they have already typed `sudo`,
     /// and the binary answers with a usage error.
-    public static let lidClosedCommand = "sudo coffee-bar-probe \(ProbeVerb.arm.rawValue)"
+    ///
+    /// **No path parameter since issue #75, and its absence is the fix.** It
+    /// had one on the grounds that the path is "the one part of this string
+    /// that depends on the machine". That was false. `arm` is refused from
+    /// every location the app can be installed to, so the only path this
+    /// command can name is `privilegedProbePath` — and a parameter with exactly
+    /// one correct argument is how the bundle path came to be passed in the
+    /// first place, on a surface where no guard could see it because the model
+    /// and the checks read the same value.
+    nonisolated public static let lidClosedCommand =
+        "sudo \(shellQuoted(privilegedProbePath)) \(ProbeVerb.arm.rawValue)"
 
     /// The command that prints what is currently armed.
     ///
     /// `report` is a root verb for a reason worth repeating here: the journal
     /// it prints is a root-owned `0600` file inside a `0700` directory, so an
     /// unprivileged read cannot open it at all.
-    public static let lidClosedReportCommand =
-        "sudo coffee-bar-probe \(ProbeVerb.report.rawValue)"
-
-    /// The paragraph the panel shows about lid-closed mode.
     ///
-    /// **The panel cannot show whether the mode is armed, and this is measured
+    /// **It names the installed copy too, and NOT because `report` would be
+    /// refused otherwise.** Read from source rather than run, since this app
+    /// cannot sudo: `.report` in `Sources/CoffeeBarProbe/main.swift` builds a
+    /// `GuardedJournalReader` and nothing else, and that type validates the
+    /// JOURNAL's path. `LaunchDaemonInstaller.validatedProgramPath` is the only
+    /// code that judges the program's OWN path, and `install()` is its single
+    /// caller — so `arm` alone reaches it. `revert` and `watchdog` reach
+    /// `uninstall()`, which validates nothing. `sudo` on the in-bundle probe
+    /// would therefore have printed the journal.
+    ///
+    /// It moves because of what `sudo` means here, not because of what the code
+    /// checks. `/Applications` is writable by `admin`, so telling a user to run
+    /// the in-bundle binary as root is telling them to run a file another
+    /// account can replace — the same primitive `PathSecurity` refuses for
+    /// `arm`, reached by a route that happens not to be guarded. The installed
+    /// copy is root-owned `0755` under a root-only directory, and by the time
+    /// anyone asks what is armed it is already there.
+    nonisolated public static let lidClosedReportCommand =
+        "sudo \(shellQuoted(privilegedProbePath)) \(ProbeVerb.report.rawValue)"
+
+    /// The short version of lid-closed mode, for the Preferences window.
+    ///
+    /// **Two sentences, and the brevity is the requirement.** This replaced
+    /// `lidClosedAdvisory`, roughly 80 words that the 260pt Serving panel
+    /// rendered unconditionally — a man page in a popover, and issue #56. The
+    /// panel keeps nothing now: that surface reports what coffee-bar is doing
+    /// NOW, and this is neither live state nor a control. The explanation a
+    /// reader actually needs — the root requirement, the launchd watchdog, why
+    /// arm-state cannot be shown, what the TTL is for — is on `site/docs.html`,
+    /// which carried no lid-closed documentation at all until that issue, which
+    /// is why the panel's paragraph pointed at nothing.
+    ///
+    /// `theLidClosedSummaryIsTheShortVersionAndNotTheMovedParagraph` bounds the
+    /// sentence count, because the failure this replaced is not "the wrong
+    /// window" — it is a paragraph on a control surface, and moving one window
+    /// over reproduces it.
+    ///
+    /// **coffee-bar cannot show whether the mode is armed, and this is measured
     /// rather than assumed.** `FileJournalStore.systemURL` lives in a directory
     /// `GuardedJournalReader` requires to be exactly `0700` and root-owned.
     /// Measured on macOS 26.5.2 as uid 502 against `/var/root`, a root-owned
@@ -335,15 +545,18 @@ public final class ServingModel {
     /// Issue #13 asked for a state display. Widening the journal's modes to
     /// provide one was rejected: those modes are the security property that
     /// makes a root process safe to hand a file, and they outrank a nicer
-    /// panel. So this states the limit instead of inventing a reading, and
-    /// names the command that CAN answer the question.
+    /// window. So this states the limit instead of inventing a reading, and
+    /// names the command that CAN answer the question. That half is a product
+    /// LIMITATION rather than an explanation, which is why it stayed in the
+    /// short version while the rest went to the site: cut it and a user who
+    /// armed the mode meets no signal anywhere.
     ///
     /// **A STATIC, and always shown.** Every other advisory here is optional
     /// and silent when it has nothing to report — but silence is exactly what
     /// this one cannot afford. There is no signal to condition it on, and a
-    /// panel that said nothing would read as "lid-closed mode is off", which is
+    /// window that said nothing would read as "lid-closed mode is off", which is
     /// a claim this app has no evidence for. It is also the only route the user
-    /// has to a capability with no control in this window.
+    /// has to a capability with no control anywhere in the product.
     ///
     /// It offers no control, deliberately. coffee-bar never elevates its own
     /// privilege (SECURITY.md, design §6.3), so the user runs the command in
@@ -351,14 +564,34 @@ public final class ServingModel {
     /// it prints the snippet and refuses to write `~/.claude/settings.json`.
     /// `theAppLayerNeverReachesForPrivilegeEscalation` refuses the alternative
     /// structurally.
-    public static let lidClosedAdvisory =
-        "Lid-closed mode keeps the Mac awake with the lid shut. It needs root, "
-        + "and coffee-bar never elevates its own privilege, so you run it "
-        + "yourself: \(lidClosedCommand). That holds for "
-        + "\(ProbeVerb.defaultTTLSeconds / 60) minutes by default, and a launchd "
-        + "watchdog puts the setting back. coffee-bar cannot show you whether it "
-        + "is armed — the journal belongs to root and this app runs as you. Run "
-        + "\(lidClosedReportCommand) to find out."
+    /// **A FUNCTION since issue #64**, and the parameter is the whole point. The
+    /// probe ships inside the bundle and is not on any `PATH`, so this sentence
+    /// has to name an absolute path — and the right one depends on where this
+    /// copy of the app is. The window passes
+    /// `probePath(besideExecutable: Bundle.main.executableURL)`.
+    ///
+    /// **The parameter is the install SOURCE since issue #75**, and nothing
+    /// else. It used to be the path the user was told to `sudo`, which was a
+    /// command no install of this app could run: `arm` validates its own
+    /// program path and refuses every location the app can be dragged to. Now
+    /// the sentence tells the user to copy that binary somewhere root trusts
+    /// and to arm the copy, which is a sequence that was measured to work.
+    ///
+    /// **STILL TWO SENTENCES, and the install step is a clause rather than a
+    /// third.** The brevity above is a requirement and this had to grow inside
+    /// it. It cannot be met by dropping the install step: a window that names
+    /// `privilegedProbePath` alone points at a file that is not on the machine
+    /// yet, which is the same failure as #75 with a different error message.
+    /// `theLidClosedSummaryIsTheShortVersionAndNotTheMovedParagraph` bounds the
+    /// count, and `site/docs.html` carries the version with the reasoning in it.
+    nonisolated public static func lidClosedSummary(probeAt path: String) -> String {
+        "Lid-closed mode needs root, so you install the probe where root can "
+        + "trust it with \(lidClosedInstallCommand(probeAt: path)) and arm it "
+        + "yourself with \(lidClosedCommand), which holds for "
+        + "\(ProbeVerb.defaultTTLSeconds / 60) minutes. coffee-bar cannot show "
+        + "you whether it is armed — the journal belongs to root and this app "
+        + "runs as you — so run \(lidClosedReportCommand) to find out."
+    }
 
     /// The one line the panel shows about the battery floor, or `nil` for no
     /// line.

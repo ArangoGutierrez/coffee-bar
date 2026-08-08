@@ -11,6 +11,7 @@ private let provenance = ArmProvenance(
 @Test func ttlIsClampedToEightHoursOnInit() {
     let r = JournalRecord(intent: .sleepDisabled, priorValue: false,
                           setAt: Date(timeIntervalSince1970: 0),
+                          setAtMonotonic: 10_000,
                           ttlSeconds: 999_999_999, armedBy: provenance)
     #expect(r.ttlSeconds == 28_800)
 }
@@ -30,6 +31,7 @@ private let provenance = ArmProvenance(
 @Test func ttlBelowOneIsRaisedToOne() {
     let r = JournalRecord(intent: .sleepDisabled, priorValue: false,
                           setAt: Date(timeIntervalSince1970: 0),
+                          setAtMonotonic: 10_000,
                           ttlSeconds: -5, armedBy: provenance)
     #expect(r.ttlSeconds == 1)
 }
@@ -37,7 +39,8 @@ private let provenance = ArmProvenance(
 @Test func expiryIsSetAtPlusClampedTTL() {
     let base = Date(timeIntervalSince1970: 1_000_000)
     let r = JournalRecord(intent: .sleepDisabled, priorValue: false,
-                          setAt: base, ttlSeconds: 900, armedBy: provenance)
+                          setAt: base, setAtMonotonic: 10_000,
+                          ttlSeconds: 900, armedBy: provenance)
     #expect(r.expiry == base.addingTimeInterval(900))
 }
 
@@ -46,8 +49,8 @@ private let provenance = ArmProvenance(
     // the requested value the journal would appear valid for 31 years.
     let base = Date(timeIntervalSince1970: 1_000_000)
     let r = JournalRecord(intent: .sleepDisabled, priorValue: false,
-                          setAt: base, ttlSeconds: 999_999_999,
-                          armedBy: provenance)
+                          setAt: base, setAtMonotonic: 10_000,
+                          ttlSeconds: 999_999_999, armedBy: provenance)
     #expect(r.expiry == base.addingTimeInterval(28_800))
 }
 
@@ -91,9 +94,64 @@ private let provenance = ArmProvenance(
     // Spec D6: if the user deliberately had disablesleep on, we restore THAT.
     let r = JournalRecord(intent: .sleepDisabled, priorValue: true,
                           setAt: Date(timeIntervalSince1970: 5),
+                          setAtMonotonic: 10_000,
                           ttlSeconds: 60, armedBy: provenance)
     let decoded = try JSONDecoder().decode(
         JournalRecord.self, from: JSONEncoder().encode(r))
     #expect(decoded.priorValue == true)
     #expect(decoded == r)
+}
+
+// MARK: - #77: the stamp the cap is measured against
+
+@Test func theMonotonicStampSurvivesTheRoundTripThroughTheFile() throws {
+    // The bug this catches: a stamp that is written and never read back. The
+    // daemon reads the journal from DISK on every tick, so a `setAtMonotonic`
+    // the encoder drops or the decoder ignores comes back as 0 — and 0 is
+    // boot-relative, so the elapsed time reads as the whole uptime and every
+    // arm reverts on its first tick. The feature would be dead and only this
+    // assertion would say why.
+    //
+    // A fractional value on purpose: `setAt` cannot carry sub-second precision
+    // through ISO-8601, and this field must not inherit that limit — it is
+    // encoded as a number, and rounding it would move the cap by up to a
+    // second every time the journal is read.
+    let r = JournalRecord(intent: .sleepDisabled, priorValue: false,
+                          setAt: Date(timeIntervalSince1970: 5),
+                          setAtMonotonic: 12_345.75,
+                          ttlSeconds: 60, armedBy: provenance)
+    let decoded = try JSONDecoder().decode(
+        JournalRecord.self, from: JSONEncoder().encode(r))
+    #expect(decoded.setAtMonotonic == 12_345.75)
+    #expect(decoded == r)
+}
+
+@Test func aJournalWrittenBeforeTheMonotonicStampExistedIsNotTheCurrentSchema() throws {
+    // The schema bump, pinned from the direction that matters: a real v1
+    // journal, the shape an installed older build left on disk.
+    //
+    // Named bug this catches: adding `setAtMonotonic` and NOT bumping
+    // `currentSchemaVersion`. That journal then passes rung 1, reaches the TTL
+    // rung with a stamp of 0, and — depending only on which side of the
+    // arithmetic wins — is judged by a reference it never recorded. The bump is
+    // what routes it to `.unknownSchema` instead, which fails safe.
+    let json = """
+    {"schemaVersion":1,"intent":"sleepDisabled","priorValue":false,
+     "setAt":0,"ttlSeconds":900,
+     "armedBy":{"pid":1,"binaryPath":"/x","uid":501}}
+    """
+    let r = try JSONDecoder().decode(JournalRecord.self, from: Data(json.utf8))
+
+    // Decoding has to SUCCEED. A throw here would send the daemon down the
+    // `journalRefused` path, which discards the recorded `priorValue` and
+    // restores sleep to `false` — worse for a user who had `disablesleep` set
+    // on purpose, and reached without anyone having tampered with anything.
+    #expect(r.schemaVersion == 1)
+    #expect(r.setAtMonotonic == 0)
+
+    #expect(JournalRecord.currentSchemaVersion != 1, """
+        the record gained `setAtMonotonic` and `currentSchemaVersion` is still \
+        1, so a journal written before the field existed is judged as though it \
+        had recorded one
+        """)
 }
