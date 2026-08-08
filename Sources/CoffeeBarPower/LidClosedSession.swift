@@ -417,8 +417,14 @@ public struct WatchdogService: Sendable {
         } catch {
             try? power.set(false)
             try? reader.clear()
-            try? supervisor.uninstall()
+            // Notify BEFORE the bootout. `uninstall()` ends this process, so
+            // anything sequenced after it never runs — and this notification is
+            // the only account the user gets of why the machine stopped holding
+            // sleep, in the one case where the journal was tampered with. Both
+            // mutations the message describes are already done above, so it is
+            // true at the moment it is posted.
             notifier.notify("refused the journal and restored sleep: \(error)")
+            try? supervisor.uninstall()
             return .refused
         }
     }
