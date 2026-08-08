@@ -199,7 +199,7 @@ private func inputs(journal j: JournalRecord? = journal(),
 }
 
 @Test func customBatteryFloorIsHonoured() {
-    // Default floor is 20, under which 40% HOLDs; with a floor of 50 the same
+    // Default floor is 15, under which 40% HOLDs; with a floor of 50 the same
     // inputs must revert. Pins `policy.batteryFloorPercent` against a literal.
     let strict = WatchdogPolicy(heartbeatTimeout: 45, batteryFloorPercent: 50)
     #expect(decide(inputs(battery: 40, onBattery: true), policy: strict)

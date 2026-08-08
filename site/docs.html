@@ -100,11 +100,11 @@
      Those live in <code>, deliberately, and `htmlProse` strips <code> before
      the guard reads the prose. <code> is the element this page already uses for
      a literal lifted out of the product — see the assertion names below — and
-     these are exactly that: `ServingModel.floorLabel(for:)` renders the string
-     "30%" onto the control, and `BatteryFloor.permitted` is `10...50`.
+     these are exactly that: `ServingModel.floorLabel(for:)` renders the strings
+     "10%" and "50%" onto the control, and `BatteryFloor.permitted` is `10...50`.
 
      Do NOT unwrap them into plain prose. The suite goes RED with a message
-     about a 30% floor that does not exist, which is the guard working. Do NOT
+     about a 10% floor that does not exist, which is the guard working. Do NOT
      "fix" that red by spelling the number as a word either — that hides it from
      the guard the way note A describes, and leaves the page looking checked.
      A percentage that is neither 15 nor a quoted product literal does not
@@ -302,6 +302,17 @@ prints what is armed, since when, and until when.</p>
 <p><code>sudo /Library/PrivilegedHelperTools/coffee-bar-probe revert</code> restores the sleep setting you had
 and removes the watchdog. You do not need it for an ordinary hold, which ends on
 its own.</p>
+
+<h3>Removing the helper</h3>
+
+<p><code>revert</code> undoes the hold, but it does not remove the copy of the
+probe you installed by hand. That file is root-owned and stays where you put it
+until you delete it:</p>
+
+<p><code>sudo rm /Library/PrivilegedHelperTools/coffee-bar-probe</code></p>
+
+<p>Run <code>revert</code> first. Deleting the probe while a hold is armed
+leaves the sleep setting changed with nothing left to put it back.</p>
 
 <h2 class="eyebrow">Waiting on you</h2>
 

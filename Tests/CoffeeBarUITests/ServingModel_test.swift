@@ -1861,7 +1861,7 @@ private struct DisagreeingHealth: HookHealthProviding {
     // `BatteryFloor.default`. The setting would round-trip through the
     // preferences perfectly and change nothing about when the Mac sleeps.
     //
-    // 35% is ABOVE the 20 default and BELOW the stored 40, so the two floors
+    // 35% is ABOVE the 15 default and BELOW the stored 40, so the two floors
     // give opposite answers here. A model still on the default holds.
     let reader = FakeReader(source: .battery, percent: 35)
     let model = ServingModel(

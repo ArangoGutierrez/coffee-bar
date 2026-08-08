@@ -43,12 +43,14 @@ first and invoke the binary directly:
     sudo .build/debug/coffee-bar-probe report
 
 `report` is the one you can run that way. `arm`, `revert` and `watchdog` need
-more than uid 0: they install or remove a launchd job, and
-`LaunchDaemonInstaller` refuses a program path whose components are not
-root-owned and closed to everyone else. A build tree under `$HOME` fails that,
-and so does an installed app — macOS ships `/Applications` writable by every
-administrator account, which is issue #75. Install a copy where root can trust
-it and run that:
+more than uid 0: they install or remove a launchd job. Only `arm` is stopped by
+the code, though. It is the one verb that reaches
+`LaunchDaemonInstaller.install()`, which refuses a program path whose components
+are not root-owned and closed to everyone else; `revert` and `watchdog` reach
+`uninstall()`, which validates nothing. A build tree under `$HOME` fails `arm`'s
+check, and so does an installed app — macOS ships `/Applications` writable by
+every administrator account, which is issue #75. Install a copy where root can
+trust it and run all three from there:
 
     sudo install -o root -g wheel -m 755 \
       /Applications/CoffeeBar.app/Contents/MacOS/coffee-bar-probe \

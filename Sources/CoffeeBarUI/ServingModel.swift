@@ -456,9 +456,10 @@ public final class ServingModel {
     /// cannot sudo: `.report` in `Sources/CoffeeBarProbe/main.swift` builds a
     /// `GuardedJournalReader` and nothing else, and that type validates the
     /// JOURNAL's path. `LaunchDaemonInstaller.validatedProgramPath` is the only
-    /// caller that judges the program's OWN path, and `arm`, `revert` and
-    /// `watchdog` are what reach it. `sudo` on the in-bundle probe would
-    /// therefore have printed the journal.
+    /// code that judges the program's OWN path, and `install()` is its single
+    /// caller — so `arm` alone reaches it. `revert` and `watchdog` reach
+    /// `uninstall()`, which validates nothing. `sudo` on the in-bundle probe
+    /// would therefore have printed the journal.
     ///
     /// It moves because of what `sudo` means here, not because of what the code
     /// checks. `/Applications` is writable by `admin`, so telling a user to run
