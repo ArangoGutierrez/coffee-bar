@@ -428,11 +428,16 @@ public struct WatchdogService: Sendable {
         // recorded `priorValue`.
         try power.set(record.priorValue)
         try reader.clear()
-        // Best-effort, and last: `bootout` ends the very process running this,
-        // so anything after it may not run. A failure to unload must not leave
-        // the revert half-done.
-        try? supervisor.uninstall()
+        // Before the uninstall, not after it. `bootout` ends the very process
+        // running this, so a notification sequenced after it never fires — and
+        // this is the ONLY output a revert produces that a user can observe,
+        // since every rung of the ladder merely returns `.revert(reason)`. Both
+        // mutations it describes are already done above, so the message is
+        // still true at the moment it is posted.
         notifier.notify("reverted SleepDisabled to \(record.priorValue): \(reason.rawValue)")
+        // Best-effort, and last: a failure to unload must not leave the revert
+        // half-done, and this call may not return at all.
+        try? supervisor.uninstall()
     }
 }
 

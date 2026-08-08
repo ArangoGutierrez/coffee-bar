@@ -276,7 +276,21 @@ public struct LaunchDaemonInstaller: WatchdogSupervising {
         }
     }
 
-    /// Unloads the daemon, then removes its plist.
+    /// Removes the plist, then unloads the daemon.
+    ///
+    /// That order is the fix for a measured failure, not a preference. This
+    /// runs INSIDE the job it is booting out, and `bootout system/<label>`
+    /// terminates the process that issues it, so nothing sequenced after it is
+    /// reached. Unloading first therefore never got as far as the removal:
+    /// observed on the machine after a TTL revert, `launchctl print
+    /// system/com.coffeebar.probewatchdog` answered "Could not find service"
+    /// while `/Library/LaunchDaemons/com.coffeebar.probewatchdog.plist` was
+    /// still on disk with `RunAtLoad` and `KeepAlive` set. launchd bootstraps
+    /// that directory at every boot, so the daemon came back for good.
+    ///
+    /// Inverting the two makes the artifact that can survive the harmless one:
+    /// a loaded service with no plist dies at the next reboot and stays dead,
+    /// while a plist with no service comes back forever.
     ///
     /// Deliberately asymmetric with `install`: the bootout failure is tolerated
     /// and the plist is removed regardless. `bootout` exits non-zero whenever
@@ -288,10 +302,11 @@ public struct LaunchDaemonInstaller: WatchdogSupervising {
     /// the file can be gone while the service is still loaded, and skipping it
     /// then would strand a live root daemon that `KeepAlive` keeps restarting.
     public func uninstall() throws {
-        _ = try? runner.run(Self.launchctlPath,
-                            ["bootout", "system/\(Self.label)"])
         if FileManager.default.fileExists(atPath: plistURL.path) {
             try FileManager.default.removeItem(at: plistURL)
         }
+        // Last, because it does not come back.
+        _ = try? runner.run(Self.launchctlPath,
+                            ["bootout", "system/\(Self.label)"])
     }
 }
