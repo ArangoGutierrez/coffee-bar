@@ -148,6 +148,39 @@ private final class LaunchdModel: WatchdogSupervising, @unchecked Sendable {
     }
 }
 
+/// A supervisor whose `uninstall()` NEVER RETURNS.
+///
+/// `RecordingSupervisor.uninstall()` returns and `LaunchdModel.uninstall()`
+/// returns; the production one does not. It shells out to
+/// `launchctl bootout system/<label>` from inside the very job that label names,
+/// which terminates the caller. Everything the revert owes the user therefore
+/// has to have happened BEFORE it — and the notification is the only output a
+/// revert produces at all, since every rung of the ladder merely returns
+/// `.revert(reason)`.
+///
+/// Blocking rather than throwing, for the same reason as
+/// `DyingLaunchctlFake`: the call site is `try? supervisor.uninstall()`, so a
+/// thrown error is swallowed and the next statement runs anyway.
+private final class DyingSupervisor: WatchdogSupervising, @unchecked Sendable {
+    private let entered = DispatchSemaphore(value: 0)
+    private let release = DispatchSemaphore(value: 0)
+
+    func install() throws {}
+
+    func uninstall() throws {
+        entered.signal()
+        release.wait()
+    }
+
+    /// Blocks until `uninstall()` is entered — the last instant at which the
+    /// reverting process is still alive.
+    func waitForUninstall(within seconds: Double) -> DispatchTimeoutResult {
+        entered.wait(timeout: .now() + seconds)
+    }
+
+    func releaseTheCaller() { release.signal() }
+}
+
 private struct RecordingDisplay: DisplaySleepForcing {
     let log: CallLog
     /// What `isDisplayAwake()` answers AFTER `forceSleep()`. `nil` models the
@@ -788,7 +821,8 @@ private func makeArmedWatchdog(root: URL, record: JournalRecord,
                                initiallyEnabled: Bool = true,
                                bootTime: Date = fixedBoot,
                                environment: FakeEnvironment = FakeEnvironment(),
-                               policy: WatchdogPolicy = .default)
+                               policy: WatchdogPolicy = .default,
+                               supervisor: (any WatchdogSupervising)? = nil)
     throws -> (service: WatchdogService, power: RecordingPower,
                store: FileJournalStore, log: CallLog, notifier: RecordingNotifier) {
     let log = CallLog()
@@ -801,7 +835,7 @@ private func makeArmedWatchdog(root: URL, record: JournalRecord,
     let service = WatchdogService(
         reader: GuardedJournalReader(url: url, store: store, requiredOwner: getuid()),
         power: power,
-        supervisor: RecordingSupervisor(log: log),
+        supervisor: supervisor ?? RecordingSupervisor(log: log),
         notifier: notifier,
         environment: environment,
         policy: policy,
@@ -835,6 +869,45 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
     #expect(try armed.store.load() == nil, "the journal survived the revert")
     #expect(armed.log.calls.contains("watchdog.uninstall"))
     #expect(armed.notifier.posted.isEmpty == false, "§8.2(3) requires a notification")
+}
+
+@Test func theWatchdogNotifiesBeforeTheUninstallThatEndsTheProcess() throws {
+    // #78. `uninstall()` runs `launchctl bootout system/<label>` from inside the
+    // job that label names, so it does not come back. A `notify` sequenced after
+    // it never fires — and the notification is the ONLY thing a revert produces
+    // that a user can observe, because every rung of the ladder just returns
+    // `.revert(reason)` to a process that is about to stop existing.
+    //
+    // Named bug this catches: `notifier.notify` placed below
+    // `supervisor.uninstall()`. The test above cannot see it: its supervisor
+    // returns from a call production never returns from, so the notification
+    // lands in the test and never on the machine. The assertion here is taken at
+    // the instant `uninstall` is entered, which is the last instant this code is
+    // alive.
+    let root = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let supervisor = DyingSupervisor()
+    let armed = try makeArmedWatchdog(root: root,
+                                      record: armedRecord(ttlSeconds: 3600),
+                                      supervisor: supervisor)
+    let service = armed.service
+
+    let thread = Thread {
+        _ = try? service.evaluate(now: fixedNow.addingTimeInterval(3601),
+                                  lastHeartbeat: nil)
+    }
+    thread.start()
+    defer { supervisor.releaseTheCaller() }
+
+    #expect(supervisor.waitForUninstall(within: 10) == .success,
+            "the TTL expired and the watchdog never uninstalled the daemon")
+    #expect(armed.notifier.posted == ["reverted SleepDisabled to false: ttlExpired"], """
+        the revert reached `uninstall` having notified nothing. `bootout` ends \
+        this process, so a notification sequenced after it never fires and a TTL \
+        revert is silent: sleep comes back and the user is never told why.
+        posted: \(armed.notifier.posted)
+        """)
 }
 
 @Test func theWatchdogHoldsWhileTheTTLIsLiveAndNoHeartbeatWriterExists() throws {
