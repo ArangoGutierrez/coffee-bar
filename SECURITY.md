@@ -190,6 +190,16 @@ policy:
   `batteryFloorPercent` setting**. A root process reading an unprivileged user's
   preferences is a new data flow into a privileged process, and it deserves its
   own review before it exists rather than after.
+- **This TTL model is scheduled to change (#74).** The intended default is a hold
+  that ends at the battery floor while on battery and continues indefinitely on
+  AC. Two things must move together when it does. The battery-floor check in
+  `WatchdogDecision.decide` is guarded by `inputs.onBattery`, so it cannot end an
+  AC-powered hold at all. And `LidClosedSession`'s `lastHeartbeat ?? now`
+  substitution is justified in place by the TTL being tested first, so removing
+  the TTL removes that justification with it. Until both are answered, an
+  AC-powered hold has only a thermal abort or a reboot left to end it. The
+  hazardous case — a closed machine in a bag — runs on battery, where the floor
+  still applies.
 - **A thermal or battery abort restores the setting you had, not a safe one.**
   The revert writes the journal's recorded `priorValue`, which is deliberate:
   the daemon undoes what it did and never overrides a choice it did not make.
