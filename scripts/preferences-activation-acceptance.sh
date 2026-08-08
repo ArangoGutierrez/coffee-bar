@@ -230,7 +230,7 @@ case "$STATUS" in
     nopanel)
         refuse "cannot locate Preferences… safely: clicking the status item opened no panel" ;;
     nobuttons)
-        close_panel
+        reset_windows
         refuse "cannot locate Preferences… safely: the panel exposes no buttons in the accessibility tree" ;;
     ok) ;;
     *)
