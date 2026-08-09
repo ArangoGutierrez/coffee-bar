@@ -88,8 +88,9 @@ by an older build wrote a version 1 journal. The first watchdog rung reads it,
 answers `.unknownSchema`, and reverts. That is the fail-safe working as designed,
 but it is invisible unless you know the schema moved. Re-arm after installing.
 
-Homebrew still installs 0.1.0. The tap pins the older tag and builds from
-source, so the version in the panel differs from the version in the disk image.
+Homebrew installs 0.2.0 as well: the tap now pins this tag. It builds on your
+machine, so that copy is signed only ad hoc and is not notarised. The disk image
+is the signed, notarised and stapled artifact.
 
 ## [0.1.1] — 2026-08-04
 
@@ -135,8 +136,9 @@ two tags over the shipped source is empty:
 That command prints nothing. Take this release for the signed artifact, not for
 new behaviour.
 
-Homebrew still installs 0.1.0. The tap pins the older tag and builds from
-source, so the version in the panel differs from the version in the disk image.
+When 0.1.1 shipped, Homebrew still installed 0.1.0: the tap pinned the older tag
+and built from source, so the version in the panel differed from the version in
+the disk image. The tap has since moved on.
 
 ## [0.1.0] — 2026-08-03
 

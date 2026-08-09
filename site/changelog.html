@@ -17,7 +17,8 @@
      battery percentage, duration or saving may appear until M6's measurement
      harness has produced one a user can reproduce.
   6. The binary is arm64 ONLY. Never write "Intel" or "universal".
-  7. Homebrew currently installs 0.1.0; the DMG is 0.2.0. Do not blur that.
+  7. Homebrew and the DMG both ship 0.2.0. The DMG is the signed and notarised
+     one; a Homebrew build is compiled locally and only ad-hoc signed.
 
   BRAND — assets/art/README.md is the source of truth.
   - TWO colours, two jobs. --state (#A2571E / #B8682A dark) is the liquid and
@@ -150,7 +151,7 @@ spctl -a -t open --context context:primary-signature -vv coffee-bar-0.2.0.dmg</p
 <p><strong>Installing this version ends an <code>arm</code> that is already running.</strong> A hold armed by an older build wrote a version 1 journal. The first watchdog rung reads it, answers <code>.unknownSchema</code>, and reverts. That is the fail-safe working as designed, but it is invisible unless you know the schema moved. Re-arm after installing.</p>
 
 <div class="note">
-<p>Homebrew still installs 0.1.0. The tap pins the older tag and builds from source, so the version in the panel differs from the version in the disk image.</p>
+<p>Homebrew installs 0.2.0 as well: the tap now pins this tag. It builds on your machine, so that copy is signed only ad hoc and is not notarised. The disk image is the signed, notarised and stapled artifact.</p>
 </div>
 
 </section>
@@ -210,7 +211,7 @@ spctl -a -t open --context context:primary-signature -vv coffee-bar-0.1.1.dmg</p
 <p>That command prints nothing. Take this release for the signed artifact, not for new behaviour.</p>
 
 <div class="note">
-<p>Homebrew still installs 0.1.0. The tap pins the older tag and builds from source, so the version in the panel differs from the version in the disk image.</p>
+<p>When 0.1.1 shipped, Homebrew still installed 0.1.0: the tap pinned the older tag and built from source, so the version in the panel differed from the version in the disk image. The tap has since moved on.</p>
 </div>
 
 </section>
