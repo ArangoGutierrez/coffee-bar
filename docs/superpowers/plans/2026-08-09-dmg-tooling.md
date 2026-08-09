@@ -206,7 +206,7 @@ private func withProducedImage(_ body: (URL, URL) throws -> Void) throws {
 - [ ] **Step 2: Run the test to verify it fails**
 
 ```bash
-WT=/Users/eduardoa/src/github/ArangoGutierrez/coffee-bar/.worktrees/45-dmg-tooling
+WT=$HOME/src/github/ArangoGutierrez/coffee-bar/.worktrees/45-dmg-tooling
 swift build --package-path "$WT" --scratch-path /tmp/cb-dmg-scratch
 swift test --package-path "$WT" --scratch-path /tmp/cb-dmg-scratch \
   --filter 'theImageCarriesTheLayoutThatShipped|theNestedBinaryIsSignedBeforeTheBundle'
@@ -375,7 +375,7 @@ echo "==> built ${DMG}"
 - [ ] **Step 4: Run the test to verify it passes**
 
 ```bash
-WT=/Users/eduardoa/src/github/ArangoGutierrez/coffee-bar/.worktrees/45-dmg-tooling
+WT=$HOME/src/github/ArangoGutierrez/coffee-bar/.worktrees/45-dmg-tooling
 swift build --package-path "$WT" --scratch-path /tmp/cb-dmg-scratch
 swift test --package-path "$WT" --scratch-path /tmp/cb-dmg-scratch \
   --filter 'theImageCarriesTheLayoutThatShipped|theNestedBinaryIsSignedBeforeTheBundle'
@@ -395,7 +395,7 @@ Revert both. Re-run and confirm GREEN again.
 - [ ] **Step 6: Commit**
 
 ```bash
-WT=/Users/eduardoa/src/github/ArangoGutierrez/coffee-bar/.worktrees/45-dmg-tooling
+WT=$HOME/src/github/ArangoGutierrez/coffee-bar/.worktrees/45-dmg-tooling
 git -C "$WT" add scripts/release-dmg.sh Tests/CoffeeBarCoreTests/ReleaseDmg_test.swift
 git -C "$WT" commit -s -S -m 'feat(release): build the disk image from a script
 
@@ -479,7 +479,7 @@ Append to `Tests/CoffeeBarCoreTests/ReleaseDmg_test.swift`:
 - [ ] **Step 2: Run the test to verify it fails**
 
 ```bash
-WT=/Users/eduardoa/src/github/ArangoGutierrez/coffee-bar/.worktrees/45-dmg-tooling
+WT=$HOME/src/github/ArangoGutierrez/coffee-bar/.worktrees/45-dmg-tooling
 swift test --package-path "$WT" --scratch-path /tmp/cb-dmg-scratch \
   --filter 'theScriptConfirmsNotarisationRatherThanTrustingTheExitCode|theScriptReportsWhatTheChangelogMustState'
 ```
@@ -548,7 +548,7 @@ REPORT
 - [ ] **Step 4: Run the test to verify it passes**
 
 ```bash
-WT=/Users/eduardoa/src/github/ArangoGutierrez/coffee-bar/.worktrees/45-dmg-tooling
+WT=$HOME/src/github/ArangoGutierrez/coffee-bar/.worktrees/45-dmg-tooling
 swift test --package-path "$WT" --scratch-path /tmp/cb-dmg-scratch --filter ReleaseDmg
 ```
 
@@ -561,7 +561,7 @@ For EACH of `notarytool info`, `stapler validate`, `spctl`, `--options runtime`,
 - [ ] **Step 6: Commit**
 
 ```bash
-WT=/Users/eduardoa/src/github/ArangoGutierrez/coffee-bar/.worktrees/45-dmg-tooling
+WT=$HOME/src/github/ArangoGutierrez/coffee-bar/.worktrees/45-dmg-tooling
 git -C "$WT" add scripts/release-dmg.sh Tests/CoffeeBarCoreTests/ReleaseDmg_test.swift
 git -C "$WT" commit -s -S -m 'feat(release): notarise, staple and report the shipped facts
 
@@ -583,7 +583,7 @@ Refs #45'
 - [ ] **Step 1: Cold-scratch build**
 
 ```bash
-WT=/Users/eduardoa/src/github/ArangoGutierrez/coffee-bar/.worktrees/45-dmg-tooling
+WT=$HOME/src/github/ArangoGutierrez/coffee-bar/.worktrees/45-dmg-tooling
 swift build --package-path "$WT" --scratch-path "/tmp/cb-cold-$$" --build-tests
 ```
 
