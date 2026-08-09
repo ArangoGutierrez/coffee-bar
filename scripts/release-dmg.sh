@@ -172,9 +172,19 @@ if [ "${NOTARIZE}" = "1" ]; then
 
     xcrun stapler staple "${DMG}" || die "stapler staple failed"
     xcrun stapler validate "${DMG}" || die "stapler validate failed"
+    STAPLE_FACT='`xcrun stapler validate` passes'
 
-    spctl -a -t open --context context:primary-signature -vv "${DMG}" \
-        || die "Gatekeeper does not accept ${DMG}"
+    # Captured, not asserted. The Notarisation row states which source Gatekeeper
+    # matched, and the only honest way to print that is to read it back from the
+    # assessment this run performed.
+    SPCTL_LOG="${WORK}/spctl.txt"
+    spctl -a -t open --context context:primary-signature -vv "${DMG}" > "${SPCTL_LOG}" 2>&1 \
+        || { cat "${SPCTL_LOG}"; die "Gatekeeper does not accept ${DMG}"; }
+    cat "${SPCTL_LOG}"
+    SPCTL_SOURCE="$(sed -n 's/^source=//p' "${SPCTL_LOG}" | head -1)"
+    [ -n "${SPCTL_SOURCE}" ] \
+        || die "spctl accepted ${DMG} but printed no source= line; cannot state the Notarisation row"
+    NOTARISATION_FACT="\`spctl\` accepts it, source \`${SPCTL_SOURCE}\`"
 else
     echo "==> NOTARIZE=0: skipping notarisation, stapling and assessment"
 fi
@@ -187,6 +197,19 @@ SIZE="$(stat -f '%z' "${DMG}")"
 SHA="$(shasum -a 256 "${DMG}" | awk '{print $1}')"
 ARCHS="$(lipo -archs "${STAGE}/${APP_NAME}.app/Contents/MacOS/coffee-bar" 2>/dev/null || echo unknown)"
 
+# Read from Package.swift, never typed here. A second copy of the platform floor
+# is a second thing to get wrong, and this one would be discovered by a user on
+# an older macOS rather than by a test. `.v14` is SwiftPM's spelling; the string
+# form `.macOS("14.1")` would not match, and an unreadable floor stops the
+# release rather than printing a number nobody checked.
+MIN_MACOS_MAJOR="$(sed -n 's/.*\.macOS(\.v\([0-9][0-9]*\)).*/\1/p' "${REPO_ROOT}/Package.swift" | head -1)"
+[ -n "${MIN_MACOS_MAJOR}" ] \
+    || die "cannot read the macOS platform floor from ${REPO_ROOT}/Package.swift"
+MIN_MACOS="${MIN_MACOS_MAJOR}.0"
+
+# The eight rows `theReleaseFactsOnThePageAreTheOnesInTheChangelog` requires, in
+# its order. Six of them hold for any run. The last two are claims about steps
+# this run may not have taken, so they are printed only where they are true.
 cat <<REPORT
 
 Built ${DMG}
@@ -197,6 +220,22 @@ Built ${DMG}
 | Size | ${SIZE} bytes |
 | SHA-256 | \`${SHA}\` |
 | Architecture | ${ARCHS} |
-| Signature | Developer ID Application, team 85FN4Z37V8 |
+| Minimum macOS | ${MIN_MACOS} |
+| Signature | Developer ID Application, team \`85FN4Z37V8\` |
+REPORT
+
+if [ "${NOTARIZE}" = "1" ]; then
+    cat <<REPORT
+| Notarisation | ${NOTARISATION_FACT} |
+| Staple | ${STAPLE_FACT} |
 
 REPORT
+else
+    cat <<REPORT
+
+NOTARIZE=0: this run did not notarise or staple, so the Notarisation and Staple
+rows are omitted rather than asserted. CHANGELOG.md needs all eight; take the
+table from a release run.
+
+REPORT
+fi

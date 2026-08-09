@@ -72,8 +72,13 @@ private func makeFixtureApp(at root: URL) throws {
     """.write(to: root.appending(path: "Contents/Info.plist"), atomically: true, encoding: .utf8)
 }
 
-/// Builds a DMG from a fixture and hands the caller the mounted volume.
-private func withProducedImage(_ body: (URL, URL) throws -> Void) throws {
+/// Builds a DMG from a fixture and hands the caller the mounted volume, plus
+/// everything the script printed.
+///
+/// The script's own output is a third parameter because the report block is a
+/// PRODUCT of the run, not text in a file: whether it claims a step that this
+/// run skipped can only be read off the run itself.
+private func withProducedImage(_ body: (URL, URL, String) throws -> Void) throws {
     let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
         .appending(path: "cb-releasedmg-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
@@ -102,11 +107,11 @@ private func withProducedImage(_ body: (URL, URL) throws -> Void) throws {
     #expect(attach.rc == 0, "cannot attach the produced image:\n\(attach.out)")
     defer { _ = try? run(["hdiutil", "detach", mount.path, "-force"]) }
 
-    try body(dmg, mount)
+    try body(dmg, mount, r.out)
 }
 
 @Test func theImageCarriesTheLayoutThatShipped() throws {
-    try withProducedImage { dmg, mount in
+    try withProducedImage { dmg, mount, _ in
         // Named bug: `hdiutil create -srcfolder` drops the custom-icon bit, so a
         // one-shot build ships a generic-icon disk image while exiting 0. The
         // source folder having the flag is NOT enough; only the produced volume
@@ -134,7 +139,7 @@ private func withProducedImage(_ body: (URL, URL) throws -> Void) throws {
 }
 
 @Test func theNestedBinaryIsSignedBeforeTheBundle() throws {
-    try withProducedImage { _, mount in
+    try withProducedImage { _, mount, _ in
         // Named bug: the bundle is signed before the nested probe. codesign then
         // SEALS an unsigned Mach-O, and notarisation rejects the whole bundle
         // before Gatekeeper ever sees it. Measured: with the nested signature
@@ -191,4 +196,73 @@ private func withProducedImage(_ body: (URL, URL) throws -> Void) throws {
     #expect(s.contains("lipo -archs"),
             "the script does not report the architecture; CHANGELOG.md claims arm64 only")
     #expect(s.contains("stat -f"), "the script does not report the size in bytes")
+
+    // Named bug: a row quietly leaves the report block, the maintainer pastes a
+    // seven-row table into CHANGELOG.md, and
+    // `theReleaseFactsOnThePageAreTheOnesInTheChangelog` fails at the END of the
+    // release — after the artifact is already built and notarised.
+    //
+    // A LITERAL list, duplicated from `SiteClaims_test.swift:547` on purpose and
+    // for the reason stated there: deriving it from the script would let the
+    // script agree with itself about an empty table. These two lists are meant
+    // to be compared by a human when either changes.
+    for fact in ["File", "Size", "SHA-256", "Architecture",
+                 "Minimum macOS", "Signature", "Notarisation", "Staple"] {
+        #expect(s.contains("| \(fact) |"),
+                "the report block has no \(fact) row; CHANGELOG.md's release table needs all eight")
+    }
+
+    // Named bug: the macOS floor is typed as a literal and drifts from
+    // Package.swift the first time the floor moves.
+    //
+    // The full `${REPO_ROOT}/Package.swift` path, NOT the bare file name. The
+    // bare name was the first form of this guard and it was theater: the comment
+    // above the derivation says "Read from Package.swift", so replacing the whole
+    // derivation with `MIN_MACOS="14.0"` left the guard GREEN. Measured, then
+    // rewritten. Only a line that USES the file as an argument matches this.
+    #expect(s.contains("${REPO_ROOT}/Package.swift"),
+            "Minimum macOS is not read from Package.swift, so it can drift from the real platform floor")
+}
+
+/// The report cannot claim a step this run did not perform.
+///
+/// **This test EXECUTES the script**, on the `NOTARIZE=0` path, and reads the
+/// report it actually printed. A text guard cannot catch this: the Notarisation
+/// and Staple strings are present in the file either way, and the whole question
+/// is whether the RUN emits them when it never notarised or stapled.
+@Test func theReportRefusesToClaimTheStepsItSkipped() throws {
+    try withProducedImage { _, _, out in
+        // Named bug: `| Staple | `xcrun stapler validate` passes |` printed as a
+        // constant by a run that never stapled. That row is then pasted into
+        // CHANGELOG.md, whose header requires every claim be true of the shipped
+        // build, and the document now asserts a validation nobody ran.
+        #expect(out.contains("| Staple |") == false,
+                "the NOTARIZE=0 run printed a Staple row; it never stapled anything:\n\(out)")
+        #expect(out.contains("| Notarisation |") == false,
+                "the NOTARIZE=0 run printed a Notarisation row; it never notarised anything:\n\(out)")
+
+        // Named bug: the rows are dropped and nothing says why, so the maintainer
+        // pastes a six-row table and only the site-mirror guard notices.
+        //
+        // A sentence unique to the REPORT block, not the bare string "NOTARIZE=0".
+        // The bare string was the first form of this guard and it was theater:
+        // step 6 already echoes "==> NOTARIZE=0: skipping notarisation…", so
+        // deleting the report's paragraph entirely left the guard GREEN.
+        // Measured, then rewritten.
+        #expect(out.contains("rows are omitted rather than asserted"),
+                "the run skipped notarisation and stapling but the report never says so:\n\(out)")
+
+        // The six rows that DO NOT depend on notarisation must still be printed.
+        for fact in ["File", "Size", "SHA-256", "Architecture",
+                     "Minimum macOS", "Signature"] {
+            #expect(out.contains("| \(fact) |"),
+                    "the report omits the \(fact) row, which does not depend on notarisation:\n\(out)")
+        }
+
+        // Named bug: the floor is parsed out of Package.swift and the parse
+        // silently yields an empty string, printing `| Minimum macOS |  |`.
+        // 14.0 is the independent literal — Package.swift declares `.macOS(.v14)`.
+        #expect(out.contains("| Minimum macOS | 14.0 |"),
+                "the Minimum macOS row does not read 14.0, the floor Package.swift declares:\n\(out)")
+    }
 }
