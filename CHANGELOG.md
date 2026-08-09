@@ -28,6 +28,69 @@ Every released version of coffee-bar, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 The project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] — 2026-08-09
+
+Lid-closed mode, a Preferences window, and a hardened privileged path. The disk
+image now carries `coffee-bar-probe`, so the feature it unlocks is reachable
+without building from source.
+
+### Added
+
+- **Lid-closed mode.** `sudo coffee-bar-probe arm` holds the Mac awake with the
+  lid shut, governed by a launchd watchdog with a revert ladder and a hard
+  eight-hour cap.
+- **A Preferences window**, split out of the panel, carrying the battery floor.
+  It ships at 15%, and the control moves between `10%` and `50%` in steps of `5`.
+- **A process governor**, wired into the app.
+- **Codex and Cursor adapters**, plus the `coffeebar-hook` shim, so each agent
+  tool's hook file is read in its own shape.
+- **An app icon**, and an app palette aligned with the site.
+- **`coffee-bar-probe` inside the bundle**, and so inside the disk image. 0.1.1
+  shipped `coffee-bar` alone, which left lid-closed mode reachable only by
+  building from source.
+- **`scripts/release-dmg.sh`**, which builds this disk image. 0.1.1's image left
+  no trace in the repository of how it was made.
+
+| Fact | Value |
+|---|---|
+| File | `coffee-bar-0.2.0.dmg` |
+| Size | 844641 bytes |
+| SHA-256 | `5c16bfd3636adfc568e14dbf26e8a3c62ecd9e2fb2606136a08e6342c965cd15` |
+| Architecture | Apple silicon (`arm64`) only |
+| Minimum macOS | 14.0 |
+| Signature | Developer ID Application, team `85FN4Z37V8` |
+| Notarisation | `spctl` accepts it, source `Notarized Developer ID` |
+| Staple | `xcrun stapler validate` passes |
+
+Verify the download before you open it:
+
+    shasum -a 256 coffee-bar-0.2.0.dmg
+    spctl -a -t open --context context:primary-signature -vv coffee-bar-0.2.0.dmg
+
+### Fixed
+
+- The watchdog's `uninstall` booted the service out before removing its plist,
+  leaving a root LaunchDaemon that came back at every boot.
+- The revert and refusal notifications sat after a self-terminating bootout, so
+  neither ever fired on the daemon path.
+- The TTL rung measured elapsed time on the wall clock, so a backward step
+  extended a privileged hold past its eight-hour cap. It now uses
+  `mach_continuous_time()`, which keeps counting across sleep.
+
+### Changed
+
+- The watchdog journal's `schemaVersion` moved from 1 to 2.
+
+### Upgrading
+
+**Installing this version ends an `arm` that is already running.** A hold armed
+by an older build wrote a version 1 journal. The first watchdog rung reads it,
+answers `.unknownSchema`, and reverts. That is the fail-safe working as designed,
+but it is invisible unless you know the schema moved. Re-arm after installing.
+
+Homebrew still installs 0.1.0. The tap pins the older tag and builds from
+source, so the version in the panel differs from the version in the disk image.
+
 ## [0.1.1] — 2026-08-04
 
 The first signed and notarised download. This release ships no code change.
