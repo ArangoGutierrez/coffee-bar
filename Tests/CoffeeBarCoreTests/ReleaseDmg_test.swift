@@ -146,3 +146,49 @@ private func withProducedImage(_ body: (URL, URL) throws -> Void) throws {
                 "verification never mentions coffee-bar-probe, so the nested binary was not covered:\n\(v.out)")
     }
 }
+
+/// Guards the steps that CANNOT execute here.
+///
+/// Notarisation needs an Apple ID, a keychain profile and the network. These
+/// assertions therefore read the script as text, exactly as
+/// `BundleLicence_test.swift` and `BuildScriptVersion_test.swift` do. Each one
+/// names the bug it catches, and each was checked by deleting the line it
+/// asserts and observing this test go red.
+@Test func theScriptConfirmsNotarisationRatherThanTrustingTheExitCode() throws {
+    let s = try String(contentsOf: releaseDmgScript(), encoding: .utf8)
+
+    // Named bug: `notarytool submit` exits 0 for a submission Apple REJECTED.
+    // Shipping on the exit code alone publishes an unnotarised image that
+    // Gatekeeper blocks on every machine but the one that built it.
+    #expect(s.contains("notarytool submit"), "the script no longer submits for notarisation")
+    #expect(s.contains("notarytool info"),
+            "the script trusts `notarytool submit`'s exit code; exit 0 does not mean Accepted")
+    #expect(s.contains("Accepted"),
+            "the script never checks for the Accepted status")
+
+    // Named bug: the ticket is never stapled, so the image needs a network
+    // round-trip to Apple at first launch and fails offline.
+    #expect(s.contains("stapler staple"), "the script no longer staples the ticket")
+    #expect(s.contains("stapler validate"), "the script staples without validating the result")
+
+    // Named bug: nothing ever asks Gatekeeper whether it would accept the file.
+    #expect(s.contains("spctl"), "the script never asks Gatekeeper to assess the image")
+
+    // Named bug: signing without a hardened runtime or a secure timestamp.
+    // Notarisation refuses both, and the failure arrives minutes later from
+    // Apple rather than immediately from codesign.
+    #expect(s.contains("--options runtime"), "the script signs without the hardened runtime")
+    #expect(s.contains("--timestamp"), "the script signs without a secure timestamp")
+}
+
+@Test func theScriptReportsWhatTheChangelogMustState() throws {
+    let s = try String(contentsOf: releaseDmgScript(), encoding: .utf8)
+
+    // Named bug: the CHANGELOG's size and SHA-256 get typed from memory. The
+    // file's own header requires every claim be true of the SHIPPED build, and
+    // a remembered number is not evidence.
+    #expect(s.contains("shasum -a 256"), "the script does not compute the SHA-256")
+    #expect(s.contains("lipo -archs"),
+            "the script does not report the architecture; CHANGELOG.md claims arm64 only")
+    #expect(s.contains("stat -f"), "the script does not report the size in bytes")
+}

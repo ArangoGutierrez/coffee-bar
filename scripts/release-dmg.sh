@@ -148,4 +148,55 @@ hdiutil detach "${MNT}" >/dev/null || die "cannot detach the converted image"
 # --- 5. sign the image ------------------------------------------------------
 codesign --force ${TS_FLAG} --sign "${SIGN_IDENTITY}" "${DMG}" || die "cannot sign ${DMG}"
 
-echo "==> built ${DMG}"
+# --- 6. notarise, staple, and ask Gatekeeper --------------------------------
+#
+# Skipped only under NOTARIZE=0, which is the suite. No release uses that path.
+if [ "${NOTARIZE}" = "1" ]; then
+    echo "==> submitting for notarisation (minutes, not seconds)"
+    SUBMIT_LOG="${WORK}/submit.txt"
+    xcrun notarytool submit "${DMG}" --keychain-profile "${KEYCHAIN_PROFILE}" --wait \
+        > "${SUBMIT_LOG}" 2>&1 || { cat "${SUBMIT_LOG}"; die "notarytool submit failed"; }
+    cat "${SUBMIT_LOG}"
+
+    # `submit --wait` exits 0 for a submission Apple REJECTED. The id has to be
+    # read back and the status confirmed, or an unnotarised image ships.
+    SUBMISSION_ID="$(awk '/^ *id: /{print $2; exit}' "${SUBMIT_LOG}")"
+    [ -n "${SUBMISSION_ID}" ] || die "cannot read the submission id from notarytool output"
+
+    INFO_LOG="${WORK}/info.txt"
+    xcrun notarytool info "${SUBMISSION_ID}" --keychain-profile "${KEYCHAIN_PROFILE}" \
+        > "${INFO_LOG}" 2>&1 || { cat "${INFO_LOG}"; die "notarytool info failed"; }
+    cat "${INFO_LOG}"
+    grep -q "status: Accepted" "${INFO_LOG}" \
+        || die "notarisation is not Accepted for ${SUBMISSION_ID}; see the log above"
+
+    xcrun stapler staple "${DMG}" || die "stapler staple failed"
+    xcrun stapler validate "${DMG}" || die "stapler validate failed"
+
+    spctl -a -t open --context context:primary-signature -vv "${DMG}" \
+        || die "Gatekeeper does not accept ${DMG}"
+else
+    echo "==> NOTARIZE=0: skipping notarisation, stapling and assessment"
+fi
+
+# --- 7. the facts CHANGELOG.md requires -------------------------------------
+#
+# Printed from the ARTIFACT. CHANGELOG.md's header requires every claim be true
+# of the shipped build, and the v0.1.1 entry carries the size and SHA-256.
+SIZE="$(stat -f '%z' "${DMG}")"
+SHA="$(shasum -a 256 "${DMG}" | awk '{print $1}')"
+ARCHS="$(lipo -archs "${STAGE}/${APP_NAME}.app/Contents/MacOS/coffee-bar" 2>/dev/null || echo unknown)"
+
+cat <<REPORT
+
+Built ${DMG}
+
+| Fact | Value |
+|---|---|
+| File | \`$(basename "${DMG}")\` |
+| Size | ${SIZE} bytes |
+| SHA-256 | \`${SHA}\` |
+| Architecture | ${ARCHS} |
+| Signature | Developer ID Application, team 85FN4Z37V8 |
+
+REPORT
