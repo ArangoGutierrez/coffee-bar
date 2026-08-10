@@ -733,6 +733,14 @@ private func documentedShimCommands() throws -> [String] {
 /// the premise died and the comments did not move. A reader is told a check is
 /// IMPOSSIBLE when it is merely unimplemented.
 ///
+/// **A THIRD path, and it is a test file.** The first round of this guard
+/// iterated `Sources/` alone, so it missed the copy of the same dead premise in
+/// `AppLayerBoundary_test.swift` — inside the very guard that enforces the
+/// decision the premise justified. A false claim in a check's own reasoning is
+/// worse than one in a comment, because the next reader takes it as the reason
+/// the rule exists. "Source file" here means any tracked Swift file that
+/// carries the claim, not `Sources/`.
+///
 /// Matched on the claim, not on the word "adhoc". `docs/BUILDING.md` says the
 /// LOCAL build-app.sh output is ad-hoc signed, which is true and must stay
 /// sayable.
@@ -746,7 +754,8 @@ private func documentedShimCommands() throws -> [String] {
 /// about. `only bundle that ships` occurs once in each of the two files.
 @Test func noSourceFileClaimsTheShippingBundleIsAdHocSigned() throws {
     for path in ["Sources/CoffeeBarProbe/main.swift",
-                 "Sources/CoffeeBarPower/LaunchDaemonInstaller.swift"] {
+                 "Sources/CoffeeBarPower/LaunchDaemonInstaller.swift",
+                 "Tests/CoffeeBarUITests/AppLayerBoundary_test.swift"] {
         let text = try String(contentsOf: repoRoot().appending(path: path), encoding: .utf8)
         #expect(!text.contains("TeamIdentifier=not set"),
                 "\(path) says TeamIdentifier=not set; the shipped bundle reports 85FN4Z37V8")

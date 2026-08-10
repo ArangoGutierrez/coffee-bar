@@ -1420,22 +1420,37 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
 
 @Test func noTargetOnThePrivilegedPathReachesForXPCOrSMAppService() throws {
     // Carlos's M5 decision, made structural. It is a SECURITY property, not a
-    // preference, and the measurement that forced it is this:
-    //
-    //   codesign -dvvv <the shipped CoffeeBar.app>
-    //     Signature=adhoc          TeamIdentifier=not set
-    //   codesign -v -R='anchor apple generic' <same>   -> rc=1
+    // preference.
     //
     // SECURITY.md "It cannot pin a peer" requires an XPC helper to pin its peer with
     // `setCodeSigningRequirement` and to reject any peer that does not match
-    // the app's Team ID and bundle ID. The only bundle that ships today is
-    // built from source by the Homebrew formula and carries no Team ID and no
-    // certificate chain, so that requirement cannot be met on the one channel
-    // that exists. An XPC listener whose peer check cannot be satisfied is not
-    // a weaker helper — it is an unauthenticated root service.
+    // the app's Team ID and bundle ID.
     //
-    // So M5 ships as a root CLI plus a launchd watchdog, and this refuses the
-    // two constructs that would quietly reintroduce the problem. Named bug it
+    // **That pin is UNIMPLEMENTED, and since v0.2.0 it is no longer
+    // impossible.** Measured 2026-08-10 against the shipped app:
+    // `codesign -R='anchor apple generic'` exits 0, `TeamIdentifier=85FN4Z37V8`,
+    // authority `Developer ID Application`. An earlier version of this comment
+    // recorded an ad-hoc signature, no Team ID and rc=1, and was CORRECT when
+    // it was written: the only build shipping then was the one the Homebrew
+    // formula makes from source. It stopped being true at v0.2.0 and nobody
+    // moved it — issue #86.
+    //
+    // **The argument that rested on it has lapsed with it, and no replacement
+    // is invented here.** This block used to conclude that an XPC listener's
+    // peer check could not be satisfied on the one channel that exists, so such
+    // a listener would be an unauthenticated root service rather than a weaker
+    // helper. With a real Team ID shipping, that reasoning no longer holds as
+    // written, and this comment does not manufacture another one to put in its
+    // place. What is true today is narrower: M5 shipped as a root CLI plus a
+    // launchd watchdog, nothing has re-opened that decision, and neither the
+    // peer pin nor `SMAppService` has been designed, written or tested here.
+    // Whether to act on the unblocking is issue #71's question rather than this
+    // guard's.
+    //
+    // The RULE below is unaffected either way, and keeping the two apart is the
+    // point. Adding an XPC or `SMAppService` route is a design change and has to
+    // arrive as one — reviewed against SECURITY.md, with the peer pin written
+    // and tested — rather than as a construct somebody compiles in. Named bug it
     // catches: an `NSXPCListener(machServiceName:)` added to the probe or to
     // the app, which would compile, run, and accept any local peer.
     //
@@ -1478,11 +1493,13 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
         for name in forbidden {
             #expect(!code.contains(name), """
                 \(file.lastPathComponent) names \(name) in CODE. M5 ships as a \
-                root CLI plus a launchd watchdog: the shipped bundle is ad-hoc \
-                signed with no Team ID, so the peer pinning SECURITY.md \
-                requires cannot be satisfied and an XPC service would accept \
-                any local peer. A comment may explain the choice; making the \
-                call is what this refuses.
+                root CLI plus a launchd watchdog, and neither the XPC peer pin \
+                SECURITY.md requires nor SMAppService has been designed or \
+                written here — issue #71. Adding one of these is a design \
+                change and has to arrive as one, with the peer pin written and \
+                tested; until then an XPC service would accept any local peer. \
+                A comment may explain the choice; making the call is what this \
+                refuses.
                 """)
         }
     }
