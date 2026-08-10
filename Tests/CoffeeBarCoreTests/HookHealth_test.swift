@@ -298,3 +298,57 @@ func everyRequiredEventHasARecordedPayloadForThatTool(_ tool: AgentTool) throws 
     // the one call site downstream.
     #expect(HookHealth.requiredEvents == HookHealth.requiredEvents.sorted())
 }
+
+/// A tool event with no `matcher` cannot fire, so it is not wired.
+///
+/// Issue #55, and it is not hypothetical: `~/.codex/hooks.json` was merged
+/// without matchers on 2026-08-06 and the panel reported Codex healthy for a
+/// day while no Codex tool event reached the ingest socket. The check was the
+/// reason nobody noticed — it actively said the thing was working.
+@Test func aToolEventWithoutAMatcherIsNotWired() throws {
+    let json = """
+    {"hooks":{
+      "PreToolUse":[{"hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "PostToolUse":[{"matcher":"*","hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "SessionStart":[{"hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "Stop":[{"hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "UserPromptSubmit":[{"hooks":[{"command":"coffeebar-hook ingest"}]}]
+    }}
+    """
+    let status = HookHealth.status(of: Data(json.utf8), for: .codex)
+    #expect(status == .missing(["PreToolUse"]),
+            "PreToolUse has no matcher and cannot fire, but the verdict is \(String(describing: status))")
+}
+
+/// The mirror: a lifecycle event must NOT carry one.
+@Test func aLifecycleEventWithAMatcherIsNotWired() throws {
+    // Named bug: enforcing "matcher present" everywhere instead of "present on
+    // exactly the two tool events". That would accept a file the tool does not
+    // run and is the same false-healthy failure in the other direction.
+    let json = """
+    {"hooks":{
+      "PreToolUse":[{"matcher":"*","hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "PostToolUse":[{"matcher":"*","hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "SessionStart":[{"matcher":"*","hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "Stop":[{"hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "UserPromptSubmit":[{"hooks":[{"command":"coffeebar-hook ingest"}]}]
+    }}
+    """
+    let status = HookHealth.status(of: Data(json.utf8), for: .codex)
+    #expect(status == .missing(["SessionStart"]),
+            "SessionStart carries a matcher it must not have, but the verdict is \(String(describing: status))")
+}
+
+/// The correct file still passes, or the rule is unusable.
+@Test func theShapeQuickstartTeachesIsWired() throws {
+    let json = """
+    {"hooks":{
+      "PreToolUse":[{"matcher":"*","hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "PostToolUse":[{"matcher":"*","hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "SessionStart":[{"hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "Stop":[{"hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "UserPromptSubmit":[{"hooks":[{"command":"coffeebar-hook ingest"}]}]
+    }}
+    """
+    #expect(HookHealth.status(of: Data(json.utf8), for: .codex) == .wired)
+}

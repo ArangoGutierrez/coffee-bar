@@ -48,6 +48,18 @@ public enum HookHealth {
     public static let requiredEvents = ["PermissionDenied", "PostToolUse",
                                         "PreToolUse", "SessionStart", "Stop"]
 
+    /// The events that take `"matcher": "*"`, and the only ones that may.
+    ///
+    /// `docs/QUICKSTART.md` "the other three take no matcher" is the contract:
+    /// the two tool events carry one and the other three carry none. Both
+    /// directions are enforced, because accepting a matcher on a lifecycle event
+    /// reports a file healthy that the tool runs nothing from — the same failure
+    /// as #55 pointing the other way.
+    ///
+    /// Cursor is absent deliberately. Its shape is `.flat` and has no matcher
+    /// level, so no Cursor event ever reaches this set.
+    private static let matcherEvents: Set<String> = ["PreToolUse", "PostToolUse"]
+
     /// The hook entries `tool` needs wired, or `nil` when there is no advisory.
     ///
     /// **Each list holds only events with a recorded payload for that tool.**
@@ -186,7 +198,7 @@ public enum HookHealth {
         }
 
         let nesting = nesting(of: tool)
-        let missing = required.filter { !isWired(hooks[$0], nesting: nesting) }.sorted()
+        let missing = required.filter { !isWired(hooks[$0], event: $0, nesting: nesting) }.sorted()
         return missing.isEmpty ? .wired : .missing(missing)
     }
 
@@ -244,14 +256,21 @@ public enum HookHealth {
     /// either shape for either tool would report a file healthy that the tool
     /// itself runs nothing from — `theNestedShapeIsNotAcceptedForCursor` and
     /// `theFlatShapeIsNotAcceptedForCodex` refuse both directions.
-    private static func isWired(_ entry: Any?, nesting: HookNesting) -> Bool {
+    private static func isWired(_ entry: Any?, event: String, nesting: HookNesting) -> Bool {
         guard let entries = entry as? [[String: Any]] else { return false }
 
         switch nesting {
         case .nested:
-            for matcher in entries {
-                guard let commands = matcher["hooks"] as? [[String: Any]] else { continue }
-                if commands.contains(where: { isOurCommand($0["command"]) }) { return true }
+            for group in entries {
+                guard let commands = group["hooks"] as? [[String: Any]] else { continue }
+                guard commands.contains(where: { isOurCommand($0["command"]) }) else { continue }
+
+                // The key this function ignored until #55. The old loop bound
+                // its variable to the name `matcher` and never read the key of
+                // that name, so a tool-event group with none passed exactly as
+                // a correct one did.
+                let hasMatcher = group["matcher"] != nil
+                if hasMatcher == matcherEvents.contains(event) { return true }
             }
             return false
         case .flat:

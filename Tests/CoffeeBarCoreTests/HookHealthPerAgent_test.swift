@@ -514,3 +514,58 @@ func theClaudeCodeVerdictIsTheSameThroughBothEntryPoints(_ name: String) throws 
         point AT hooks.json. This package parses no TOML.
         """)
 }
+
+/// Every nested-shape fixture obeys the rule `docs/QUICKSTART.md` states.
+///
+/// Named bug this catches, and it is the reason this guard exists: on
+/// 2026-08-10 all three `claude-settings` fixtures and two `codex-settings`
+/// fixtures carried NO `matcher` on their tool events. Nothing noticed, because
+/// `isWired` did not read the key — so the fixtures and the code were wrong in
+/// the same direction and agreed with each other. Pinning the fixtures to the
+/// DOCUMENT rather than to the implementation is what breaks that symmetry: this
+/// check goes red on a bad fixture even if `isWired` regresses to ignoring
+/// `matcher` again.
+///
+/// Cursor is excluded because its shape is `.flat` and has no matcher level.
+@Test(arguments: ["claude-settings", "codex-settings"])
+func everyNestedFixtureObeysTheMatcherRule(_ directory: String) throws {
+    let toolEvents: Set<String> = ["PreToolUse", "PostToolUse"]
+    let root = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appending(path: "Fixtures/\(directory)")
+
+    let files = try FileManager.default
+        .contentsOfDirectory(atPath: root.path)
+        .filter { $0.hasSuffix(".json") }
+        .sorted()
+    #expect(!files.isEmpty, "no fixtures found at \(root.path)")
+
+    var groupsChecked = 0
+    for name in files {
+        let bytes = try Data(contentsOf: root.appending(path: name))
+        // malformed.json is deliberately unparseable; no-hooks.json has no hooks.
+        guard let top = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+              let hooks = top["hooks"] as? [String: Any] else { continue }
+
+        for (event, value) in hooks {
+            guard let groups = value as? [[String: Any]] else { continue }
+            for group in groups {
+                groupsChecked += 1
+                let hasMatcher = group["matcher"] != nil
+                #expect(hasMatcher == toolEvents.contains(event),
+                        """
+                        \(directory)/\(name): "\(event)" \
+                        \(hasMatcher ? "carries" : "is missing") a matcher. \
+                        QUICKSTART.md — the two tool events take a matcher, \
+                        the other three take none.
+                        """)
+            }
+        }
+    }
+
+    // Named bug: every `guard … else { continue }` above firing, so the loop
+    // asserts nothing and the check passes by reaching the end.
+    #expect(groupsChecked >= 5,
+            "only \(groupsChecked) groups examined in \(directory); the fixtures are not being read")
+}
