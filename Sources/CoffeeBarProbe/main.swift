@@ -8,12 +8,13 @@ import CoffeeBarPower
 // The privileged path is a root CLI plus a launchd watchdog. There is no XPC
 // and no `SMAppService`, deliberately.
 //
-// SECURITY.md requires an XPC peer to be pinned by Team ID and bundle ID. The
-// only bundle that ships today is built from source by the Homebrew formula and
-// is ad-hoc signed — measured: `Signature=adhoc`, `TeamIdentifier=not set`, and
-// `codesign -R='anchor apple generic'` exits 1 — so there is no Team ID to pin
-// and no certificate chain to anchor. A peer check that cannot be satisfied is
-// not a weaker check, it is an absent one.
+// SECURITY.md requires an XPC peer to be pinned by Team ID and bundle ID. That
+// is UNIMPLEMENTED, and since v0.2.0 it is no longer impossible. Measured
+// 2026-08-10 against the shipped app: `codesign -R='anchor apple generic'`
+// exits 0, `TeamIdentifier=85FN4Z37V8`, authority `Developer ID Application`.
+// An earlier version of this comment recorded the opposite, correctly, when the
+// only bundle that shipped was the ad-hoc signed Homebrew build. Whether to add
+// the pin is issue #71's question; this comment states only what is true today.
 //
 // The accepted cost, which nothing here papers over: the panel cannot toggle
 // lid-closed mode by itself. coffee-bar prints the command and the user runs

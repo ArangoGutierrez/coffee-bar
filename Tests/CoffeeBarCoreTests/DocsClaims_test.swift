@@ -724,3 +724,33 @@ private func documentedShimCommands() throws -> [String] {
         }
     }
 }
+
+/// Released code must not claim the shipping bundle is ad-hoc signed.
+///
+/// Named bug, and it is #86: two architectural justifications — no XPC peer
+/// pinning, no `SMAppService` — rest on "there is no Team ID to pin". v0.1.1
+/// shipped a notarised image and v0.2.0 ships one carrying both binaries, so
+/// the premise died and the comments did not move. A reader is told a check is
+/// IMPOSSIBLE when it is merely unimplemented.
+///
+/// Matched on the claim, not on the word "adhoc". `docs/BUILDING.md` says the
+/// LOCAL build-app.sh output is ad-hoc signed, which is true and must stay
+/// sayable.
+///
+/// The second literal is `only bundle that ships`, deliberately WITHOUT the
+/// leading `the `. Measured 2026-08-10: `main.swift` wraps that sentence as
+/// `… bundle ID. The` / `// only bundle that ships today …`, so the article is
+/// capitalised AND separated from the rest by a newline and a comment marker.
+/// `the only bundle that ships` occurs ZERO times in that file — a guard using
+/// it is green before the fix and after it, on the very file this issue is
+/// about. `only bundle that ships` occurs once in each of the two files.
+@Test func noSourceFileClaimsTheShippingBundleIsAdHocSigned() throws {
+    for path in ["Sources/CoffeeBarProbe/main.swift",
+                 "Sources/CoffeeBarPower/LaunchDaemonInstaller.swift"] {
+        let text = try String(contentsOf: repoRoot().appending(path: path), encoding: .utf8)
+        #expect(!text.contains("TeamIdentifier=not set"),
+                "\(path) says TeamIdentifier=not set; the shipped bundle reports 85FN4Z37V8")
+        #expect(!text.contains("only bundle that ships"),
+                "\(path) still claims one bundle ships and is ad-hoc signed; v0.2.0 ships a Developer ID signed, notarised image")
+    }
+}
