@@ -3,6 +3,7 @@
 
 import Foundation
 import Testing
+import CoffeeBarCore
 import CoffeeBarPower
 @testable import CoffeeBarUI
 
@@ -1045,4 +1046,37 @@ private func shellSplit(of command: String) throws -> ShellSplit {
         binary out of the arm command by splitting on spaces are not, and \
         neither is anything else here that assumed the destination is one word.
         """)
+}
+
+/// The stale-helper sentence, and the three cases that must NOT produce one.
+///
+/// A SEPARATE surface from `lidClosedSummary`, deliberately.
+/// `theLidClosedSummaryIsTheShortVersionAndNotTheMovedParagraph` bounds that
+/// one to two sentences, and the obvious implementation — appending a clause —
+/// would turn this release's fix into that guard's failure.
+@Test func aStaleHelperIsReportedWithACommandThatFixesIt() throws {
+    // Named bug: the app knows the root binary is old and says nothing, so the
+    // user keeps running it. That is this entire release.
+    let path = "/Applications/CoffeeBar.app/Contents/MacOS/coffee-bar-probe"
+    let advisory = try #require(
+        ServingModel.staleHelperAdvisory(state: .stale, probeAt: path))
+
+    #expect(advisory.contains(ServingModel.privilegedProbePath),
+            "the advisory does not name the path that is out of date: \(advisory)")
+    #expect(advisory.contains(ServingModel.lidClosedInstallCommand(probeAt: path)),
+            "the advisory does not carry a command that fixes it: \(advisory)")
+}
+
+@Test func noAdvisoryWhenThereIsNothingToSay() throws {
+    let path = "/Applications/CoffeeBar.app/Contents/MacOS/coffee-bar-probe"
+
+    // Named bug: an advisory that never clears. A user who is up to date, or
+    // who never armed, must see nothing — the install advisory already covers
+    // the second case, and two sentences about one situation read as a fault.
+    #expect(ServingModel.staleHelperAdvisory(state: .current, probeAt: path) == nil)
+    #expect(ServingModel.staleHelperAdvisory(state: .notInstalled, probeAt: path) == nil)
+
+    // Named bug: silence when the app cannot check. `unverifiable` is not
+    // `current`, and the user is entitled to know the check did not run.
+    #expect(ServingModel.staleHelperAdvisory(state: .unverifiable, probeAt: path) != nil)
 }

@@ -428,6 +428,39 @@ public final class ServingModel {
         + "\(shellQuoted(path)) \(shellQuoted(privilegedProbePath))"
     }
 
+    /// The sentence shown when the installed root helper is not this build's.
+    ///
+    /// **A SEPARATE surface from `lidClosedSummary`, and that is the design.**
+    /// That summary is bounded to two sentences by
+    /// `theLidClosedSummaryIsTheShortVersionAndNotTheMovedParagraph`, and the
+    /// obvious implementation — one more clause — would break it. This is also
+    /// a different KIND of statement: the summary explains a feature, this
+    /// reports a fault on the machine in front of the user.
+    ///
+    /// `nil` for `.current` and `.notInstalled`. Up to date needs no sentence,
+    /// and "never installed" is what the install advisory already says; two
+    /// sentences about one situation read as two faults.
+    ///
+    /// `.unverifiable` DOES speak. The app could not read its own bundled
+    /// probe, so the check did not run, and saying nothing there is
+    /// indistinguishable from saying it is fine.
+    nonisolated public static func staleHelperAdvisory(
+        state: PrivilegedHelperState, probeAt path: String) -> String? {
+        switch state {
+        case .current, .notInstalled:
+            return nil
+        case .stale:
+            return "The probe at \(privilegedProbePath) is not the one in this "
+                + "build, so lid-closed mode is running an older root binary. "
+                + "Replace it with \(lidClosedInstallCommand(probeAt: path)) "
+                + "and arm it again."
+        case .unverifiable:
+            return "coffee-bar cannot read its own copy of "
+                + "\(probeProductName), so it cannot tell whether the probe at "
+                + "\(privilegedProbePath) is current. Reinstall the app."
+        }
+    }
+
     /// `path` as exactly ONE operand of a shell command line.
     ///
     /// **Every command on this surface is printed to be pasted into a ROOT
