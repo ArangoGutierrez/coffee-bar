@@ -352,3 +352,104 @@ func everyRequiredEventHasARecordedPayloadForThatTool(_ tool: AgentTool) throws 
     """
     #expect(HookHealth.status(of: Data(json.utf8), for: .codex) == .wired)
 }
+
+/// A tool event whose `matcher` is a JSON `null` cannot fire, so it is not wired.
+///
+/// Named bug, and it WIDENS #55 rather than repeating it. `JSONSerialization`
+/// represents a JSON `null` as `NSNull()`, which is a NON-NIL `Any` — so the
+/// key-presence test this code shipped with read `"matcher": null` as "carries a
+/// matcher" and reported the file `.wired`. The panel then actively told the
+/// user a hook was working while the tool ran nothing from it, which is the
+/// false-healthy #55 itself was, arriving through a second door.
+///
+/// Not hypothetical as a shape: `null` is what a hand-edit leaves behind when
+/// somebody clears a value rather than deleting the line, and every one of these
+/// files is hand-edited.
+@Test func aToolEventWhoseMatcherIsNullIsNotWired() throws {
+    let json = """
+    {"hooks":{
+      "PreToolUse":[{"matcher":null,"hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "PostToolUse":[{"matcher":"*","hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "SessionStart":[{"hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "Stop":[{"hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "UserPromptSubmit":[{"hooks":[{"command":"coffeebar-hook ingest"}]}]
+    }}
+    """
+    let status = HookHealth.status(of: Data(json.utf8), for: .codex)
+    #expect(status == .missing(["PreToolUse"]), """
+        PreToolUse carries "matcher": null, which is no matcher at all and \
+        cannot fire, but the verdict is \(String(describing: status))
+        """)
+}
+
+/// The same, for a matcher of the wrong TYPE.
+@Test func aToolEventWhoseMatcherIsNotAStringIsNotWired() throws {
+    // A number, an array and an object are all non-nil `Any`s, and none of them
+    // is something either tool can match a tool name against. The check reads
+    // what the value IS rather than whether the key is there.
+    let json = """
+    {"hooks":{
+      "PreToolUse":[{"matcher":42,"hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "PostToolUse":[{"matcher":"*","hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "SessionStart":[{"hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "Stop":[{"hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "UserPromptSubmit":[{"hooks":[{"command":"coffeebar-hook ingest"}]}]
+    }}
+    """
+    let status = HookHealth.status(of: Data(json.utf8), for: .codex)
+    #expect(status == .missing(["PreToolUse"]), """
+        PreToolUse carries "matcher": 42, which no tool can match against, but \
+        the verdict is \(String(describing: status))
+        """)
+}
+
+/// A matcher that is not `"*"` is STILL a matcher, and this is measured.
+///
+/// The obvious fix for the two checks above is to require the documented value
+/// `"*"` — the shape `HookSnippet_test.swift` asserts on the snippet coffee-bar
+/// GENERATES. Measured on 2026-08-10 by planting exactly that: it turns EIGHT
+/// checks red against correct code, because `Tests/Fixtures/codex-settings/wired.json`
+/// is a CAPTURED real configuration whose tool events carry
+/// `"Bash|apply_patch|Edit|Write"`. That file is wired, the tool does run the
+/// hook, and a checker that called it broken would send a working user to
+/// hand-edit a file this design never writes.
+///
+/// So the rule is that a tool event carries a matcher the tool can USE — a
+/// string — and never that it carries one particular string.
+@Test func aNarrowerMatcherOnAToolEventIsStillWired() throws {
+    let json = """
+    {"hooks":{
+      "PreToolUse":[{"matcher":"Bash|apply_patch|Edit|Write","hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "PostToolUse":[{"matcher":"Bash|apply_patch|Edit|Write","hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "SessionStart":[{"hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "Stop":[{"hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "UserPromptSubmit":[{"hooks":[{"command":"coffeebar-hook ingest"}]}]
+    }}
+    """
+    #expect(HookHealth.status(of: Data(json.utf8), for: .codex) == .wired)
+}
+
+/// A lifecycle event carrying a WRONG-TYPED matcher is still not wired.
+///
+/// The mirror of the two checks above, and the direction that is easy to lose.
+/// Reading the key as "is it a usable matcher" in BOTH directions would make
+/// `"matcher": 42` on a lifecycle event mean "no matcher" and report the file
+/// healthy — trading one false-healthy for another. Presence answers the
+/// lifecycle question and usability answers the tool question, because the two
+/// halves of `docs/QUICKSTART.md`'s rule are different claims.
+@Test func aLifecycleEventWithAWrongTypedMatcherIsNotWired() throws {
+    let json = """
+    {"hooks":{
+      "PreToolUse":[{"matcher":"*","hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "PostToolUse":[{"matcher":"*","hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "SessionStart":[{"matcher":42,"hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "Stop":[{"hooks":[{"command":"coffeebar-hook ingest"}]}],
+      "UserPromptSubmit":[{"hooks":[{"command":"coffeebar-hook ingest"}]}]
+    }}
+    """
+    let status = HookHealth.status(of: Data(json.utf8), for: .codex)
+    #expect(status == .missing(["SessionStart"]), """
+        SessionStart carries a matcher key it must not have, and its type does \
+        not excuse it, but the verdict is \(String(describing: status))
+        """)
+}

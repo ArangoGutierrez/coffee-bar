@@ -552,7 +552,13 @@ func everyNestedFixtureObeysTheMatcherRule(_ directory: String) throws {
             guard let groups = value as? [[String: Any]] else { continue }
             for group in groups {
                 groupsChecked += 1
-                let hasMatcher = group["matcher"] != nil
+                // What the key IS, never merely whether it is there.
+                // `JSONSerialization` yields `NSNull()` for a JSON `null` — a
+                // NON-NIL `Any` — so `!= nil` would call a fixture whose tool
+                // event reads `"matcher": null` obedient, and the check that
+                // exists to break the symmetry between the fixtures and the
+                // code would be wrong in the same direction as the code again.
+                let hasMatcher = group["matcher"] is String
                 #expect(hasMatcher == toolEvents.contains(event),
                         """
                         \(directory)/\(name): "\(event)" \
