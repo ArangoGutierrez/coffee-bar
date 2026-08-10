@@ -17,7 +17,7 @@
      battery percentage, duration or saving may appear until M6's measurement
      harness has produced one a user can reproduce.
   6. The binary is arm64 ONLY. Never write "Intel" or "universal".
-  7. Homebrew and the DMG both ship 0.2.0. The DMG is the signed and notarised
+  7. Homebrew and the DMG both ship 0.2.1. The DMG is the signed and notarised
      one; a Homebrew build is compiled locally and only ad-hoc signed.
 
   BRAND — assets/art/README.md is the source of truth.
@@ -68,7 +68,7 @@
     <li><a href="docs.html">Docs</a></li>
     <li><a href="changelog.html">Changelog</a></li>
   </ul>
-  <p class="sidebar-version"><a href="changelog.html">v0.2.0</a></p>
+  <p class="sidebar-version"><a href="changelog.html">v0.2.1</a></p>
 </nav>
 <div class="wrap">
 <!-- page content starts here -->
@@ -92,30 +92,35 @@ image unless you have a reason to build from source.</p>
 <p>This is the route to prefer. The disk image is signed with a Developer ID,
 notarised by Apple, and stapled.</p>
 
-<a class="btn-download" href="https://github.com/ArangoGutierrez/coffee-bar/releases/download/v0.2.0/coffee-bar-0.2.0.dmg">Download for macOS</a>
-<p class="dl-meta">v0.2.0 · Apple silicon · 845&nbsp;KB · macOS 14 or later</p>
+<a class="btn-download" href="https://github.com/ArangoGutierrez/coffee-bar/releases/download/v0.2.1/coffee-bar-0.2.1.dmg">Download for macOS</a>
+<p class="dl-meta">v0.2.1 · Apple silicon · 858&nbsp;KB · macOS 14 or later</p>
 
 <p>Verify the download before you open it. coffee-bar asks you to trust an app
 that overrides your Mac's own sleep policy, so it gives you the means to test
 that trust first.</p>
 
-<pre>shasum -a 256 coffee-bar-0.2.0.dmg
-# 5c16bfd3636adfc568e14dbf26e8a3c62ecd9e2fb2606136a08e6342c965cd15
+<pre>shasum -a 256 coffee-bar-0.2.1.dmg
+# 0c1cd40bbd2c8a1bd2e1cd54122ab49d7f5f40b5a716772d0713917178f11288
 
-spctl --assess --type open --context context:primary-signature -vv coffee-bar-0.2.0.dmg
+spctl --assess --type open --context context:primary-signature -vv coffee-bar-0.2.1.dmg
 # accepted
 # source=Notarized Developer ID</pre>
 
 <p>The notarisation ticket is stapled to the disk image, so the second command
 answers from the ticket in the file. It needs no network connection.</p>
 
+<p>From 0.2.1 the app inside the image carries its own ticket too, so the copy
+you drag to <code>/Applications</code> launches on a machine that has never been
+online. In 0.2.0 only the image was stapled, and that first launch had to ask
+Apple.</p>
+
 <h3>Or build from source with Homebrew</h3>
 
 <pre>brew tap ArangoGutierrez/coffee-bar
 brew install coffee-bar</pre>
 
-<p><strong>Both routes now install 0.2.0.</strong> The tap formula pins the
-<code>v0.2.0</code> tag, and it installs the same two things the disk image
+<p><strong>Both routes now install 0.2.1.</strong> The tap formula pins the
+<code>v0.2.1</code> tag, and it installs the same two things the disk image
 carries: the app bundle, assembled by the repository's own build script, and
 the <code>coffee-bar-probe</code> binary.</p>
 
