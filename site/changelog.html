@@ -17,7 +17,7 @@
      battery percentage, duration or saving may appear until M6's measurement
      harness has produced one a user can reproduce.
   6. The binary is arm64 ONLY. Never write "Intel" or "universal".
-  7. Homebrew and the DMG both ship 0.2.0. The DMG is the signed and notarised
+  7. Homebrew and the DMG both ship 0.2.1. The DMG is the signed and notarised
      one; a Homebrew build is compiled locally and only ad-hoc signed.
 
   BRAND — assets/art/README.md is the source of truth.
@@ -41,10 +41,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Changelog — coffee-bar</title>
-<meta name="description" content="Every released version of coffee-bar, newest first. v0.2.0 adds lid-closed mode, a Preferences window and a hardened privileged path.">
+<meta name="description" content="Every released version of coffee-bar, newest first. v0.2.1 corrects what the app reported about its root helper, its hook wiring and its staple.">
 <link rel="canonical" href="https://arangogutierrez.github.io/coffee-bar/changelog.html">
 <meta property="og:title" content="Changelog — coffee-bar">
-<meta property="og:description" content="Every released version of coffee-bar, newest first. v0.2.0 adds lid-closed mode, a Preferences window and a hardened privileged path.">
+<meta property="og:description" content="Every released version of coffee-bar, newest first. v0.2.1 corrects what the app reported about its root helper, its hook wiring and its staple.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://arangogutierrez.github.io/coffee-bar/changelog.html">
 <meta property="og:image" content="https://arangogutierrez.github.io/coffee-bar/social-preview-1280x640.png">
@@ -68,7 +68,7 @@
     <li><a href="docs.html">Docs</a></li>
     <li><a href="changelog.html" aria-current="page">Changelog</a></li>
   </ul>
-  <p class="sidebar-version"><a href="changelog.html">v0.2.0</a></p>
+  <p class="sidebar-version"><a href="changelog.html">v0.2.1</a></p>
 </nav>
 <div class="wrap">
 <!--
@@ -90,8 +90,61 @@
 
 <p>The format follows <a href="https://keepachangelog.com/en/1.1.0/">Keep a Changelog</a>. The project follows <a href="https://semver.org/spec/v2.0.0.html">Semantic Versioning</a>.</p>
 
-<section id="v0-2-0">
+<section id="v0-2-1">
 <p class="eyebrow">Current release</p>
+<h2>0.2.1 — 2026-08-10</h2>
+
+<p>A release about trust in what the app tells you. Four things it reported, or failed to report, were not true. Each is now correct, and each correction is held in place by a check that fails if it regresses.</p>
+
+<h3 class="eyebrow">Fixed</h3>
+
+<ul class="does">
+  <li><strong>The app can now tell you when its root helper is stale.</strong> Installing a new build left the old helper in place, so privileged fixes never reached an armed setup, and nothing said so. The panel and the Preferences window now raise an advisory when the installed helper differs from the one in the build you are running, carrying the exact command that repairs it. Paste that command and the advisory clears without relaunching. (#81)</li>
+  <li><strong>A hook that cannot fire is no longer reported as wired.</strong> A tool event whose matcher was missing, <code>null</code>, or not a string counted as healthy, so the app would tell you your setup was fine while it could never run. A tool event now requires a matcher the tool can actually use, and a lifecycle event must carry none at all. (#55)</li>
+  <li><strong>The app inside the disk image is stapled.</strong> The image was notarised and stapled, but the app inside it was not. The app is now signed, notarised and stapled <em>before</em> the image is built around it. (#82)</li>
+  <li><strong>Two architectural justifications no longer rest on a dead premise.</strong> The comments explaining why the privileged path avoids XPC peer pinning and <code>SMAppService</code> were written when this project had no signed bundle. One has shipped since 0.2.0. Both decisions now read as <em>unimplemented rather than impossible</em>, and the open question is tracked in #71. (#86)</li>
+</ul>
+
+<div class="table-wrap">
+<table>
+  <caption>The 0.2.1 disk image</caption>
+  <thead>
+    <tr><th scope="col">Fact</th><th scope="col">Value</th></tr>
+  </thead>
+  <tbody>
+    <tr><th scope="row">File</th><td><code>coffee-bar-0.2.1.dmg</code></td></tr>
+    <tr><th scope="row">Size</th><td>858099 bytes</td></tr>
+    <tr><th scope="row">SHA-256</th><td><code>0c1cd40bbd2c8a1bd2e1cd54122ab49d7f5f40b5a716772d0713917178f11288</code></td></tr>
+    <tr><th scope="row">Architecture</th><td>Apple silicon (<code>arm64</code>) only</td></tr>
+    <tr><th scope="row">Minimum macOS</th><td>14.0</td></tr>
+    <tr><th scope="row">Signature</th><td>Developer ID Application, team <code>85FN4Z37V8</code></td></tr>
+    <tr><th scope="row">Notarisation</th><td><code>spctl</code> accepts it, source <code>Notarized Developer ID</code></td></tr>
+    <tr><th scope="row">Staple</th><td><code>xcrun stapler validate</code> passes on the app and on the image</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>This is not a universal binary. <code>lipo -archs</code> on the shipped binary reports <code>arm64</code> alone, so an Intel Mac cannot run it.</p>
+
+<p>Verify the download before you open it:</p>
+
+<pre>shasum -a 256 coffee-bar-0.2.1.dmg
+spctl -a -t open --context context:primary-signature -vv coffee-bar-0.2.1.dmg</pre>
+
+<h3 class="eyebrow">Upgrading</h3>
+
+<p>Nothing to do beyond installing it. This release changes no on-disk format and ends no hold that is already running.</p>
+
+<p>If you armed lid-closed mode with an earlier build, install this one and then follow the advisory the panel now shows: the root helper is replaced by the command it gives you, not by the installer.</p>
+
+<div class="note">
+<p>Homebrew installs 0.2.1 as well: the tap pins this tag. It builds on your machine, so that copy is signed only ad hoc and is not notarised. The disk image is the signed, notarised and stapled artifact.</p>
+</div>
+
+</section>
+
+<section id="v0-2-0">
+<p class="eyebrow">Previous release</p>
 <h2>0.2.0 — 2026-08-09</h2>
 
 <p>Lid-closed mode, a Preferences window, and a hardened privileged path. The disk image now carries <code>coffee-bar-probe</code>, so the feature it unlocks is reachable without building from source.</p>
@@ -122,10 +175,12 @@
     <tr><th scope="row">Minimum macOS</th><td>14.0</td></tr>
     <tr><th scope="row">Signature</th><td>Developer ID Application, team <code>85FN4Z37V8</code></td></tr>
     <tr><th scope="row">Notarisation</th><td><code>spctl</code> accepts it, source <code>Notarized Developer ID</code></td></tr>
-    <tr><th scope="row">Staple</th><td><code>xcrun stapler validate</code> passes</td></tr>
+    <tr><th scope="row">Staple</th><td><code>xcrun stapler validate</code> passes on the image; the app inside it was NOT stapled</td></tr>
   </tbody>
 </table>
 </div>
+
+<p>The Staple row above read <code>passes</code> until 0.2.1, which is what a run that stapled only the image prints. Measured on the shipped 0.2.0 image: <code>stapler validate</code> exits 65 on <code>CoffeeBar.app</code> with "does not have a ticket stapled to it". 0.2.1 staples the app as well, and the row now names both so the two states can be told apart. That is #82.</p>
 
 <p>Verify the download before you open it:</p>
 
@@ -182,10 +237,12 @@ spctl -a -t open --context context:primary-signature -vv coffee-bar-0.2.0.dmg</p
     <tr><th scope="row">Minimum macOS</th><td>14.0</td></tr>
     <tr><th scope="row">Signature</th><td>Developer ID Application, team <code>85FN4Z37V8</code></td></tr>
     <tr><th scope="row">Notarisation</th><td><code>spctl</code> accepts it, source <code>Notarized Developer ID</code></td></tr>
-    <tr><th scope="row">Staple</th><td><code>xcrun stapler validate</code> passes</td></tr>
+    <tr><th scope="row">Staple</th><td><code>xcrun stapler validate</code> passes on the app and on the image</td></tr>
   </tbody>
 </table>
 </div>
+
+<p>Measured on the shipped 0.1.1 image, not inferred: <code>stapler validate</code> exits 0 on the image and on <code>CoffeeBar.app</code> inside it. 0.2.0 lost the second of those and 0.2.1 restored it, so this row now says which staples were checked rather than the bare <code>passes</code> it shared with 0.2.0 — wording that read the same either way.</p>
 
 <p>Verify the download before you open it:</p>
 
@@ -252,7 +309,7 @@ spctl -a -t open --context context:primary-signature -vv coffee-bar-0.1.1.dmg</p
 
 </section>
 
-<p><a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.1.1">v0.1.1 on GitHub</a> · <a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.1.0">v0.1.0 on GitHub</a></p>
+<p><a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.2.1">v0.2.1 on GitHub</a> · <a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.2.0">v0.2.0 on GitHub</a> · <a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.1.1">v0.1.1 on GitHub</a> · <a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.1.0">v0.1.0 on GitHub</a></p>
 
 <footer>
 <p>Apache-2.0 · <a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a> · <a href="https://github.com/ArangoGutierrez/coffee-bar/issues/new">Report a bug</a><br>

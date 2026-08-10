@@ -28,6 +28,66 @@ Every released version of coffee-bar, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 The project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — 2026-08-10
+
+A release about trust in what the app tells you. Four things it reported, or
+failed to report, were not true. Each is now correct, and each correction is
+held in place by a check that fails if it regresses.
+
+### Fixed
+
+- **The app can now tell you when its root helper is stale.** Installing a new
+  build left the old helper in place, so privileged fixes never reached an armed
+  setup, and nothing said so. The panel and the Preferences window now raise an
+  advisory when the installed helper differs from the one in the build you are
+  running, carrying the exact command that repairs it. Paste that command and
+  the advisory clears without relaunching. (#81)
+- **A hook that cannot fire is no longer reported as wired.** A tool event whose
+  matcher was missing, `null`, or not a string counted as healthy, so the app
+  would tell you your setup was fine while it could never run. A tool event now
+  requires a matcher the tool can actually use, and a lifecycle event must carry
+  none at all. (#55)
+- **The app inside the disk image is stapled.** The image was notarised and
+  stapled, but the app inside it was not. The app is now signed, notarised and
+  stapled *before* the image is built around it. (#82)
+- **Two architectural justifications no longer rest on a dead premise.** The
+  comments explaining why the privileged path avoids XPC peer pinning and
+  `SMAppService` were written when this project had no signed bundle. One has
+  shipped since 0.2.0. Both decisions now read as *unimplemented rather than
+  impossible*, and the open question is tracked in #71. (#86)
+
+| Fact | Value |
+|---|---|
+| File | `coffee-bar-0.2.1.dmg` |
+| Size | 858099 bytes |
+| SHA-256 | `0c1cd40bbd2c8a1bd2e1cd54122ab49d7f5f40b5a716772d0713917178f11288` |
+| Architecture | Apple silicon (`arm64`) only |
+| Minimum macOS | 14.0 |
+| Signature | Developer ID Application, team `85FN4Z37V8` |
+| Notarisation | `spctl` accepts it, source `Notarized Developer ID` |
+| Staple | `xcrun stapler validate` passes on the app and on the image |
+
+This is not a universal binary. `lipo -archs` on the shipped binary reports
+`arm64` alone, so an Intel Mac cannot run it.
+
+Verify the download before you open it:
+
+    shasum -a 256 coffee-bar-0.2.1.dmg
+    spctl -a -t open --context context:primary-signature -vv coffee-bar-0.2.1.dmg
+
+### Upgrading
+
+Nothing to do beyond installing it. This release changes no on-disk format and
+ends no hold that is already running.
+
+If you armed lid-closed mode with an earlier build, install this one and then
+follow the advisory the panel now shows: the root helper is replaced by the
+command it gives you, not by the installer.
+
+Homebrew installs 0.2.1 as well: the tap pins this tag. It builds on your
+machine, so that copy is signed only ad hoc and is not notarised. The disk image
+is the signed, notarised and stapled artifact.
+
 ## [0.2.0] — 2026-08-09
 
 Lid-closed mode, a Preferences window, and a hardened privileged path. The disk
@@ -60,7 +120,13 @@ without building from source.
 | Minimum macOS | 14.0 |
 | Signature | Developer ID Application, team `85FN4Z37V8` |
 | Notarisation | `spctl` accepts it, source `Notarized Developer ID` |
-| Staple | `xcrun stapler validate` passes |
+| Staple | `xcrun stapler validate` passes on the image; the app inside it was NOT stapled |
+
+The Staple row above read `passes` until 0.2.1, which is what a run that stapled
+only the image prints. Measured on the shipped 0.2.0 image: `stapler validate`
+exits 65 on `CoffeeBar.app` with "does not have a ticket stapled to it". 0.2.1
+staples the app as well, and the row now names both so the two states can be
+told apart. That is #82.
 
 Verify the download before you open it:
 
@@ -110,7 +176,12 @@ The first signed and notarised download. This release ships no code change.
 | Minimum macOS | 14.0 |
 | Signature | Developer ID Application, team `85FN4Z37V8` |
 | Notarisation | `spctl` accepts it, source `Notarized Developer ID` |
-| Staple | `xcrun stapler validate` passes |
+| Staple | `xcrun stapler validate` passes on the app and on the image |
+
+Measured on the shipped 0.1.1 image, not inferred: `stapler validate` exits 0 on
+the image and on `CoffeeBar.app` inside it. 0.2.0 lost the second of those and
+0.2.1 restored it, so this row now says which staples were checked rather than
+the bare `passes` it shared with 0.2.0 — wording that read the same either way.
 
 Verify the download before you open it:
 
@@ -184,5 +255,7 @@ needs no root, no password, and no kernel extension.
 - No battery measurement, and no claim about a saving.
 - No support for an agent other than Claude Code.
 
+[0.2.1]: https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.2.1
+[0.2.0]: https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.2.0
 [0.1.1]: https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.1.1
 [0.1.0]: https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.1.0
