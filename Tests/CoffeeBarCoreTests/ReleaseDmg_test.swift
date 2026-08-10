@@ -20,6 +20,49 @@ private func releaseDmgScript() -> URL {
     repoRoot().appending(path: "scripts/release-dmg.sh")
 }
 
+/// `scripts/release-dmg.sh` with its comment lines blanked, so an assertion reads
+/// what the script DOES rather than what its prose says about itself.
+///
+/// Two named bugs, both measured against the guard that used to read the raw
+/// text. This script explains itself in its comments, and it names the very
+/// commands the guards anchor on:
+///
+/// - `ditto -c -k --keepParent` is named at `release-dmg.sh:117` and run at
+///   `:119`. Replacing the command with the `zip -r` its own comment warns
+///   against left the guard GREEN — it was matching the prose.
+/// - `stapler staple "${APP}"` is the ORDER anchor, and order is the whole
+///   correctness argument: the staged copy is taken from `${APP}`, so the app
+///   must carry its ticket before `hdiutil create` reads it. Moving the staple
+///   after `hdiutil convert` and leaving one comment naming it also stayed
+///   GREEN, because `range(of:)` found the comment first. That is the UNSAFE
+///   direction — a shipped image carrying an unstapled app, which is exactly
+///   the v0.2.0 regression #82 exists to fix.
+///
+/// Comment lines are blanked rather than dropped so that line numbers survive
+/// into failure messages, and so `range(of:)` offsets keep the script's order.
+///
+/// The shebang is KEPT. `#!/bin/bash` is an interpreter directive, not prose, and
+/// a guard may legitimately assert it; only line 0 is exempted, so a `#!` inside
+/// a later comment is still stripped.
+///
+/// A `#` inside a quoted string is untouched: a comment in sh is a line whose
+/// FIRST non-whitespace character is `#`, and this strip is line-oriented rather
+/// than a substring cut. `VERSION="${VERSION#v}"` at `release-dmg.sh:43` is the
+/// case that a naive substring strip would corrupt. The one construct this cannot
+/// see is a heredoc body line beginning with `#`; the script's three heredoc
+/// bodies were checked and none does.
+private func releaseDmgScriptWithoutComments() throws -> String {
+    let text = try String(contentsOf: releaseDmgScript(), encoding: .utf8)
+    return text
+        .split(separator: "\n", omittingEmptySubsequences: false)
+        .enumerated()
+        .map { index, line -> String in
+            if index == 0 && line.hasPrefix("#!") { return String(line) }
+            return line.trimmingCharacters(in: .whitespaces).hasPrefix("#") ? "" : String(line)
+        }
+        .joined(separator: "\n")
+}
+
 /// Runs a command and returns its exit code and combined output.
 ///
 /// Reads the pipe BEFORE waiting. Waiting first deadlocks as soon as the output
@@ -278,7 +321,15 @@ private func withProducedImage(_ body: (URL, URL, String) throws -> Void) throws
 /// executed proof is the release itself, whose acceptance runs an offline
 /// launch.
 @Test func theAppIsNotarisedAndStapledBeforeTheImageIsBuilt() throws {
-    let s = try String(contentsOf: releaseDmgScript(), encoding: .utf8)
+    // Comments come out FIRST, and every assertion below reads the stripped
+    // text. This script names `ditto -c -k --keepParent` and `hdiutil create` in
+    // its own prose, so a raw `contains` matched the explanation instead of the
+    // command: both a deleted `ditto` and a staple moved after the image passed
+    // GREEN. `releaseDmgScriptWithoutComments` carries the measurements.
+    //
+    // One read, one strip. Stripping for one assertion and not another in this
+    // function would leave exactly the hole this closes.
+    let s = try releaseDmgScriptWithoutComments()
 
     // Named bug: the app is submitted but never stapled, so the ticket lives
     // only on Apple's servers and the offline case is unchanged.
@@ -289,13 +340,10 @@ private func withProducedImage(_ body: (URL, URL, String) throws -> Void) throws
     // a copy nobody ships. The staged copy is taken from ${APP}, so the order
     // is the whole correctness argument.
     //
-    // The image anchor is `hdiutil create -volname`, the COMMAND, and not the
-    // bare phrase. `range(of:)` finds the FIRST occurrence, and two comments in
-    // this script name `hdiutil create` in prose — including the one inside the
-    // stapling block itself, which explains why the order matters. Anchoring on
-    // the bare phrase compares the staple against that comment rather than
-    // against the command, and it lands EARLIER than the block it documents, so
-    // the assertion could not pass however correct the script was.
+    // The image anchor stays `hdiutil create -volname`, the COMMAND rather than
+    // the bare phrase, and that is deliberate belt-and-braces: the strip already
+    // removes the two comments naming `hdiutil create`, but the flag pins the
+    // anchor to the invocation even if a future non-comment line mentions it.
     let stapleApp = try #require(s.range(of: "stapler staple \"${APP}\""))
     let createImage = try #require(s.range(of: "hdiutil create -volname"))
     #expect(stapleApp.lowerBound < createImage.lowerBound,
