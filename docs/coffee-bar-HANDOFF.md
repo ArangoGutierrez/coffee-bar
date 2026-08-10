@@ -282,8 +282,12 @@ Profiles:
 > **None of this section shipped. It records the design M5 did NOT build.**
 > Carlos decided on 2026-08-05 that M5 ships as a root CLI (`sudo
 > coffee-bar-probe arm`) plus the launchd daemon `com.coffeebar.probewatchdog`,
-> with no XPC and no `SMAppService`, because the only bundle that ships is
-> ad-hoc signed and the peer pinning below cannot be satisfied on it.
+> with no XPC and no `SMAppService`. The reason recorded at the time was that
+> the only bundle shipping then was ad-hoc signed, so the peer pinning below
+> could not be satisfied on it. That premise died at v0.2.0, which ships
+> Developer ID signed and notarised under team `85FN4Z37V8`: the pin is now
+> unimplemented rather than impossible, and #71 is where whether to build it is
+> decided. The M5 decision itself stands.
 > `SECURITY.md` is the authoritative bound on what shipped, and
 > `noTargetOnThePrivilegedPathReachesForXPCOrSMAppService` refuses these APIs in
 > code. This section is kept as the record of a road not taken; the verb list

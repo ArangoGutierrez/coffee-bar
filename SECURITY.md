@@ -247,24 +247,34 @@ What the shipped code does NOT do — each one refused structurally by
 - It cannot pin a peer with `setCodeSigningRequirement(_:)`, and that is the
   measurement the whole decision turns on.
 
-The only bundle that ships today is built from source by the Homebrew formula,
-so it carries no team identifier and no certificate chain:
+The bundle that ships today is Developer ID signed and notarised, so it carries
+both a team identifier and a full certificate chain. Measured 2026-08-10 against
+the installed v0.2.0 bundle:
 
 ```
-$ codesign -dvvv /opt/homebrew/Cellar/coffee-bar/0.1.1/CoffeeBar.app
-Signature=adhoc          TeamIdentifier=not set
-$ codesign -v -R='anchor apple generic' <that app>   ->  rc=1  FAILS
+$ codesign -dvvv /Applications/CoffeeBar.app
+Authority=Developer ID Application: Carlos Eduardo Arango Gutierrez (85FN4Z37V8)
+Authority=Developer ID Certification Authority
+Authority=Apple Root CA
+TeamIdentifier=85FN4Z37V8
+$ codesign -v -R='anchor apple generic' <that app>   ->  rc=0  PASSES
 ```
+
+So the bar above is **unimplemented rather than impossible**, and that
+relabelling is the whole of this correction. Until v0.2.0 there was no
+certificate to pin and no signed bundle to attach one to, and this section
+recorded that as a permanent bound. Both now exist, and the text did not move
+when the premise died — a reader was told a check could not be built when it had
+merely not been built.
 
 A peer check that cannot be satisfied is not a weaker helper. It is an
 unauthenticated root service that accepts any local caller, which is strictly
 worse than the CLI that shipped — a command you type has exactly one caller, and
-you are it.
+you are it. That is why M5 ships the CLI, and the decision stands.
 
-There is no route back to the XPC design until two things change: a Developer ID
-certificate, and a signed bundle to attach it to. Until both exist, the peer
-pinning this policy would otherwise demand cannot be met on the one channel that
-users actually have.
+Neither the peer pin nor the `SMAppService` route is impossible now — both are
+simply unimplemented. Whether either should be built is issue #71's question,
+and re-deriving the architecture here is what #71 exists to do.
 
 The privileged side reads a journal file to know what to restore. That file is
 an instruction to a root process, and it is treated as one. All four of these
