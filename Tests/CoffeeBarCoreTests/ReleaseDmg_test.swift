@@ -420,6 +420,16 @@ private func withProducedImage(_ body: (URL, URL, String) throws -> Void) throws
     #expect(s.contains("ditto -c -k --keepParent"),
             "the app is not zipped for submission; notarytool cannot take a bare .app")
 
+    // Named bug, and it was measured: the Staple row read '`xcrun stapler
+    // validate` passes' and was set in the image step alone, so it printed the
+    // same text whether or not the app had been stapled. Reverting that string
+    // left the WHOLE suite green — the fix that made the report honest was
+    // itself unguarded. This is the assertion that would have caught it.
+    //
+    // Read from the stripped text like everything else here, so the comment
+    // above `STAPLE_FACT` in the script cannot satisfy it.
+    #expect(s.contains("on the app and on the image"),
+            "the Staple row does not name both staples, so it reads the same for a run that stapled the app and one that did not")
 }
 
 /// Pins `shellCodeWithoutComments`, because the guard above is only as honest as
