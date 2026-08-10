@@ -751,12 +751,23 @@ private func documentedShimCommands() throws -> [String] {
 ///
 /// **ONE exemption, and it is this file.** The two assertions below spell both
 /// forbidden claims as literals, so a walk that read this file would report the
-/// guard itself, for ever. It is derived from `#filePath` rather than written
-/// out — exactly as `noTrackedFileCarriesLiveSessionProse` derives its own — so
-/// renaming or moving this file cannot leave a stale literal behind that exempts
-/// nothing, or worse, exempts whatever later takes the old name. Measured
-/// 2026-08-10: this is the SOLE `.swift` file under `Sources` or `Tests`
-/// carrying either string. An exemption list that grows is the hardcoded
+/// guard itself, for ever.
+///
+/// It is a repo-relative PATH derived from `#filePath`, which is the form
+/// `noTrackedFileCarriesLiveSessionProse` uses — both sides come from
+/// `#filePath`, so the prefix strip is exact. Deriving it rather than writing it
+/// out means renaming or moving this file cannot leave a stale literal behind
+/// that exempts nothing.
+///
+/// **A BASENAME here was a real hole, and it is why this says path.** An earlier
+/// version of this guard compared `lastPathComponent`, so a SECOND file called
+/// `DocsClaims_test.swift` anywhere under `Sources` or `Tests` was skipped in
+/// silence. Measured 2026-08-10: with one planted under `Tests/CoffeeBarUITests/`
+/// carrying both claims, the full suite passed. Duplicate basenames are not
+/// hypothetical in this tree — `main.swift` already occurs twice.
+///
+/// Measured 2026-08-10: this is the SOLE `.swift` file under `Sources` or
+/// `Tests` carrying either string. An exemption list that grows is the hardcoded
 /// allowlist returning in a new coat, so anything added here owes the reader the
 /// argument this paragraph makes.
 ///
@@ -793,18 +804,22 @@ private func documentedShimCommands() throws -> [String] {
                 "the walk never reached \(control), one of the two files #86 named")
     }
 
-    // THE ONE EXEMPTION, and it is this file — see the note above.
-    let selfName = URL(fileURLWithPath: #filePath).lastPathComponent
+    // THE ONE EXEMPTION, and it is this file — see the note above. A repo
+    // RELATIVE PATH, never a basename: `main.swift` already occurs twice in this
+    // tree, so a basename exempts every file that shares it.
+    let selfPath = String(#filePath.dropFirst(repoRoot().path.count + 1))
 
     // A file the walk could not READ is a file it did not CHECK.
     var unreadable: [String] = []
 
-    for file in files where file.lastPathComponent != selfName {
+    for file in files {
+        let path = String(file.path.dropFirst(repoRoot().path.count + 1))
+        guard path != selfPath else { continue }
+
         guard let text = try? String(contentsOf: file, encoding: .utf8) else {
-            unreadable.append(file.lastPathComponent)
+            unreadable.append(path)
             continue
         }
-        let path = String(file.path.dropFirst(repoRoot().path.count + 1))
 
         #expect(!text.contains("TeamIdentifier=not set"),
                 "\(path) says TeamIdentifier=not set; the shipped bundle reports 85FN4Z37V8")
