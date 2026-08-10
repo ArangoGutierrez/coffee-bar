@@ -572,6 +572,18 @@ func everyNestedFixtureObeysTheMatcherRule(_ directory: String) throws {
 
     // Named bug: every `guard … else { continue }` above firing, so the loop
     // asserts nothing and the check passes by reaching the end.
-    #expect(groupsChecked >= 5,
+    //
+    // TWELVE, and the old floor of 5 is why the number moved. Measured
+    // 2026-08-10: the real counts are 15 groups across `claude-settings` and 16
+    // across `codex-settings`. A floor of 5 therefore cleared with every fixture
+    // but one deleted from either directory — a 60%-plus loss of the corpus,
+    // passing as success, in the guard whose entire job is to notice that the
+    // fixtures stopped being read. Twelve leaves room for a fixture to be
+    // retired deliberately and still goes red on the collapse this is for.
+    //
+    // It is a FLOOR and not an equality on purpose. Pinning 15 and 16 would go
+    // red every time somebody adds a fixture, which teaches people to edit the
+    // number without reading why it is there.
+    #expect(groupsChecked >= 12,
             "only \(groupsChecked) groups examined in \(directory); the fixtures are not being read")
 }
