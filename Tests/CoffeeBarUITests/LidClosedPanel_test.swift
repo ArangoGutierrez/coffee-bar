@@ -1078,5 +1078,17 @@ private func shellSplit(of command: String) throws -> ShellSplit {
 
     // Named bug: silence when the app cannot check. `unverifiable` is not
     // `current`, and the user is entitled to know the check did not run.
-    #expect(ServingModel.staleHelperAdvisory(state: .unverifiable, probeAt: path) != nil)
+    //
+    // The CONTENT, and not merely a non-nil. `e332687` asserted only that this
+    // state produced SOMETHING, so the sentence could be replaced by `""` with
+    // the suite still green — the half of that commit which claims this state
+    // "speaks rather than staying silent" was enforced by nothing. It names the
+    // same path the `.stale` branch names, because that is the file the user is
+    // being told nothing can be proved about.
+    let unverifiable = try #require(
+        ServingModel.staleHelperAdvisory(state: .unverifiable, probeAt: path))
+    #expect(unverifiable.contains(ServingModel.privilegedProbePath), """
+        the unverifiable advisory does not name the path it cannot vouch for:
+          \(unverifiable)
+        """)
 }

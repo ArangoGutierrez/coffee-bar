@@ -168,6 +168,7 @@ private let expectedAppLayerEntries = [
     "Sources/CoffeeBarUI/MenuBarGlyphs.swift",
     "Sources/CoffeeBarUI/PanelView.swift",
     "Sources/CoffeeBarUI/PreferencesView.swift",
+    "Sources/CoffeeBarUI/PrivilegedHelperReader.swift",
     "Sources/CoffeeBarUI/ProcessGovernance.swift",
     "Sources/CoffeeBarUI/ServingModel.swift",
 ]
@@ -1769,6 +1770,74 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
         property and the checks that assert its text. A comment naming the \
         property does not satisfy this.
         """)
+}
+
+@Test func theStaleHelperAdvisoryReachesThePanelAndThePreferencesWindow() throws {
+    // Issue #81, and the same named bug commit 5116326 shipped for the hook
+    // advisory: `d53c52a` computed the verdict, `e332687` wrote the sentence,
+    // every check was green, and NO view read either — so v0.2.1 detected a
+    // stale root binary and told nobody. A published value no view reads is a
+    // feature that does not exist.
+    //
+    // BOTH surfaces, and neither is decoration. The panel is where the user
+    // notices, and this is live state about the machine in front of them rather
+    // than the documentation issue #56 removed from that column. The Preferences
+    // window is where they can act on it: it is the surface that already carries
+    // the lid-closed command, and the advisory's own remedy is a command of the
+    // same kind.
+    //
+    // This reads the source because the behavioural route is closed: M1 design
+    // §5.4 forbids asserting on rendered AppKit text, so no check in this
+    // package can watch either surface draw a line.
+    //
+    // LIMIT, stated rather than hidden: this proves each view NAMES the property
+    // in CODE and hands it a path derived from the running bundle. It cannot
+    // prove either renders what it reads, and — unlike the lid-closed summary
+    // below — it cannot compare brace depth against an unconditional neighbour,
+    // because this line is conditional BY DESIGN. A machine with a current
+    // helper must see nothing.
+    let files = try appLayerSources()
+    #expect(files.count == expectedSourceCount,
+            "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
+
+    let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
+                             "the app layer no longer compiles a PanelView.swift")
+    let window = try #require(files.first { $0.lastPathComponent == "PreferencesView.swift" },
+                              "the app layer no longer compiles a PreferencesView.swift")
+
+    for surface in [panel, window] {
+        // CODE, never the raw file, for the reason `2247ae4` records on the
+        // lid-closed check below: a comment naming a property that had been
+        // deleted left the raw-file version of that guard green.
+        //
+        // WHITESPACE REMOVED, not merely collapsed, for the reason
+        // `thePreferencesWindowAsksTheRunningBundleWhereTheProbeIs` records:
+        // the call is long enough that both views wrap it over three lines, so
+        // a needle containing `(probeAt:` never matches the raw text and the
+        // guard would be red against a correct view.
+        let code = swiftCodeWithoutComments(try String(contentsOf: surface, encoding: .utf8))
+            .replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
+
+        #expect(code.contains("model.staleHelperAdvisory(probeAt:"), """
+            \(surface.lastPathComponent) never reads model.staleHelperAdvisory \
+            in code, so a stale root helper reaches the user nowhere on this \
+            surface. Render it, or delete the property and the checks that \
+            assert its text. A comment naming the property does not satisfy this.
+            """)
+
+        // The PATH, not only the property. Named bug: calling the advisory with
+        // `documentedProbePath`, which is right for a disk-image install and
+        // names a file a Homebrew user, a `swift build` tree and a copy on the
+        // Desktop do not have — so the command the advisory prints copies
+        // nothing. `Bundle.main` is read in the VIEW and the model stays pure,
+        // which is the split `versionLine(from: Bundle.main.infoDictionary)`
+        // already uses in both of these files.
+        #expect(code.contains("ServingModel.probePath(besideExecutable:Bundle.main.executableURL)"), """
+            \(surface.lastPathComponent) does not hand the advisory a probe path \
+            derived from the running bundle, so whatever command it prints is \
+            not the derivation this package holds under test.
+            """)
+    }
 }
 
 @Test func thePanelRendersTheLegalLineItComposes() throws {

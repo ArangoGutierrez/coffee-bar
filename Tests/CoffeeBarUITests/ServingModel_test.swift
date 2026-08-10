@@ -2227,3 +2227,141 @@ private struct DisagreeingHealth: HookHealthProviding {
     #expect(line.contains("was refused"),
             "the control snapped back to Auto with no explanation: \(line)")
 }
+
+// MARK: - The root helper the panel reports on
+
+// Issue #81. `PrivilegedHelper.state` and `ServingModel.staleHelperAdvisory`
+// landed together with a correct verdict and a correct sentence that NOTHING
+// called, so the app could detect a stale root binary and tell nobody. These are
+// the checks on the wire between them. `AppLayerBoundary_test.swift` holds the
+// two views, and `LidClosedPanel_test.swift` holds the copy.
+//
+// What is asserted HERE is which state the model publishes, when a line appears
+// and when it goes away — M1 design §5.4 rules out reading the drawn panel.
+
+/// A source of helper state whose answer can CHANGE between refreshes.
+///
+/// The states these checks need describe a machine whose root helper is out of
+/// date, and the shipping reader cannot be made to produce them here: it
+/// resolves the probe beside the RUNNING executable, which under `swift test` is
+/// the test binary. `PrivilegedHelperReader_test.swift` drives the real reader
+/// over real files, so the read itself is never mocked away — this double stands
+/// in for the machine, not for the reader.
+private final class StubHelperState: PrivilegedHelperStateProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private var answer: PrivilegedHelperState
+
+    init(_ answer: PrivilegedHelperState) { self.answer = answer }
+
+    /// What the machine looks like from now on. A model that re-reads sees this.
+    func set(_ next: PrivilegedHelperState) {
+        lock.lock()
+        defer { lock.unlock() }
+        answer = next
+    }
+
+    func state() -> PrivilegedHelperState {
+        lock.lock()
+        defer { lock.unlock() }
+        return answer
+    }
+}
+
+/// The install these checks name.
+///
+/// FIXED, and never this machine's, for the reason `LidClosedPanel_test.swift`
+/// gives about its own: the app derives this path from its own bundle, so a
+/// check that read the live value would assert a different string on every Mac.
+/// It carries no home directory, because `noTrackedFileCarriesLiveSessionProse`
+/// scans every tracked file for the real account name.
+private let installedElsewhere = "/Volumes/Spare/CoffeeBar.app/Contents/MacOS/coffee-bar-probe"
+
+@MainActor
+@Test func theModelRaisesTheStaleHelperAdvisoryTheSourceReports() throws {
+    // Named bug this catches, and it is the whole of issue #81 as v0.2.1 left
+    // it: a verdict computed correctly and published nowhere. Delete the
+    // `refresh()` line that asks, or the property that derives the sentence, and
+    // the app is back to knowing the root binary is old and saying nothing.
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth(),
+                             helper: StubHelperState(.stale),
+                             settings: FakeSettings())
+
+    // Nothing has been asked yet, so there is nothing to report.
+    // `PanelView.onAppear` calls `refresh()`, so this state never reaches the
+    // screen — and a model that announced a fault it had not measured would be
+    // the same claim-without-evidence this release exists to remove, pointing
+    // the other way.
+    #expect(model.helperState == nil)
+    #expect(model.staleHelperAdvisory(probeAt: installedElsewhere) == nil,
+            "the model raised an advisory before it had read anything")
+
+    model.refresh()
+
+    #expect(model.helperState == .stale)
+
+    let line = try #require(model.staleHelperAdvisory(probeAt: installedElsewhere), """
+        the model read a stale root helper and raised no line, so the fault \
+        reaches the user nowhere
+        """)
+    #expect(line.contains(ServingModel.privilegedProbePath),
+            "the advisory does not name the path that is out of date: \(line)")
+
+    // The PARAMETER reaches the sentence. Named bug: an advisory that ignores
+    // what the view handed it and prints the documented disk-image path, which
+    // is right for one install in four and names a file a Homebrew user does not
+    // have.
+    #expect(line.contains(ServingModel.lidClosedInstallCommand(probeAt: installedElsewhere)),
+            "the advisory does not carry a command that copies THIS build: \(line)")
+    #expect(!line.contains(ServingModel.documentedProbePath), """
+        the advisory names the documented disk-image path rather than the one \
+        the caller supplied: \(line)
+        """)
+}
+
+@MainActor
+@Test func aCurrentRootHelperAddsNoLineAtAll() {
+    // The mirror, and the half that keeps this usable. An advisory nobody can
+    // clear is noise the user learns to skip past, and the panel would then be
+    // carrying a permanent complaint about a machine that is fine.
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth(),
+                             helper: StubHelperState(.current),
+                             settings: FakeSettings())
+    model.refresh()
+
+    #expect(model.helperState == .current)
+    #expect(model.staleHelperAdvisory(probeAt: installedElsewhere) == nil,
+            "an up-to-date helper produced a line: \(model.staleHelperAdvisory(probeAt: installedElsewhere) ?? "")")
+}
+
+@MainActor
+@Test func theStaleHelperAdvisoryClearsOnTheNextRefreshWithoutARelaunch() {
+    // Named bug this catches: reading the helper ONCE, in `init`. The user's
+    // whole recovery path is to paste the install command the advisory carries,
+    // and this app runs for days — a state frozen at launch would still report
+    // an old root binary after it had been replaced, which is the same frozen
+    // -status defect `theModelRereadsTheSettingsFileOnEveryRefresh` names for
+    // the hook file.
+    let machine = StubHelperState(.stale)
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth(),
+                             helper: machine,
+                             settings: FakeSettings())
+    model.refresh()
+    #expect(model.staleHelperAdvisory(probeAt: installedElsewhere) != nil,
+            "precondition: the stale helper is being reported")
+
+    // The user pastes the command while the app is running.
+    machine.set(.current)
+    model.refresh()
+
+    #expect(model.helperState == .current)
+    #expect(model.staleHelperAdvisory(probeAt: installedElsewhere) == nil, """
+        the advisory survived the fix it told the user to apply, so pasting the \
+        command appears to do nothing until coffee-bar is relaunched
+        """)
+}

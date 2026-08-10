@@ -135,6 +135,37 @@ public struct PreferencesView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
 
+                // The fault, under the instructions it invalidates. Issue #81:
+                // the summary above prints the command that installs the probe,
+                // and a user who ran it against an EARLIER build has a root
+                // binary this one did not ship. Nothing on either surface said
+                // so until now.
+                //
+                // CONDITIONAL, unlike the summary above, and the two differ for
+                // the reason that comment gives. There is no state to condition
+                // the summary on. There is exactly one to condition this on, and
+                // a machine whose helper is current must see nothing — an
+                // advisory that never clears is a permanent complaint about a
+                // Mac that is fine.
+                //
+                // The panel carries the same line, and it is repeated rather
+                // than moved for the reason `hookAdvisory` below is: the panel
+                // is where the user notices, and this window is where the
+                // command to fix it already lives.
+                //
+                // Rendered verbatim from the model with no text built here, and
+                // `Bundle.main.executableURL` read here rather than in the
+                // model — both for the reasons the summary above states.
+                if let advisory = model.staleHelperAdvisory(
+                    probeAt: ServingModel.probePath(
+                        besideExecutable: Bundle.main.executableURL)) {
+                    Text(advisory)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+
                 // Its own section and not a third row under Power, because it
                 // is a different question: not how long coffee-bar holds the
                 // machine, but what it does to everything that is not the

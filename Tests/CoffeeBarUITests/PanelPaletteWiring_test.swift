@@ -148,25 +148,30 @@ func indicatorComesFromTheModel() throws {
             "the indicator must come from ServingModel.indicator(isServing:)")
 }
 
-@Test("orange is spent on exactly the three advisory lines")
+@Test("orange is spent on exactly the four advisory lines")
 func orangeIsSpentOnlyOnTheAdvisories() throws {
     let source = try panelSource()
     let occurrences = source.components(separatedBy: ".foregroundStyle(.orange)").count - 1
 
     // A COUNT, not a presence check. A guard reads what a file says and cannot
-    // see what it omits, so presence alone would stay green if a fourth orange
+    // see what it omits, so presence alone would stay green if a fifth orange
     // element appeared or an advisory silently lost its colour. This panel has
     // already shipped one undocumented control; the count is what catches the
     // next one.
     //
+    // It caught issue #81's line, which is why this says four. The
+    // stale-helper advisory arrived, this guard went red at 4 against a
+    // deliberate change, and the count moved in the same commit — which is the
+    // note below working rather than a guard being edited to fit.
+    //
     // COUPLED TO `ColorRole.warning`, and this note is one half of a pair.
-    // The three advisories render `.orange` as a LITERAL, never through
+    // The four advisories render `.orange` as a LITERAL, never through
     // `brand(.warning)`, so `.warning` has no production caller and this count
     // is what pins the literal down. Routing the advisories through the role —
     // which is what fixing issue #30 will want — takes this count to 0 and
     // turns this test red. That is the guard working, not a regression: move
     // the count in the same change. `BrandPalette.swift` carries the other
     // half of this note, on the `ColorRole` declaration.
-    #expect(occurrences == 3,
-            "expected 3 orange advisory lines, found \(occurrences)")
+    #expect(occurrences == 4,
+            "expected 4 orange advisory lines, found \(occurrences)")
 }

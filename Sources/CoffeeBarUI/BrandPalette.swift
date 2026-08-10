@@ -25,13 +25,15 @@ import SwiftUI
 /// through the contrast walk described below.
 ///
 /// The app renders that pigment WITHOUT the role. `PanelView` writes the
-/// literal `.foregroundStyle(.orange)` on its three advisory lines — the ones
-/// driven by `suppressionAdvisory`, `hookAdvisory` and `ingestAdvisory` — and
-/// `orangeIsSpentOnlyOnTheAdvisories` in `PanelPaletteWiring_test.swift`
-/// asserts that literal appears exactly THREE times. So wiring those lines
-/// through `brand(.warning)` later means moving that count guard in the same
-/// change; doing one without the other turns the guard red. The advisories'
-/// light-appearance contrast is tracked as issue #30 and is not fixed here.
+/// literal `.foregroundStyle(.orange)` on its four advisory lines — the ones
+/// driven by `suppressionAdvisory`, `hookAdvisory`, `ingestAdvisory` and
+/// `staleHelperAdvisory` — and `orangeIsSpentOnlyOnTheAdvisories` in
+/// `PanelPaletteWiring_test.swift` asserts that literal appears exactly FOUR
+/// times. So wiring those lines through `brand(.warning)` later means moving
+/// that count guard in the same change; doing one without the other turns the
+/// guard red. Issue #81 added the fourth and moved the count in the same
+/// commit, which is that note working. The advisories' light-appearance
+/// contrast is tracked as issue #30 and is not fixed here.
 ///
 /// `CaseIterable` is load-bearing. `fixedRolesClearNonTextContrast` walks
 /// `allCases` and skips a role only because `rgb` answered `nil`. A role added

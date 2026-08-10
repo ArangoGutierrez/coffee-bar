@@ -71,7 +71,7 @@ struct AttentionListView: View {
     /// THREE, and the number is a judgement with a stated reason rather than a
     /// round one. Three worst-case rows are 184pt (see `maximumListHeight`),
     /// which already makes this list the tallest single element in a panel that
-    /// is 260pt wide and carries four controls, three advisories, a battery
+    /// is 260pt wide and carries four controls, four advisories, a battery
     /// reading, a version line, a legal link and a Quit button. A fourth row
     /// costs another 64pt, and the panel's footer is what the defect took away.
     ///

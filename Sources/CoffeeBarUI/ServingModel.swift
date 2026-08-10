@@ -22,6 +22,7 @@ public final class ServingModel {
     private let holder: any AssertionHolding
     private let reader: any PowerReadingProviding
     private let health: any HookHealthProviding
+    private let helper: any PrivilegedHelperStateProviding
     private let listener: any IngestListening
     private let settings: any SettingsStoring
     private let policy: StalePolicy
@@ -173,6 +174,22 @@ public final class ServingModel {
     /// `PanelView.onAppear` calls `refresh()`, and the menu-bar label reads
     /// `isServing` only.
     public private(set) var hookHealths: [AgentTool: HookHealthStatus] = [:]
+
+    /// What the root helper on this Mac is, relative to the one this build
+    /// ships, or `nil` before anything has been read.
+    ///
+    /// **`nil` and not `.unverifiable`, and the two are different claims.**
+    /// `.unverifiable` means the app looked and could not tell, which is a
+    /// sentence the user is entitled to; `nil` means nothing has been asked yet.
+    /// Defaulting to `.unverifiable` would put "coffee-bar cannot read its own
+    /// copy" on the panel before a single read had happened — a fault reported
+    /// with no evidence behind it, which is the failure this release exists to
+    /// remove pointing the other way. `hookHealths` is empty until the first
+    /// `refresh()` for the same reason.
+    ///
+    /// Nothing renders it before then: `PanelView.onAppear` calls `refresh()`,
+    /// and the menu-bar label reads `isServing` only.
+    public private(set) var helperState: PrivilegedHelperState?
 
     /// Whether this process is serving the ingest socket RIGHT NOW.
     ///
@@ -459,6 +476,35 @@ public final class ServingModel {
                 + "\(probeProductName), so it cannot tell whether the probe at "
                 + "\(privilegedProbePath) is current. Reinstall the app."
         }
+    }
+
+    /// The line the panel and the Preferences window show about the root helper,
+    /// or `nil` for no line.
+    ///
+    /// **Derived, not stored, so it cannot disagree with what was read.** It
+    /// reads `helperState`, which `refresh()` sets, exactly as `hookAdvisory`
+    /// reads `hookHealths`. A second stored sentence fed by a second read would
+    /// agree with the state until it did not, and the views render this verbatim
+    /// so nothing could see the disagreement.
+    ///
+    /// **`nil` before the first `refresh()`**, because `helperState` is. An
+    /// untouched model yields no line rather than a false one — see that
+    /// property.
+    ///
+    /// **`path` is a PARAMETER and `Bundle.main` is not read here.** Where this
+    /// build's probe sits depends on where the app was installed, and only the
+    /// running bundle knows; reading `Bundle.main` in this type would resolve to
+    /// the TEST RUNNER under `swift test`, which is neither this app nor an
+    /// error anything could detect. The views supply it through
+    /// `probePath(besideExecutable:)`, the same split
+    /// `lidClosedSummary(probeAt:)` and `versionLine(from:)` already use.
+    ///
+    /// It shares a base name with the static above and that is deliberate: one
+    /// composes the sentence from a state, the other reports the state THIS
+    /// model measured. The argument labels differ, so no call site is ambiguous,
+    /// and `LidClosedPanel_test.swift` pins the static by name.
+    public func staleHelperAdvisory(probeAt path: String) -> String? {
+        helperState.flatMap { Self.staleHelperAdvisory(state: $0, probeAt: path) }
     }
 
     /// `path` as exactly ONE operand of a shell command line.
@@ -836,6 +882,7 @@ public final class ServingModel {
     public init(holder: any AssertionHolding = AssertionHolder(),
                 reader: any PowerReadingProviding = SystemPowerReader(),
                 health: any HookHealthProviding = HookHealthReader(),
+                helper: any PrivilegedHelperStateProviding = PrivilegedHelperReader(),
                 settings: any SettingsStoring = UserDefaultsSettingsStore(),
                 listener: any IngestListening = UnixSocketIngestListener(),
                 policy: StalePolicy = .standard,
@@ -844,6 +891,7 @@ public final class ServingModel {
         self.holder = holder
         self.reader = reader
         self.health = health
+        self.helper = helper
         self.settings = settings
         self.listener = listener
         self.policy = policy
@@ -1117,6 +1165,13 @@ public final class ServingModel {
         // every TOOL's file for the same reason, and because a user who
         // installs Cursor while the app runs must not wait for a relaunch.
         hookHealths = health.statuses()
+        // Re-read every time, not once in `init`, for the reason above and one
+        // of its own: the user's recovery path here is to paste the install
+        // command the advisory carries, and a state frozen at launch would keep
+        // reporting an old root binary after it had been replaced. Issue #81's
+        // whole point is that the app tells the user something they can act on,
+        // so the advisory has to clear without a relaunch.
+        helperState = helper.state()
         // ASKED, not remembered. The bind is asynchronous, so a `start()` that
         // returned cleanly is not proof the socket is serving, and `stop()`
         // takes it away again.
