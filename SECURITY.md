@@ -267,10 +267,10 @@ recorded that as a permanent bound. Both now exist, and the text did not move
 when the premise died — a reader was told a check could not be built when it had
 merely not been built.
 
-A peer check that cannot be satisfied is not a weaker helper. It is an
-unauthenticated root service that accepts any local caller, which is strictly
+A peer check that could not be satisfied was not a weaker helper. It was an
+unauthenticated root service that accepted any local caller, which was strictly
 worse than the CLI that shipped — a command you type has exactly one caller, and
-you are it. That is why M5 ships the CLI, and the decision stands.
+you are it. That is why M5 shipped the CLI, and the decision stands.
 
 Neither the peer pin nor the `SMAppService` route is impossible now — both are
 simply unimplemented. Whether either should be built is issue #71's question,
