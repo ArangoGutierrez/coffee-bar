@@ -209,7 +209,12 @@ if [ "${NOTARIZE}" = "1" ]; then
 
     xcrun stapler staple "${DMG}" || die "stapler staple failed"
     xcrun stapler validate "${DMG}" || die "stapler validate failed"
-    STAPLE_FACT='`xcrun stapler validate` passes'
+    # Both staples, named separately. `passes` alone reported only this one, so
+    # the row read identically for v0.1.1 (app stapled) and v0.2.0 (app NOT
+    # stapled) — the report could not tell the fixed state from the regressed
+    # one, which is the whole of #82. Step 2b staples the app; this step staples
+    # the image; the row now claims exactly what the run did.
+    STAPLE_FACT='`xcrun stapler validate` passes on the app and on the image'
 
     # Captured, not asserted. The Notarisation row states which source Gatekeeper
     # matched, and the only honest way to print that is to read it back from the
