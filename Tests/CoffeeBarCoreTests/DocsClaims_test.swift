@@ -724,3 +724,129 @@ private func documentedShimCommands() throws -> [String] {
         }
     }
 }
+
+/// Released code must not claim the shipping bundle is ad-hoc signed.
+///
+/// Named bug, and it is #86: two architectural justifications — no XPC peer
+/// pinning, no `SMAppService` — rest on "there is no Team ID to pin". v0.1.1
+/// shipped a notarised image and v0.2.0 ships one carrying both binaries, so
+/// the premise died and the comments did not move. A reader is told a check is
+/// IMPOSSIBLE when it is merely unimplemented.
+///
+/// **A WALK, and never a list of paths.** The first round of this guard named
+/// the two `Sources/` files #86 happened to mention. That shape cannot catch the
+/// NEXT instance, which is the whole failure mode #86 exists to end — a comment
+/// nobody noticed for two releases. Measured 2026-08-10: with the premise
+/// planted verbatim in `Sources/CoffeeBarPower/LidClosedSession.swift`, a third
+/// file the list did not name, the FULL suite passed at 920 tests with zero
+/// failures. The list also missed the copy in `AppLayerBoundary_test.swift`,
+/// inside the very guard that enforces the decision the premise justified — and
+/// a false claim in a check's own reasoning is worse than one in a comment,
+/// because the next reader takes it as the reason the rule exists.
+///
+/// So "source file" here means EVERY `.swift` file under `Sources` and `Tests`.
+/// `allSwiftFiles()` in `PolicyDocumentClaims_test.swift` walks the same two
+/// directories and is the shape this follows; it is `private` and compiled into
+/// a different test target, so this is an equivalent local walk, not a call.
+///
+/// **ONE exemption, and it is this file.** The two assertions below spell both
+/// forbidden claims as literals, so a walk that read this file would report the
+/// guard itself, for ever.
+///
+/// It is a repo-relative PATH derived from `#filePath`, which is the form
+/// `noTrackedFileCarriesLiveSessionProse` uses — both sides come from
+/// `#filePath`, so the prefix strip is exact. Deriving it rather than writing it
+/// out means renaming or moving this file cannot leave a stale literal behind
+/// that exempts nothing.
+///
+/// **A BASENAME here was a real hole, and it is why this says path.** An earlier
+/// version of this guard compared `lastPathComponent`, so a SECOND file called
+/// `DocsClaims_test.swift` anywhere under `Sources` or `Tests` was skipped in
+/// silence. Measured 2026-08-10: with one planted under `Tests/CoffeeBarUITests/`
+/// carrying both claims, the full suite passed. Duplicate basenames are not
+/// hypothetical in this tree — `main.swift` already occurs twice.
+///
+/// Measured 2026-08-10: this is the SOLE `.swift` file under `Sources` or
+/// `Tests` carrying either string. An exemption list that grows is the hardcoded
+/// allowlist returning in a new coat, so anything added here owes the reader the
+/// argument this paragraph makes.
+///
+/// **What this walk deliberately does NOT reach: Markdown.** `SECURITY.md`,
+/// `docs/coffee-bar-HANDOFF.md` and `docs/HANDOFF-V0.1.md` carry the same dead
+/// premise today. Whether they are corrected in v0.2.1 is a scope decision above
+/// this guard, so the gap is left visible here rather than silently closed — a
+/// check that quietly grew to rewrite the security policy would be a worse
+/// surprise than the hole it filled.
+///
+/// Matched on the claim, not on the word "adhoc". `docs/BUILDING.md` says the
+/// LOCAL build-app.sh output is ad-hoc signed, which is true and must stay
+/// sayable.
+///
+/// The second literal is `only bundle that ships`, deliberately WITHOUT the
+/// leading `the `. Measured 2026-08-10: `main.swift` wraps that sentence as
+/// `… bundle ID. The` / `// only bundle that ships today …`, so the article is
+/// capitalised AND separated from the rest by a newline and a comment marker.
+/// `the only bundle that ships` occurs ZERO times in that file — a guard using
+/// it is green before the fix and after it, on the very file this issue is
+/// about. `only bundle that ships` occurs once in each of the two files.
+@Test func noSourceFileClaimsTheShippingBundleIsAdHocSigned() throws {
+    let files = everySwiftFileInSourcesAndTests()
+
+    // ANTI-VACUITY. A walk that resolved the wrong root finds nothing, asserts
+    // nothing and reads as success — the same blindness the list had, in a new
+    // hat. The count catches a broken root; the two named files catch a walk
+    // that reaches part of the tree and not the part #86 is about.
+    #expect(files.count >= 100,
+            "walked \(files.count) Swift files under \(repoRoot().path); this scan is reading almost nothing")
+    for control in ["Sources/CoffeeBarProbe/main.swift",
+                    "Sources/CoffeeBarPower/LaunchDaemonInstaller.swift"] {
+        #expect(files.contains { $0.path.hasSuffix(control) },
+                "the walk never reached \(control), one of the two files #86 named")
+    }
+
+    // THE ONE EXEMPTION, and it is this file — see the note above. A repo
+    // RELATIVE PATH, never a basename: `main.swift` already occurs twice in this
+    // tree, so a basename exempts every file that shares it.
+    let selfPath = String(#filePath.dropFirst(repoRoot().path.count + 1))
+
+    // A file the walk could not READ is a file it did not CHECK.
+    var unreadable: [String] = []
+
+    for file in files {
+        let path = String(file.path.dropFirst(repoRoot().path.count + 1))
+        guard path != selfPath else { continue }
+
+        guard let text = try? String(contentsOf: file, encoding: .utf8) else {
+            unreadable.append(path)
+            continue
+        }
+
+        #expect(!text.contains("TeamIdentifier=not set"),
+                "\(path) says TeamIdentifier=not set; the shipped bundle reports 85FN4Z37V8")
+        #expect(!text.contains("only bundle that ships"),
+                "\(path) still claims one bundle ships and is ad-hoc signed; v0.2.0 ships a Developer ID signed, notarised image")
+    }
+
+    #expect(unreadable.isEmpty,
+            "\(unreadable.count) Swift file(s) were unreadable, so this scan never checked them: \(unreadable.sorted())")
+}
+
+/// Every `.swift` file under `Sources` and `Tests`, sorted.
+///
+/// An equivalent of `allSwiftFiles()` in `PolicyDocumentClaims_test.swift`,
+/// which is `private` and compiled into a different test target. Four lines
+/// duplicated is better than widening another target's internals for a
+/// neighbour's convenience — the trade `LidClosedPanel_test.swift` records
+/// about its own `uiPackageRoot()`.
+private func everySwiftFileInSourcesAndTests() -> [URL] {
+    var found: [URL] = []
+    for base in ["Sources", "Tests"] {
+        let directory = repoRoot().appending(path: base)
+        guard let walker = FileManager.default.enumerator(atPath: directory.path)
+        else { continue }
+        for case let relative as String in walker where relative.hasSuffix(".swift") {
+            found.append(directory.appending(path: relative))
+        }
+    }
+    return found.sorted { $0.path < $1.path }
+}

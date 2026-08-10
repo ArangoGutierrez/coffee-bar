@@ -514,3 +514,76 @@ func theClaudeCodeVerdictIsTheSameThroughBothEntryPoints(_ name: String) throws 
         point AT hooks.json. This package parses no TOML.
         """)
 }
+
+/// Every nested-shape fixture obeys the rule `docs/QUICKSTART.md` states.
+///
+/// Named bug this catches, and it is the reason this guard exists: on
+/// 2026-08-10 all three `claude-settings` fixtures and two `codex-settings`
+/// fixtures carried NO `matcher` on their tool events. Nothing noticed, because
+/// `isWired` did not read the key — so the fixtures and the code were wrong in
+/// the same direction and agreed with each other. Pinning the fixtures to the
+/// DOCUMENT rather than to the implementation is what breaks that symmetry: this
+/// check goes red on a bad fixture even if `isWired` regresses to ignoring
+/// `matcher` again.
+///
+/// Cursor is excluded because its shape is `.flat` and has no matcher level.
+@Test(arguments: ["claude-settings", "codex-settings"])
+func everyNestedFixtureObeysTheMatcherRule(_ directory: String) throws {
+    let toolEvents: Set<String> = ["PreToolUse", "PostToolUse"]
+    let root = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appending(path: "Fixtures/\(directory)")
+
+    let files = try FileManager.default
+        .contentsOfDirectory(atPath: root.path)
+        .filter { $0.hasSuffix(".json") }
+        .sorted()
+    #expect(!files.isEmpty, "no fixtures found at \(root.path)")
+
+    var groupsChecked = 0
+    for name in files {
+        let bytes = try Data(contentsOf: root.appending(path: name))
+        // malformed.json is deliberately unparseable; no-hooks.json has no hooks.
+        guard let top = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+              let hooks = top["hooks"] as? [String: Any] else { continue }
+
+        for (event, value) in hooks {
+            guard let groups = value as? [[String: Any]] else { continue }
+            for group in groups {
+                groupsChecked += 1
+                // What the key IS, never merely whether it is there.
+                // `JSONSerialization` yields `NSNull()` for a JSON `null` — a
+                // NON-NIL `Any` — so `!= nil` would call a fixture whose tool
+                // event reads `"matcher": null` obedient, and the check that
+                // exists to break the symmetry between the fixtures and the
+                // code would be wrong in the same direction as the code again.
+                let hasMatcher = group["matcher"] is String
+                #expect(hasMatcher == toolEvents.contains(event),
+                        """
+                        \(directory)/\(name): "\(event)" \
+                        \(hasMatcher ? "carries" : "is missing") a matcher. \
+                        QUICKSTART.md — the two tool events take a matcher, \
+                        the other three take none.
+                        """)
+            }
+        }
+    }
+
+    // Named bug: every `guard … else { continue }` above firing, so the loop
+    // asserts nothing and the check passes by reaching the end.
+    //
+    // TWELVE, and the old floor of 5 is why the number moved. Measured
+    // 2026-08-10: the real counts are 15 groups across `claude-settings` and 16
+    // across `codex-settings`. A floor of 5 therefore cleared with every fixture
+    // but one deleted from either directory — a 60%-plus loss of the corpus,
+    // passing as success, in the guard whose entire job is to notice that the
+    // fixtures stopped being read. Twelve leaves room for a fixture to be
+    // retired deliberately and still goes red on the collapse this is for.
+    //
+    // It is a FLOOR and not an equality on purpose. Pinning 15 and 16 would go
+    // red every time somebody adds a fixture, which teaches people to edit the
+    // number without reading why it is there.
+    #expect(groupsChecked >= 12,
+            "only \(groupsChecked) groups examined in \(directory); the fixtures are not being read")
+}

@@ -8,13 +8,14 @@ import Foundation
 /// The conformer writes a plist and shells out to `launchctl`.
 ///
 /// This comment used to say M5 would replace that with
-/// `SMAppService.daemon(plistName:).register()`. It will not, and the reason is
-/// measured rather than stylistic: that API registers a plist shipped inside a
-/// code-signed app bundle, and the only bundle that ships is built from source
-/// by the Homebrew formula and is ad-hoc signed — `Signature=adhoc`,
-/// `TeamIdentifier=not set`, and `codesign -R='anchor apple generic'` exits 1.
-/// The same absence rules out the XPC peer pinning SECURITY.md "It cannot pin a peer"
-/// requires. M5 therefore ships as a root CLI plus this launchd daemon.
+/// `SMAppService.daemon(plistName:).register()`. It has not, and the reason was
+/// measured rather than stylistic:
+/// that API registers a plist shipped inside a code-signed app bundle. That was
+/// the blocker while the only shipping bundle was ad-hoc signed. It is not one
+/// now: v0.2.0 ships a Developer ID signed, notarised image, measured
+/// 2026-08-10 as `codesign -R='anchor apple generic'` rc=0 and
+/// `TeamIdentifier=85FN4Z37V8`. M5 shipped as a root CLI plus this launchd
+/// daemon, and moving to SMAppService is issue #71 rather than a settled no.
 ///
 /// The interface keeps no `install(binaryPath:)` requirement all the same.
 /// Resolving and validating the program path *inside* the conformer is what

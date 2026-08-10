@@ -168,6 +168,7 @@ private let expectedAppLayerEntries = [
     "Sources/CoffeeBarUI/MenuBarGlyphs.swift",
     "Sources/CoffeeBarUI/PanelView.swift",
     "Sources/CoffeeBarUI/PreferencesView.swift",
+    "Sources/CoffeeBarUI/PrivilegedHelperReader.swift",
     "Sources/CoffeeBarUI/ProcessGovernance.swift",
     "Sources/CoffeeBarUI/ServingModel.swift",
 ]
@@ -1419,22 +1420,37 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
 
 @Test func noTargetOnThePrivilegedPathReachesForXPCOrSMAppService() throws {
     // Carlos's M5 decision, made structural. It is a SECURITY property, not a
-    // preference, and the measurement that forced it is this:
-    //
-    //   codesign -dvvv <the shipped CoffeeBar.app>
-    //     Signature=adhoc          TeamIdentifier=not set
-    //   codesign -v -R='anchor apple generic' <same>   -> rc=1
+    // preference.
     //
     // SECURITY.md "It cannot pin a peer" requires an XPC helper to pin its peer with
     // `setCodeSigningRequirement` and to reject any peer that does not match
-    // the app's Team ID and bundle ID. The only bundle that ships today is
-    // built from source by the Homebrew formula and carries no Team ID and no
-    // certificate chain, so that requirement cannot be met on the one channel
-    // that exists. An XPC listener whose peer check cannot be satisfied is not
-    // a weaker helper — it is an unauthenticated root service.
+    // the app's Team ID and bundle ID.
     //
-    // So M5 ships as a root CLI plus a launchd watchdog, and this refuses the
-    // two constructs that would quietly reintroduce the problem. Named bug it
+    // **That pin is UNIMPLEMENTED, and since v0.2.0 it is no longer
+    // impossible.** Measured 2026-08-10 against the shipped app:
+    // `codesign -R='anchor apple generic'` exits 0, `TeamIdentifier=85FN4Z37V8`,
+    // authority `Developer ID Application`. An earlier version of this comment
+    // recorded an ad-hoc signature, no Team ID and rc=1, and was CORRECT when
+    // it was written: the only build shipping then was the one the Homebrew
+    // formula makes from source. It stopped being true at v0.2.0 and nobody
+    // moved it — issue #86.
+    //
+    // **The argument that rested on it has lapsed with it, and no replacement
+    // is invented here.** This block used to conclude that an XPC listener's
+    // peer check could not be satisfied on the one channel that exists, so such
+    // a listener would be an unauthenticated root service rather than a weaker
+    // helper. With a real Team ID shipping, that reasoning no longer holds as
+    // written, and this comment does not manufacture another one to put in its
+    // place. What is true today is narrower: M5 shipped as a root CLI plus a
+    // launchd watchdog, nothing has re-opened that decision, and neither the
+    // peer pin nor `SMAppService` has been designed, written or tested here.
+    // Whether to act on the unblocking is issue #71's question rather than this
+    // guard's.
+    //
+    // The RULE below is unaffected either way, and keeping the two apart is the
+    // point. Adding an XPC or `SMAppService` route is a design change and has to
+    // arrive as one — reviewed against SECURITY.md, with the peer pin written
+    // and tested — rather than as a construct somebody compiles in. Named bug it
     // catches: an `NSXPCListener(machServiceName:)` added to the probe or to
     // the app, which would compile, run, and accept any local peer.
     //
@@ -1477,11 +1493,13 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
         for name in forbidden {
             #expect(!code.contains(name), """
                 \(file.lastPathComponent) names \(name) in CODE. M5 ships as a \
-                root CLI plus a launchd watchdog: the shipped bundle is ad-hoc \
-                signed with no Team ID, so the peer pinning SECURITY.md \
-                requires cannot be satisfied and an XPC service would accept \
-                any local peer. A comment may explain the choice; making the \
-                call is what this refuses.
+                root CLI plus a launchd watchdog, and neither the XPC peer pin \
+                SECURITY.md requires nor SMAppService has been designed or \
+                written here — issue #71. Adding one of these is a design \
+                change and has to arrive as one, with the peer pin written and \
+                tested; until then an XPC service would accept any local peer. \
+                A comment may explain the choice; making the call is what this \
+                refuses.
                 """)
         }
     }
@@ -1769,6 +1787,74 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
         property and the checks that assert its text. A comment naming the \
         property does not satisfy this.
         """)
+}
+
+@Test func theStaleHelperAdvisoryReachesThePanelAndThePreferencesWindow() throws {
+    // Issue #81, and the same named bug commit 5116326 shipped for the hook
+    // advisory: `d53c52a` computed the verdict, `e332687` wrote the sentence,
+    // every check was green, and NO view read either — so v0.2.1 detected a
+    // stale root binary and told nobody. A published value no view reads is a
+    // feature that does not exist.
+    //
+    // BOTH surfaces, and neither is decoration. The panel is where the user
+    // notices, and this is live state about the machine in front of them rather
+    // than the documentation issue #56 removed from that column. The Preferences
+    // window is where they can act on it: it is the surface that already carries
+    // the lid-closed command, and the advisory's own remedy is a command of the
+    // same kind.
+    //
+    // This reads the source because the behavioural route is closed: M1 design
+    // §5.4 forbids asserting on rendered AppKit text, so no check in this
+    // package can watch either surface draw a line.
+    //
+    // LIMIT, stated rather than hidden: this proves each view NAMES the property
+    // in CODE and hands it a path derived from the running bundle. It cannot
+    // prove either renders what it reads, and — unlike the lid-closed summary
+    // below — it cannot compare brace depth against an unconditional neighbour,
+    // because this line is conditional BY DESIGN. A machine with a current
+    // helper must see nothing.
+    let files = try appLayerSources()
+    #expect(files.count == expectedSourceCount,
+            "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
+
+    let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" },
+                             "the app layer no longer compiles a PanelView.swift")
+    let window = try #require(files.first { $0.lastPathComponent == "PreferencesView.swift" },
+                              "the app layer no longer compiles a PreferencesView.swift")
+
+    for surface in [panel, window] {
+        // CODE, never the raw file, for the reason `2247ae4` records on the
+        // lid-closed check below: a comment naming a property that had been
+        // deleted left the raw-file version of that guard green.
+        //
+        // WHITESPACE REMOVED, not merely collapsed, for the reason
+        // `thePreferencesWindowAsksTheRunningBundleWhereTheProbeIs` records:
+        // the call is long enough that both views wrap it over three lines, so
+        // a needle containing `(probeAt:` never matches the raw text and the
+        // guard would be red against a correct view.
+        let code = swiftCodeWithoutComments(try String(contentsOf: surface, encoding: .utf8))
+            .replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
+
+        #expect(code.contains("model.staleHelperAdvisory(probeAt:"), """
+            \(surface.lastPathComponent) never reads model.staleHelperAdvisory \
+            in code, so a stale root helper reaches the user nowhere on this \
+            surface. Render it, or delete the property and the checks that \
+            assert its text. A comment naming the property does not satisfy this.
+            """)
+
+        // The PATH, not only the property. Named bug: calling the advisory with
+        // `documentedProbePath`, which is right for a disk-image install and
+        // names a file a Homebrew user, a `swift build` tree and a copy on the
+        // Desktop do not have — so the command the advisory prints copies
+        // nothing. `Bundle.main` is read in the VIEW and the model stays pure,
+        // which is the split `versionLine(from: Bundle.main.infoDictionary)`
+        // already uses in both of these files.
+        #expect(code.contains("ServingModel.probePath(besideExecutable:Bundle.main.executableURL)"), """
+            \(surface.lastPathComponent) does not hand the advisory a probe path \
+            derived from the running bundle, so whatever command it prints is \
+            not the derivation this package holds under test.
+            """)
+    }
 }
 
 @Test func thePanelRendersTheLegalLineItComposes() throws {

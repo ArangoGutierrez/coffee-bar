@@ -48,6 +48,18 @@ public enum HookHealth {
     public static let requiredEvents = ["PermissionDenied", "PostToolUse",
                                         "PreToolUse", "SessionStart", "Stop"]
 
+    /// The events that take `"matcher": "*"`, and the only ones that may.
+    ///
+    /// `docs/QUICKSTART.md` "the other three take no matcher" is the contract:
+    /// the two tool events carry one and the other three carry none. Both
+    /// directions are enforced, because accepting a matcher on a lifecycle event
+    /// reports a file healthy that the tool runs nothing from — the same failure
+    /// as #55 pointing the other way.
+    ///
+    /// Cursor is absent deliberately. Its shape is `.flat` and has no matcher
+    /// level, so no Cursor event ever reaches this set.
+    private static let matcherEvents: Set<String> = ["PreToolUse", "PostToolUse"]
+
     /// The hook entries `tool` needs wired, or `nil` when there is no advisory.
     ///
     /// **Each list holds only events with a recorded payload for that tool.**
@@ -186,7 +198,7 @@ public enum HookHealth {
         }
 
         let nesting = nesting(of: tool)
-        let missing = required.filter { !isWired(hooks[$0], nesting: nesting) }.sorted()
+        let missing = required.filter { !isWired(hooks[$0], event: $0, nesting: nesting) }.sorted()
         return missing.isEmpty ? .wired : .missing(missing)
     }
 
@@ -244,14 +256,53 @@ public enum HookHealth {
     /// either shape for either tool would report a file healthy that the tool
     /// itself runs nothing from — `theNestedShapeIsNotAcceptedForCursor` and
     /// `theFlatShapeIsNotAcceptedForCodex` refuse both directions.
-    private static func isWired(_ entry: Any?, nesting: HookNesting) -> Bool {
+    private static func isWired(_ entry: Any?, event: String, nesting: HookNesting) -> Bool {
         guard let entries = entry as? [[String: Any]] else { return false }
 
         switch nesting {
         case .nested:
-            for matcher in entries {
-                guard let commands = matcher["hooks"] as? [[String: Any]] else { continue }
-                if commands.contains(where: { isOurCommand($0["command"]) }) { return true }
+            for group in entries {
+                guard let commands = group["hooks"] as? [[String: Any]] else { continue }
+                guard commands.contains(where: { isOurCommand($0["command"]) }) else { continue }
+
+                // The key this function ignored until #55. The old loop bound
+                // its variable to the name `matcher` and never read the key of
+                // that name, so a tool-event group with none passed exactly as
+                // a correct one did.
+                //
+                // **What the key IS, never merely whether it is there.**
+                // `JSONSerialization` represents a JSON `null` as `NSNull()`,
+                // which is a NON-NIL `Any`, so `!= nil` read `"matcher": null`
+                // and `"matcher": 42` as a matcher and reported the file
+                // `.wired`. That is #55's false-healthy arriving through a
+                // second door, in a release whose whole point is closing the
+                // first — and `null` is what a hand-edit leaves behind when
+                // somebody clears a value instead of deleting the line.
+                let matcher = group["matcher"]
+
+                // The two directions ask DIFFERENT questions, and collapsing
+                // them into one would trade a false-healthy for a false-healthy.
+                //
+                // A tool event needs a matcher the tool can USE, so this reads
+                // the type. It does NOT require the documented `"*"`: measured
+                // 2026-08-10, requiring that literal turns eight checks red
+                // against correct code, because `Tests/Fixtures/codex-settings/wired.json`
+                // is a captured real configuration matching
+                // `Bash|apply_patch|Edit|Write`. That file is wired.
+                let usableMatcher = matcher is String
+
+                // A lifecycle event must carry no matcher AT ALL, so this reads
+                // PRESENCE. Testing it for usability instead would let
+                // `"matcher": 42` on `SessionStart` mean "no matcher" and report
+                // the file healthy — and a matcher on a lifecycle event is what
+                // stops the entry firing, which is why both directions are
+                // enforced. `null` counts as absent here: it carries no value
+                // for the tool to match on.
+                let carriesMatcher = matcher != nil && !(matcher is NSNull)
+
+                let satisfied = matcherEvents.contains(event) ? usableMatcher
+                                                              : !carriesMatcher
+                if satisfied { return true }
             }
             return false
         case .flat:

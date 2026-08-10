@@ -103,6 +103,43 @@ codesign --verify --deep --strict --verbose=2 "${APP}" 2>&1 | tee "${WORK}/verif
 grep -q -- "--validated:.*coffee-bar-probe" "${WORK}/verify.txt" \
     || die "verification never validated coffee-bar-probe; the nested binary is not covered"
 
+# --- 2b. notarise and staple the APP, before it is staged -------------------
+#
+# A SECOND Apple round-trip, and it is not optional. Notarising only the image
+# leaves the app a user drags out of it without a ticket, so Gatekeeper has to
+# ask Apple on first launch and an offline machine cannot. v0.1.1 stapled the
+# app; v0.2.0 did not, and this restores it.
+#
+# The order matters more than the cost: the staged copy is taken from ${APP},
+# so the app has to carry its ticket BEFORE `hdiutil create` reads it.
+if [ "${NOTARIZE}" = "1" ]; then
+    APP_ZIP="${WORK}/CoffeeBar.zip"
+    # notarytool cannot take a bare .app. `ditto -c -k --keepParent` is the
+    # documented shape; `zip -r` loses symlinks and extended attributes.
+    ditto -c -k --keepParent "${APP}" "${APP_ZIP}" || die "cannot zip the app for notarisation"
+
+    echo "==> submitting the app for notarisation (minutes, not seconds)"
+    APP_SUBMIT_LOG="${WORK}/app-submit.txt"
+    xcrun notarytool submit "${APP_ZIP}" --keychain-profile "${KEYCHAIN_PROFILE}" --wait \
+        > "${APP_SUBMIT_LOG}" 2>&1 || { cat "${APP_SUBMIT_LOG}"; die "notarytool submit failed for the app"; }
+    cat "${APP_SUBMIT_LOG}"
+
+    APP_SUBMISSION_ID="$(awk '/^ *id: /{print $2; exit}' "${APP_SUBMIT_LOG}")"
+    [ -n "${APP_SUBMISSION_ID}" ] || die "cannot read the app submission id"
+
+    APP_INFO_LOG="${WORK}/app-info.txt"
+    xcrun notarytool info "${APP_SUBMISSION_ID}" --keychain-profile "${KEYCHAIN_PROFILE}" \
+        > "${APP_INFO_LOG}" 2>&1 || { cat "${APP_INFO_LOG}"; die "notarytool info failed for the app"; }
+    cat "${APP_INFO_LOG}"
+    grep -q "status: Accepted" "${APP_INFO_LOG}" \
+        || die "app notarisation is not Accepted for ${APP_SUBMISSION_ID}"
+
+    xcrun stapler staple "${APP}" || die "stapler staple failed for the app"
+    xcrun stapler validate "${APP}" || die "stapler validate failed for the app"
+else
+    echo "==> NOTARIZE=0: skipping app notarisation and stapling"
+fi
+
 # --- 3. stage the volume ----------------------------------------------------
 mkdir -p "${STAGE}"
 # `ditto`, not `cp -R`. Copying a SIGNED bundle has to preserve extended
@@ -172,7 +209,12 @@ if [ "${NOTARIZE}" = "1" ]; then
 
     xcrun stapler staple "${DMG}" || die "stapler staple failed"
     xcrun stapler validate "${DMG}" || die "stapler validate failed"
-    STAPLE_FACT='`xcrun stapler validate` passes'
+    # Both staples, named separately. `passes` alone reported only this one, so
+    # the row read identically for v0.1.1 (app stapled) and v0.2.0 (app NOT
+    # stapled) — the report could not tell the fixed state from the regressed
+    # one, which is the whole of #82. Step 2b staples the app; this step staples
+    # the image; the row now claims exactly what the run did.
+    STAPLE_FACT='`xcrun stapler validate` passes on the app and on the image'
 
     # Captured, not asserted. The Notarisation row states which source Gatekeeper
     # matched, and the only honest way to print that is to read it back from the

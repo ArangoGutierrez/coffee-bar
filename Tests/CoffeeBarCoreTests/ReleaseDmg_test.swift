@@ -20,6 +20,115 @@ private func releaseDmgScript() -> URL {
     repoRoot().appending(path: "scripts/release-dmg.sh")
 }
 
+/// Where an `sh` comment begins on `line`, or nil if the line carries none.
+///
+/// A `#` opens a comment only when it is UNQUOTED **and** starts a word — at the
+/// start of the line, or after whitespace or a command separator.
+///
+/// NEITHER half has a live case in `release-dmg.sh` today, and saying so is more
+/// useful than inventing one. Measured: the script's only `#` outside a comment
+/// is `VERSION="${VERSION#v}"` at `release-dmg.sh:43`, and BOTH rules protect it
+/// independently — it is inside double quotes AND it follows `N` rather than
+/// whitespace. Removing either rule alone leaves that line intact, which is why
+/// only `shellCodeWithoutCommentsCutsOnlyRealComments` pins them separately.
+///
+/// Both are here because the naive strip — cut at the first `#`, full stop — is
+/// the obvious "simplification" and it is measurably wrong: it cuts that line to
+/// `VERSION="${VERSION`, and `bash -n` then rejects the result with rc=2.
+///
+/// Scanning STOPS at the comment, so a comment's own text never reaches the quote
+/// tracker. That is what makes an apostrophe in prose harmless: a lone `'` in a
+/// sentence would otherwise flip the tracker into "quoted" and swallow the rest
+/// of the file silently.
+private func shellCommentStart(in line: Substring) -> Substring.Index? {
+    var inSingle = false, inDouble = false, escaped = false
+    var startsAWord = true
+    var i = line.startIndex
+    while i < line.endIndex {
+        let c = line[i]
+        if escaped {
+            escaped = false
+            startsAWord = false
+        } else if c == "\\" && !inSingle {
+            escaped = true
+            startsAWord = false
+        } else if c == "'" && !inDouble {
+            inSingle.toggle()
+            startsAWord = false
+        } else if c == "\"" && !inSingle {
+            inDouble.toggle()
+            startsAWord = false
+        } else if c == "#" && !inSingle && !inDouble && startsAWord {
+            return i
+        } else {
+            startsAWord = c == " " || c == "\t" || c == ";" || c == "|" || c == "&" || c == "("
+        }
+        i = line.index(after: i)
+    }
+    return nil
+}
+
+/// `source` with every `sh` comment cut and everything else left byte-identical.
+///
+/// The shebang survives: `#!/bin/bash` on the first line is an interpreter
+/// directive rather than prose, and a guard may legitimately assert it. Only the
+/// first line is exempt, so a `#!` written lower down is still a comment.
+///
+/// Only the comment is cut, never the whole line, so code sharing a line with a
+/// comment is kept and every line holds its position — failure messages still
+/// quote real line numbers and `range(of:)` offsets keep the script's order.
+///
+/// LIMITS, stated rather than hidden. Neither is reachable in `release-dmg.sh`
+/// today, and both are measured rather than assumed:
+///
+/// - **Heredoc bodies are not recognised.** A body line carrying a word-starting
+///   `#` would be cut as if it were a comment. Measured: the script's three
+///   `<<REPORT` bodies contain no `#` at all.
+/// - **Quote state resets at each newline.** A quoted string spanning a newline
+///   would be mis-parsed. Measured: the script has none, and `bash -n` parses the
+///   stripped output clean.
+///
+/// `strippingCommentsLeavesTheScriptParseable` is what keeps those two honest. It
+/// is not decoration: mutating this function to the naive strip makes it fail
+/// with `bash` rc=2, measured.
+private func shellCodeWithoutComments(_ source: String) -> String {
+    source.split(separator: "\n", omittingEmptySubsequences: false)
+        .enumerated()
+        .map { index, line -> String in
+            if index == 0 && line.hasPrefix("#!") { return String(line) }
+            guard let cut = shellCommentStart(in: line) else { return String(line) }
+            return String(line[line.startIndex..<cut])
+        }
+        .joined(separator: "\n")
+}
+
+/// `scripts/release-dmg.sh` with its comments cut, so an assertion reads what the
+/// script DOES rather than what its prose says about itself.
+///
+/// Three named bugs, every one of them measured against a guard that was GREEN at
+/// the time. This script explains itself in its comments and names the very
+/// commands the guards anchor on:
+///
+/// - `ditto -c -k --keepParent` is named at `release-dmg.sh:117` and run at
+///   `:119`. Replacing the command with the `zip -r` its own comment warns
+///   against left the guard GREEN — it was matching the prose.
+/// - `stapler staple "${APP}"` is the ORDER anchor, and order is the whole
+///   correctness argument: the staged copy is taken from `${APP}`, so the app
+///   must carry its ticket before `hdiutil create` reads it. Moving the staple
+///   after `hdiutil convert` and leaving a whole-line comment naming it also
+///   stayed GREEN, because `range(of:)` found the comment first.
+/// - The same staple defeat, with the naming comment APPENDED to an existing
+///   line instead of standing on its own, defeated the first repair too: that
+///   strip was line-oriented, so a TRAILING comment was invisible to it. This
+///   one cuts from the `#` rather than dropping the line, which is why a
+///   trailing comment can no longer smuggle an anchor in.
+///
+/// All three are the UNSAFE direction — a shipped image carrying an unstapled
+/// app, which is exactly the v0.2.0 regression #82 exists to fix.
+private func releaseDmgScriptWithoutComments() throws -> String {
+    shellCodeWithoutComments(try String(contentsOf: releaseDmgScript(), encoding: .utf8))
+}
+
 /// Runs a command and returns its exit code and combined output.
 ///
 /// Reads the pipe BEFORE waiting. Waiting first deadlocks as soon as the output
@@ -265,4 +374,130 @@ private func withProducedImage(_ body: (URL, URL, String) throws -> Void) throws
         #expect(out.contains("| Minimum macOS | 14.0 |"),
                 "the Minimum macOS row does not read 14.0, the floor Package.swift declares:\n\(out)")
     }
+}
+
+/// The app inside the image must carry its own ticket.
+///
+/// v0.1.1 shipped one and v0.2.0 did not — measured by mounting both images on
+/// 2026-08-09. Stapling exists so Gatekeeper can verify WITHOUT a network round
+/// trip, so an app copied out of an unstapled image has nothing local to check
+/// against on a first launch offline.
+///
+/// Text-read, because notarising needs an Apple ID and the network. The
+/// executed proof is the release itself, whose acceptance runs an offline
+/// launch.
+@Test func theAppIsNotarisedAndStapledBeforeTheImageIsBuilt() throws {
+    // Comments come out FIRST, and every assertion below reads the stripped
+    // text. This script names `ditto -c -k --keepParent` and `hdiutil create` in
+    // its own prose, so a raw `contains` matched the explanation instead of the
+    // command: both a deleted `ditto` and a staple moved after the image passed
+    // GREEN. `releaseDmgScriptWithoutComments` carries the measurements.
+    //
+    // One read, one strip. Stripping for one assertion and not another in this
+    // function would leave exactly the hole this closes.
+    let s = try releaseDmgScriptWithoutComments()
+
+    // Named bug: the app is submitted but never stapled, so the ticket lives
+    // only on Apple's servers and the offline case is unchanged.
+    #expect(s.contains("stapler staple \"${APP}\""),
+            "the script never staples the app bundle itself")
+
+    // Named bug: stapling the app AFTER the image is assembled, which staples
+    // a copy nobody ships. The staged copy is taken from ${APP}, so the order
+    // is the whole correctness argument.
+    //
+    // The image anchor stays `hdiutil create -volname`, the COMMAND rather than
+    // the bare phrase, and that is deliberate belt-and-braces: the strip already
+    // removes the two comments naming `hdiutil create`, but the flag pins the
+    // anchor to the invocation even if a future non-comment line mentions it.
+    let stapleApp = try #require(s.range(of: "stapler staple \"${APP}\""))
+    let createImage = try #require(s.range(of: "hdiutil create -volname"))
+    #expect(stapleApp.lowerBound < createImage.lowerBound,
+            "the app is stapled after the image is assembled, so the image carries the unstapled copy")
+
+    // Named bug: trusting `notarytool submit`'s exit code for the app the same
+    // way the image step must not. Exit 0 does not mean Accepted.
+    #expect(s.contains("ditto -c -k --keepParent"),
+            "the app is not zipped for submission; notarytool cannot take a bare .app")
+
+    // Named bug, and it was measured: the Staple row read '`xcrun stapler
+    // validate` passes' and was set in the image step alone, so it printed the
+    // same text whether or not the app had been stapled. Reverting that string
+    // left the WHOLE suite green — the fix that made the report honest was
+    // itself unguarded. This is the assertion that would have caught it.
+    //
+    // Read from the stripped text like everything else here, so the comment
+    // above `STAPLE_FACT` in the script cannot satisfy it.
+    #expect(s.contains("on the app and on the image"),
+            "the Staple row does not name both staples, so it reads the same for a run that stapled the app and one that did not")
+}
+
+/// Pins `shellCodeWithoutComments`, because the guard above is only as honest as
+/// this function is.
+///
+/// The case that matters most is `trailing comment`. The first version of this
+/// strip was line-oriented — it dropped a line whose first non-whitespace
+/// character was `#` — and a comment APPENDED to an existing line was therefore
+/// invisible to it. That is not hypothetical: appending
+/// `# xcrun stapler staple "${APP}" runs later` to the `fi` at
+/// `release-dmg.sh:74`, with the staple moved after `hdiutil convert`, passed
+/// GREEN while the image carried an unstapled app. Every other case here exists
+/// to stop the repair over-reaching in the other direction and cutting code.
+@Test func shellCodeWithoutCommentsCutsOnlyRealComments() {
+    let cases: [(name: String, source: String, expected: String)] = [
+        ("shebang survives", "#!/bin/bash\necho hi", "#!/bin/bash\necho hi"),
+        ("a later shebang is prose", "echo a\n#!/bin/sh", "echo a\n"),
+        ("whole-line comment", "echo a\n# why\necho b", "echo a\n\necho b"),
+        ("indented comment", "  # why", "  "),
+        ("trailing comment", "fi  # why", "fi  "),
+        ("parameter expansion is not a comment", "V=\"${V#v}\"", "V=\"${V#v}\""),
+        ("hash inside double quotes", "echo \"a # b\"", "echo \"a # b\""),
+        ("hash inside single quotes", "echo 'a # b'", "echo 'a # b'"),
+        ("hash mid-word is not a comment", "echo a#b", "echo a#b"),
+        ("an apostrophe in prose does not leak", "# it's fine\necho \"x\"", "\necho \"x\""),
+        ("comment after a separator", "echo a; # why", "echo a; "),
+        ("escaped hash is not a comment", "echo \\#1", "echo \\#1"),
+    ]
+
+    for testCase in cases {
+        #expect(shellCodeWithoutComments(testCase.source) == testCase.expected,
+                """
+                \(testCase.name): got \
+                \(shellCodeWithoutComments(testCase.source).debugDescription), \
+                want \(testCase.expected.debugDescription)
+                """)
+    }
+}
+
+/// Stripping the comments out of the real script must leave a script.
+///
+/// The table above pins the cases someone thought of. This one catches the cases
+/// nobody did, against the actual file: cutting a comment can only ever remove
+/// prose, so whatever survives has to still parse. A strip that swallowed a
+/// quote, truncated inside a string, or ate a line continuation would leave text
+/// `bash -n` rejects, and the table would not necessarily show it.
+///
+/// This is also what makes the LIMITS documented on `shellCodeWithoutComments`
+/// true rather than merely claimed: a heredoc body cut in half, or a quoted
+/// string spanning a newline, both fail here.
+@Test func strippingCommentsLeavesTheScriptParseable() throws {
+    let stripped = try releaseDmgScriptWithoutComments()
+
+    let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appending(path: "cb-stripped-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tmp) }
+
+    let script = tmp.appending(path: "stripped.sh")
+    try stripped.write(to: script, atomically: true, encoding: .utf8)
+
+    let r = try run(["bash", "-n", script.path])
+    #expect(r.rc == 0, "the stripped script does not parse, so the strip cut code:\n\(r.out)")
+
+    // Anti-vacuity. `bash -n` on an empty file also exits 0, so prove the text
+    // that reached it is the script rather than the wreckage of one.
+    #expect(stripped.contains("hdiutil create -volname"),
+            "the stripped text lost the image command, so the check above passed on wreckage")
+    #expect(stripped.hasPrefix("#!/bin/bash"),
+            "the stripped text lost the shebang")
 }

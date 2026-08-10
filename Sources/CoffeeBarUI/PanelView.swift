@@ -236,6 +236,39 @@ public struct PanelView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            // A THIRD advisory, and issue #81 is why it is on this surface at
+            // all. Issue #56 took the lid-closed EXPLANATION out of this panel,
+            // and that stands: 80 words of documentation do not belong in a
+            // 260pt column. This is not that. It is a fault on the machine in
+            // front of the user, discovered by a read this app performs on every
+            // refresh — live state, which is exactly what this panel is for, and
+            // the user cannot act on what they are never shown.
+            //
+            // Rendered verbatim from the model with no text built here, for the
+            // reason every other line in this file gives: M1 design §5.4 forbids
+            // asserting on rendered AppKit text, so a sentence composed here
+            // would be a sentence no check reads.
+            //
+            // `Bundle.main.executableURL` is read HERE and the model stays pure,
+            // the same split `versionLine(from: Bundle.main.infoDictionary)`
+            // uses below. The probe is this app's neighbour in `Contents/MacOS`,
+            // so the running bundle is the only thing that knows the path — a
+            // literal would be right for a disk-image install and wrong for
+            // Homebrew, for a `swift build` tree, and for a copy on the Desktop,
+            // and the command in this sentence is meant to be pasted into a root
+            // shell.
+            //
+            // Silent on a machine whose helper is current or was never armed.
+            if let line = model.staleHelperAdvisory(
+                probeAt: ServingModel.probePath(
+                    besideExecutable: Bundle.main.executableURL)) {
+                Text(line)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+
             // What is holding the machine awake, right under the line that says
             // whether anything is. Design §14: the attention list below shows
             // the two BLOCKED states, so without this the session actually
