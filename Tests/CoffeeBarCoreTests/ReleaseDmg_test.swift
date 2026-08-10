@@ -266,3 +266,43 @@ private func withProducedImage(_ body: (URL, URL, String) throws -> Void) throws
                 "the Minimum macOS row does not read 14.0, the floor Package.swift declares:\n\(out)")
     }
 }
+
+/// The app inside the image must carry its own ticket.
+///
+/// v0.1.1 shipped one and v0.2.0 did not — measured by mounting both images on
+/// 2026-08-09. Stapling exists so Gatekeeper can verify WITHOUT a network round
+/// trip, so an app copied out of an unstapled image has nothing local to check
+/// against on a first launch offline.
+///
+/// Text-read, because notarising needs an Apple ID and the network. The
+/// executed proof is the release itself, whose acceptance runs an offline
+/// launch.
+@Test func theAppIsNotarisedAndStapledBeforeTheImageIsBuilt() throws {
+    let s = try String(contentsOf: releaseDmgScript(), encoding: .utf8)
+
+    // Named bug: the app is submitted but never stapled, so the ticket lives
+    // only on Apple's servers and the offline case is unchanged.
+    #expect(s.contains("stapler staple \"${APP}\""),
+            "the script never staples the app bundle itself")
+
+    // Named bug: stapling the app AFTER the image is assembled, which staples
+    // a copy nobody ships. The staged copy is taken from ${APP}, so the order
+    // is the whole correctness argument.
+    //
+    // The image anchor is `hdiutil create -volname`, the COMMAND, and not the
+    // bare phrase. `range(of:)` finds the FIRST occurrence, and two comments in
+    // this script name `hdiutil create` in prose — including the one inside the
+    // stapling block itself, which explains why the order matters. Anchoring on
+    // the bare phrase compares the staple against that comment rather than
+    // against the command, and it lands EARLIER than the block it documents, so
+    // the assertion could not pass however correct the script was.
+    let stapleApp = try #require(s.range(of: "stapler staple \"${APP}\""))
+    let createImage = try #require(s.range(of: "hdiutil create -volname"))
+    #expect(stapleApp.lowerBound < createImage.lowerBound,
+            "the app is stapled after the image is assembled, so the image carries the unstapled copy")
+
+    // Named bug: trusting `notarytool submit`'s exit code for the app the same
+    // way the image step must not. Exit 0 does not mean Accepted.
+    #expect(s.contains("ditto -c -k --keepParent"),
+            "the app is not zipped for submission; notarytool cannot take a bare .app")
+}
