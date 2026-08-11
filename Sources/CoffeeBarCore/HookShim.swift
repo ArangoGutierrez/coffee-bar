@@ -52,6 +52,70 @@ public enum HookShim {
     /// ever and took the whole run with it.
     public static let totalTimeout: TimeInterval = 1.0
 
+    /// The environment variable that may change the budget above, in seconds.
+    ///
+    /// **What it can and cannot do, so the next reader need not re-derive it.**
+    /// It buys TIME inside a process the invoking user already started with
+    /// their own privileges, and nothing else. It cannot widen privilege, name a
+    /// different destination — `--socket=` is the only thing that does that —
+    /// change what is sent, or change what is said about it: the diagnostic
+    /// still carries a status and never a payload. The one abuse worth bounding
+    /// is the opposite of a leak, which is why `maximumTotalTimeout` exists: the
+    /// shim runs on EVERY tool call, so a large value left in a shell profile
+    /// would hold the agent up on all of them.
+    ///
+    /// Why it exists: `CoffeeBarHookShim_test.swift` runs the real binary
+    /// against a real listener under a suite that oversubscribes the CPU, where
+    /// 1 s is not always enough for a refusal to come back — issue #90. Moving
+    /// the constant instead would have changed production to suit a test.
+    ///
+    /// `COFFEE_BAR_` is the prefix `COFFEE_BAR_VERSION` already established.
+    public static let totalTimeoutVariable = "COFFEE_BAR_SHIM_TIMEOUT_SECONDS"
+
+    /// The largest budget `totalTimeoutVariable` may buy.
+    ///
+    /// Five seconds: half of `UnixSocketIngestListener.defaultIdleTimeout`,
+    /// which is 10 s. `totalTimeout` above sets out why the shim's give-up point
+    /// has to sit BELOW the listener's, and that ordering has to survive the
+    /// largest value a shell can ask for. Without a ceiling one stray variable
+    /// would put the shim back to waiting out a wedged listener on every tool
+    /// call, which is a worse fault than the flake this variable fixes.
+    public static let maximumTotalTimeout: TimeInterval = 5.0
+
+    /// The whole-run budget for a shim started with `environment`.
+    ///
+    /// Takes the environment rather than reading it: `CoffeeBarCore` opens
+    /// nothing, and a resolver handed its input is one a table-driven test can
+    /// cover without touching the process it runs in.
+    ///
+    /// Every reason to distrust the value ends in the same place, the shipped
+    /// `totalTimeout`, and none of them says anything. The shim runs on every
+    /// tool call, and a hook that complained about the user's shell would be
+    /// worse than useless.
+    ///
+    /// **The bounds are stated as what a usable value IS, never as what a bad
+    /// one is, and that is load-bearing.** `Double` parses `"nan"` and `"inf"`
+    /// happily, and no comparison with NaN is true. Written the other way round
+    /// — `if seconds <= 0 || seconds > maximumTotalTimeout { return totalTimeout }`
+    /// — both of those tests are false for NaN, so NaN is not rejected: it
+    /// reaches `Date.addingTimeInterval` and the deadline stops bounding
+    /// anything. Written as a `guard` that must be satisfied, the same two
+    /// comparisons refuse it, because false is the answer either way round.
+    /// Measured, not reasoned about, and `"nan"` is a row in the table.
+    ///
+    /// That is also why there is no `isFinite` here. It would never change an
+    /// answer — `inf > 0` is true but `inf <= maximumTotalTimeout` is not — and
+    /// a condition that cannot change an answer reads like a guard without being
+    /// one.
+    public static func resolvedTotalTimeout(from environment: [String: String]) -> TimeInterval {
+        guard let spelling = environment[totalTimeoutVariable],
+              let seconds = Double(spelling.trimmingCharacters(in: .whitespacesAndNewlines)),
+              seconds > 0,
+              seconds <= maximumTotalTimeout
+        else { return totalTimeout }
+        return seconds
+    }
+
     /// Where the ingest socket sits under `home`, per design §4.
     ///
     /// Takes the home directory rather than asking for it: `CoffeeBarCore` is

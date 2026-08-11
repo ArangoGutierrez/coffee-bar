@@ -626,13 +626,35 @@ private func waitUntilNothingAnswers(at path: String) {
 
     // ASSERTION C — bullet 2's second half. The leaked socket is not merely
     // bound: it accepts a real hook post and drops it, so an external prober
-    // calls ingest healthy while every event is lost. 52 is "empty reply from
-    // server", which is what `newConnectionHandler`'s `guard let self else
-    // { connection.cancel() }` produces once the wrapper has gone.
+    // calls ingest healthy while every event is lost. The drop is what
+    // `newConnectionHandler`'s `guard let self else { connection.cancel() }`
+    // produces once the wrapper has gone.
+    //
+    // The subject is "accepted, THEN dropped" — not one particular curl code.
+    // Two codes describe that one behaviour, and which arrives depends on where
+    // the cancel lands relative to curl's write, which is timing- and therefore
+    // load-dependent:
+    //
+    //   52 = empty reply from server     (dropped after the request went out)
+    //   55 = failed sending network data (dropped while it was still going out)
+    //
+    // 52 is what this measured locally and all it used to accept; CI returned
+    // 55 under load and reddened on a behaviour that had not changed.
+    //
+    // The set stays EXACTLY {52, 55}, because the discrimination is the whole
+    // point of the assertion:
+    //   0 = the post was DELIVERED, so the socket is not leaking events at all
+    //       and assertion B proved nothing — must still fail;
+    //   7 = connection refused, so nothing was bound — must still fail. That is
+    //       the case ASSERTION D controls for, and D reads
+    //       `RawClient(path:) == nil` rather than a curl code, so widening here
+    //       does not collide with it.
+    // Measured against all four codes: {52, 55} pass, 0 and 7 fail.
+    let acceptedThenDropped: Set<Int32> = [52, 55]
     let exit = try post(#"{"hook_event_name":"PreToolUse","session_id":"s1"}"#,
                         to: sandbox.path)
-    #expect(exit == 52,
-            "a post to the leaked socket returned \(exit), not the measured 52 (accepted, then dropped)")
+    #expect(acceptedThenDropped.contains(exit),
+            "a post to the leaked socket returned \(exit), not one of the measured \(acceptedThenDropped.sorted()) (accepted, then dropped)")
 
     // ASSERTION D — bullet 3, and the control. Without it, a machine where
     // nothing at that path ever refuses would pass A and B for the wrong

@@ -181,6 +181,30 @@ private func makeFixtureApp(at root: URL) throws {
     """.write(to: root.appending(path: "Contents/Info.plist"), atomically: true, encoding: .utf8)
 }
 
+/// Serialises the `hdiutil` cycle in `withProducedImage`.
+///
+/// Named bug: CI failed with `hdiutil: create failed - Resource busy`. Every
+/// other issue in that run cascaded from it — no image was written, so `attach`
+/// failed, so the mount was empty, so `Applications` and the layout assertions
+/// had nothing to read.
+///
+/// This file declares no `@Suite`, so its tests run concurrently, and THREE of
+/// them call `withProducedImage`. Measured on this branch immediately before
+/// this lock was added, by timestamping the region: all three of 3 pairs
+/// overlapped, and all three were inside the cycle simultaneously for 30.95 s
+/// of a 38.69 s window. They have been racing since the file was written and
+/// mostly winning; CI load is what finally tipped one over.
+///
+/// A lock rather than `@Suite(.serialized)` because the contended resource is
+/// the create/attach/detach cycle rather than the test functions. It states the
+/// invariant — at most one cycle in flight — where the cycle actually is, and
+/// leaves this file's five text-only guards parallel. The isolation is the same
+/// either way, and no wider: exactly like `.serialized` (the caveat is recorded
+/// at `ProbeRun_test.swift:29`) this orders THIS file's cycles and nothing
+/// else. Measured: no other test in the package shells out to `hdiutil`. One
+/// added elsewhere would have to take this same lock.
+private let imageCycleLock = NSLock()
+
 /// Builds a DMG from a fixture and hands the caller the mounted volume, plus
 /// everything the script printed.
 ///
@@ -188,6 +212,12 @@ private func makeFixtureApp(at root: URL) throws {
 /// PRODUCT of the run, not text in a file: whether it claims a step that this
 /// run skipped can only be read off the run itself.
 private func withProducedImage(_ body: (URL, URL, String) throws -> Void) throws {
+    // Registered FIRST, so it runs LAST: `defer` is LIFO, which puts the unlock
+    // after the detach registered below. The whole cycle — produce, attach,
+    // body, detach — is inside the critical section, not just the create.
+    imageCycleLock.lock()
+    defer { imageCycleLock.unlock() }
+
     let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
         .appending(path: "cb-releasedmg-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
