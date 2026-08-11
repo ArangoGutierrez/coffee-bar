@@ -49,11 +49,26 @@ private let helperSource = #"""
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
+#include <limits.h>
 #include <sys/resource.h>
 
+// Publishes `text` at `path` atomically, so a concurrent reader observes either
+// the previous report or this one and never an empty file.
+//
+// Writing straight to `path` cannot do this: `fopen(path, "w")` truncates the
+// target to zero bytes and only then writes, which leaves a window on every
+// 50 ms cycle in which the file is empty. `rename(2)` is atomic within a
+// filesystem, and the temp path is a sibling of the target, so the reader's
+// next open finds one complete report or the other.
 static void report(const char *path, const char *text) {
-    FILE *f = fopen(path, "w");
-    if (f) { fprintf(f, "%s", text); fclose(f); }
+    char tmp[PATH_MAX];
+    int n = snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    if (n < 0 || (size_t)n >= sizeof(tmp)) return;
+    FILE *f = fopen(tmp, "w");
+    if (!f) return;
+    fprintf(f, "%s", text);
+    if (fclose(f) != 0) { unlink(tmp); return; }
+    if (rename(tmp, path) != 0) unlink(tmp);
 }
 
 int main(int argc, char **argv) {
