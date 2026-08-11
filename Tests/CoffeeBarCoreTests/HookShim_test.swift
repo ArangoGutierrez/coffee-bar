@@ -221,6 +221,121 @@ import Foundation
             "the connect bound is not inside the total bound; the total does not bound the run")
 }
 
+// MARK: - The one thing that may change that bound
+
+/// One row of the resolver table: what a shell said, and what the shim must
+/// then give itself.
+///
+/// `because` is carried into the failure message, so a red row names the CASE
+/// and not only the two numbers that disagreed.
+private struct ShimBudgetCase: Sendable, CustomStringConvertible {
+    /// What the variable is set to. `nil` is the variable not being set at all,
+    /// which is how the shim runs everywhere except two tests.
+    let spelling: String?
+    let expected: TimeInterval
+    let because: String
+
+    var environment: [String: String] {
+        spelling.map { [HookShim.totalTimeoutVariable: $0] } ?? [:]
+    }
+
+    var description: String {
+        "\(spelling.map { "\"\($0)\"" } ?? "unset") — \(because)"
+    }
+}
+
+/// Every spelling that must leave the shipped budget exactly where it is.
+private let refusedShimBudgets: [ShimBudgetCase] = [
+    .init(spelling: nil, expected: 1.0,
+          because: "not set, which is how every shim outside this suite runs"),
+    .init(spelling: "", expected: 1.0,
+          because: "exported empty, which is what `export VAR=` leaves behind"),
+    .init(spelling: "   ", expected: 1.0, because: "whitespace only"),
+    .init(spelling: "abc", expected: 1.0, because: "not a number at all"),
+    .init(spelling: "5s", expected: 1.0,
+          because: "a unit glued to a number; this variable is seconds already"),
+    .init(spelling: "-1", expected: 1.0,
+          because: "negative, which would put the deadline before the first syscall"),
+    .init(spelling: "-0.5", expected: 1.0, because: "negative and fractional"),
+    .init(spelling: "0", expected: 1.0,
+          because: "zero, which posts nothing at all: every budget below is spent"),
+    .init(spelling: "0.0", expected: 1.0, because: "zero, spelled with a fraction"),
+    .init(spelling: "5.001", expected: 1.0, because: "a thousandth over the 5 s ceiling"),
+    .init(spelling: "600", expected: 1.0,
+          because: "ten minutes, on every tool call, from one stray line in a shell profile"),
+    .init(spelling: "inf", expected: 1.0, because: "infinite, which `Double` parses happily"),
+    .init(spelling: "1e400", expected: 1.0, because: "finite on the page, infinite once parsed"),
+    .init(spelling: "nan", expected: 1.0,
+          because: "NaN, which no comparison accepts OR rejects. Bounds written as a refusal "
+                 + "— `if seconds <= 0 || seconds > ceiling` — are both false here, so NaN "
+                 + "survives them and the deadline stops bounding anything. This row is what "
+                 + "keeps the bounds stated as what a usable value IS"),
+]
+
+/// Every spelling that must be taken as given.
+private let honouredShimBudgets: [ShimBudgetCase] = [
+    .init(spelling: "5", expected: 5.0,
+          because: "exactly the ceiling, which is a permitted value and not an error"),
+    .init(spelling: "5.0", expected: 5.0, because: "the ceiling, spelled with a fraction"),
+    .init(spelling: "2.5", expected: 2.5, because: "in range"),
+    .init(spelling: " 2.5 ", expected: 2.5,
+          because: "in range, with the padding a shell assignment leaves on it"),
+    .init(spelling: "0.05", expected: 0.05,
+          because: "the 50 ms the handoff budgets for the normal path; a SHORTER budget can "
+                 + "only make the shim give up sooner, which is always safe"),
+    .init(spelling: "1", expected: 1.0, because: "the shipped default, said out loud"),
+]
+
+@Test(arguments: refusedShimBudgets)
+private func aBudgetTheShimCannotUseLeavesTheShippedOneAlone(_ row: ShimBudgetCase) {
+    // 1.0 is a literal here deliberately.
+    // `theRunIsBoundedWellUnderWhatAHookCanAfford` pins that the shipped
+    // constant IS 1.0, and reading the expectation out of `HookShim.totalTimeout`
+    // instead would restate the implementation: it would hold even if the
+    // resolver answered the wrong thing for every row in this table.
+    let resolved = HookShim.resolvedTotalTimeout(from: row.environment)
+    #expect(resolved == 1.0,
+            Comment(rawValue: "\(row): the shim gave itself \(resolved) s "
+                    + "instead of falling back to the shipped 1.0 s"))
+}
+
+@Test(arguments: honouredShimBudgets)
+private func aBudgetInsideTheCeilingIsTakenAsGiven(_ row: ShimBudgetCase) {
+    let resolved = HookShim.resolvedTotalTimeout(from: row.environment)
+    #expect(resolved == row.expected,
+            Comment(rawValue: "\(row): the shim gave itself \(resolved) s "
+                    + "instead of the \(row.expected) s it was told"))
+}
+
+@Test func theBudgetCeilingIsFiveSecondsAndTheShippedDefaultIsInsideIt() {
+    // Five seconds is derived, not picked. `UnixSocketIngestListener.defaultIdleTimeout`
+    // is 10 s, and the whole reason `totalTimeout` sits where it does is that the
+    // shim must give up BEFORE the listener would — otherwise a wedged listener
+    // holds the agent for its own timeout on every tool call. That ordering has
+    // to survive the largest value a shell can ask for, so the ceiling is half
+    // the listener's timeout and the shim keeps 5 s of margin on it.
+    //
+    // `CoffeeBarCoreTests` depends on `CoffeeBarCore` alone and cannot import the
+    // listener to state the comparison here;
+    // `aListenerThatNeverAnswersDoesNotHoldTheAgent` in `CoffeeBarIngestTests`
+    // asserts it against the real constant.
+    #expect(HookShim.maximumTotalTimeout == 5.0)
+    #expect(HookShim.totalTimeout < HookShim.maximumTotalTimeout,
+            "the shipped default is not inside the ceiling, so the ceiling refuses the default")
+}
+
+@Test func theBudgetVariableKeepsTheNameItWasPublishedUnder() {
+    // A literal, for the reason `eachToolAnswersToTheNameTheDocumentedCommandUses`
+    // gives about `--tool=` values: this is what a user types, and `--help`
+    // prints it. Renaming the constant would leave every shell that already sets
+    // it silently ignored, with the shim reporting nothing about it — silence is
+    // the contract everywhere else in this binary and it works against us here.
+    //
+    // `COFFEE_BAR_` matches the prefix `COFFEE_BAR_VERSION` established in
+    // `scripts/build-app.sh` and `SECURITY.md`.
+    #expect(HookShim.totalTimeoutVariable == "COFFEE_BAR_SHIM_TIMEOUT_SECONDS")
+}
+
 // MARK: - The shim's product name and the health check's marker are one name
 
 @Test func theShimProductNameMatchesTheMarkerTheHealthCheckLooksFor() throws {

@@ -154,9 +154,44 @@ private struct ShimRun {
 /// wedged suite with no failure reported into a named red test.
 private let shimWatchdogSeconds: TimeInterval = 10
 
+/// The whole-run budget the two refusal tests buy for the shim, in seconds.
+///
+/// Issue #90. Both of those tests assert that a REFUSAL was reported, and the
+/// shim reports a status only when the answer arrives inside its budget: the
+/// shipped 1 s is spent by process start-up plus a round trip under this suite's
+/// CPU oversubscription, and the run is then abandoned in silence. That silence
+/// is deliberate production behaviour — "a lost answer is NOT a failure to
+/// report" — so the fix is to give the answer time to arrive, never to soften
+/// what is asserted.
+///
+/// 5 s is `HookShim.maximumTotalTimeout`, the most the variable can buy, and it
+/// is half `shimWatchdogSeconds`: a shim that ignores its own budget is still
+/// killed and reported as unbounded rather than wedging the suite.
+private let shimRefusalBudget: TimeInterval = 5
+
+/// The environment the shim child is started with.
+///
+/// BUILT, never inherited as it stands. `runShim` used to leave
+/// `process.environment` nil, which hands the child whatever the developer's
+/// shell holds — and now that one of those variables decides the shim's budget,
+/// an exported `COFFEE_BAR_SHIM_TIMEOUT_SECONDS` would quietly change what every
+/// test in this file measures. `nil` here means the variable is REMOVED, so the
+/// default path is the default path wherever this runs.
+private func shimEnvironment(totalTimeout: TimeInterval?,
+                             inheriting base: [String: String]
+                                 = ProcessInfo.processInfo.environment) -> [String: String] {
+    var environment = base
+    environment[HookShim.totalTimeoutVariable] = totalTimeout.map { String($0) }
+    return environment
+}
+
 /// Runs the built shim with `stdin` on its standard input, and never lets it
 /// outlive `shimWatchdogSeconds`.
-private func runShim(_ arguments: [String], stdin: Data) throws -> ShimRun {
+///
+/// `totalTimeout` is the budget the child gives itself; `nil` leaves it on the
+/// shipped default, which is what every test here but the two refusals wants.
+private func runShim(_ arguments: [String], stdin: Data,
+                     totalTimeout: TimeInterval? = nil) throws -> ShimRun {
     let binary = try shimBinaryPath()
 
     let inputFile = FileManager.default.temporaryDirectory
@@ -187,6 +222,7 @@ private func runShim(_ arguments: [String], stdin: Data) throws -> ShimRun {
     process.standardInput = input
     process.standardOutput = outPipe
     process.standardError = errPipe
+    process.environment = shimEnvironment(totalTimeout: totalTimeout)
 
     let started = Date()
     try process.run()
@@ -526,7 +562,11 @@ func eachToolsOwnRecordedPayloadArrivesUnderItsOwnOrigin(_ tool: AgentTool) thro
 
     let needle = "NEEDLE-THAT-MUST-NEVER-BE-PRINTED"
     let body = Data(#"{"hook_event_name":"Stop","session_id":"\#(needle)"}"#.utf8)
-    let run = try runShim(["--tool=cursor", "--socket=\(sandbox.path)"], stdin: body)
+    // `shimRefusalBudget`, not the shipped 1 s: what is asserted below is that a
+    // refusal is REPORTED, and the shim can only report a status it received.
+    // See `shimRefusalBudget` and issue #90.
+    let run = try runShim(["--tool=cursor", "--socket=\(sandbox.path)"], stdin: body,
+                          totalTimeout: shimRefusalBudget)
     expectHookModeContract(run)
 
     #expect(run.errorText.contains("400"),
@@ -614,6 +654,43 @@ func eachToolsOwnRecordedPayloadArrivesUnderItsOwnOrigin(_ tool: AgentTool) thro
                     + "\(HookShim.totalTimeout) s bound"))
     #expect(HookShim.totalTimeout < UnixSocketIngestListener.defaultIdleTimeout,
             "the shim waits at least as long as the listener would; its bound buys nothing")
+
+    // The same ordering, at the LARGEST budget a shell can ask for. The shipped
+    // default is no longer the only value this process can run on, so pinning
+    // only the default would leave the property this test exists for unguarded
+    // for every other value.
+    #expect(HookShim.maximumTotalTimeout < UnixSocketIngestListener.defaultIdleTimeout,
+            Comment(rawValue: "an environment variable can make the shim wait at least as long "
+                    + "as the listener would, which is the hang this bound exists to prevent"))
+}
+
+@Test func theBudgetThisSuiteBuysIsOneTheShimTakesAndTheWatchdogStillBounds() {
+    // The silent failure this catches: `shimRefusalBudget` drifts above
+    // `HookShim.maximumTotalTimeout`, or the variable is renamed, and the child
+    // falls back to the shipped 1 s with nothing said anywhere. The two refusal
+    // tests would go straight back to being load-sensitive, and nothing in the
+    // output would point at why.
+    //
+    // Resolved from the very dictionary `runShim` hands the child, so a typo in
+    // the spelling is caught here rather than as a flake three months later.
+    let resolved = HookShim.resolvedTotalTimeout(
+        from: shimEnvironment(totalTimeout: shimRefusalBudget))
+    #expect(resolved == shimRefusalBudget,
+            Comment(rawValue: "the child would run on \(resolved) s, not the "
+                    + "\(shimRefusalBudget) s this suite asks for"))
+
+    #expect(shimRefusalBudget < shimWatchdogSeconds,
+            Comment(rawValue: "the shim may now outlive the watchdog, which would kill a "
+                    + "HEALTHY run and report it as unbounded"))
+
+    // The harness builds the child's environment rather than passing the
+    // developer's through. `inheriting` is injected so this discriminates on a
+    // clean shell too: a base that DOES set the variable must still reach the
+    // child without it.
+    let exported = [HookShim.totalTimeoutVariable: "9"]
+    #expect(shimEnvironment(totalTimeout: nil, inheriting: exported)[HookShim.totalTimeoutVariable] == nil,
+            Comment(rawValue: "the harness hands the developer's own budget to the child, so "
+                    + "what this suite measures depends on the shell it was started from"))
 }
 
 // MARK: - Nothing to post
@@ -818,7 +895,12 @@ private final class PseudoTerminal {
     #expect(body.count > HTTPRequestFramer.maximumBytes,
             "the payload is under the cap; this test would exercise the success path")
 
-    let run = try runShim(["--socket=\(sandbox.path)"], stdin: body)
+    // `shimRefusalBudget` for the reason `shimRefusalBudget` states, and with an
+    // extra edge here: the listener answers 413 on the DECLARED length and closes
+    // while this payload is still being written, so the answer has to be read out
+    // of a socket the write already failed on. See issue #90.
+    let run = try runShim(["--socket=\(sandbox.path)"], stdin: body,
+                          totalTimeout: shimRefusalBudget)
     expectHookModeContract(run)
     #expect(run.errorText.contains("413"),
             Comment(rawValue: "the refusal was not reported: \(run.errorText.isEmpty ? "<nothing on stderr>" : run.errorText)"))
