@@ -350,7 +350,7 @@ private func openFileDescriptorCount() throws -> Int {
     _ = try runner.run(shim.path, [])
 
     let before = try openFileDescriptorCount()
-    for _ in 0..<40 {
+    for _ in 0..<200 {
         let result = try runner.run(shim.path, [])
         // The runs must actually SUCCEED, or a `run()` that failed fast would
         // satisfy the descriptor assertion without doing the work.
@@ -359,12 +359,30 @@ private func openFileDescriptorCount() throws -> Int {
     }
     let after = try openFileDescriptorCount()
 
-    // The discriminating assertion. Unfixed this delta is +80; fixed it is 0.
-    // The 20 of headroom absorbs descriptors transiently held by tests running
-    // in parallel with this one, while staying a factor of four below the
-    // leak it has to catch.
-    #expect(after - before <= 20,
-            "descriptor count grew by \(after - before) over 40 runs (\(before) -> \(after))")
+    // The discriminating assertion. Unfixed this delta is +400 — the leak is
+    // +2 per successful call — and fixed it is the parallel ramp alone.
+    //
+    // Two invariants fix both numbers:
+    //
+    //   1. The bound clears the ramp, with margin. The descriptor count is
+    //      process-global, so this test charges itself every descriptor the
+    //      tests running beside it hold open between the two samples. The
+    //      sibling below measured that ramp over 8 full-suite runs: deltas of
+    //      16, 19, 21, 17, 21, 22, 18 and -1. A bound of 20 therefore sat
+    //      BELOW the worst of it and tripped in three of those eight, which is
+    //      issue #57. 100 is 4.5x the worst ramp observed, matching the margin
+    //      the sibling has since run clean on.
+    //   2. The bound stays a factor of four under the leak it exists to catch.
+    //      2 x 200 = 400 descriptors unfixed, against a bound of 100.
+    //
+    // 200 is then the smallest count invariant 2 allows for that bound. It is
+    // kept to that minimum rather than raised to the sibling's 400 because
+    // this path spawns a REAL process per iteration and the sibling's does
+    // not: measured 1.6 s at 40 iterations and 4.9 s at 200, or about 20 ms a
+    // spawn. The ramp is a fixed offset that does not grow with the count, so
+    // the extra iterations buy signal and no extra noise.
+    #expect(after - before <= 100,
+            "descriptor count grew by \(after - before) over 200 runs (\(before) -> \(after))")
 }
 
 @Test func realRunnerDoesNotStrandPipeDescriptorsWhenTheSpawnItselfFails() throws {
