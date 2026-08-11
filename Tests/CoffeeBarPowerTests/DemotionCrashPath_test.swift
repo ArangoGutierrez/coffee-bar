@@ -155,6 +155,59 @@ private func readReport(at path: String) -> String? {
     return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
+@Test func theStateReporterPublishesEveryStateAtomically() throws {
+    // The instrument's own correctness, which every reading below depends on.
+    //
+    // A writer that opens the target with `fopen(path, "w")` truncates it to
+    // zero bytes and only THEN writes, so each of the helper's 50 ms cycles
+    // opens a window in which a concurrent reader observes an EMPTY file. The
+    // two assertions that read the state file without polling —
+    // `aSelfDemotedProcessLosesItsDemotionWhenItIsSIGKILLed` and
+    // `getpriorityCannotReportAnotherProcessDarwinBackgroundState` — sample that
+    // window directly, and the first is worse than a sampling race: it reads
+    // after a `SIGKILL`, so a kill that lands inside the window leaves the file
+    // empty PERMANENTLY and the assertion fails from then on. That is issue #84.
+    //
+    // `reportReaches` is immune because it polls and retries, which is why the
+    // premise-pinning `#require`s never flaked while the bare reads did.
+    //
+    // The fix belongs in the writer rather than in either assertion: a reader
+    // must see the old contents or the new contents, never neither.
+    let helper = try buildStateReporter()
+
+    let child = Process()
+    child.executableURL = URL(fileURLWithPath: helper.binary)
+    child.arguments = [helper.stateFile]          // report only, demotes nothing
+    try child.run()
+    defer { if child.isRunning { kill(child.processIdentifier, SIGKILL) } }
+
+    // Pins the premise. Sampling before the helper has written anything would
+    // count "not started yet" as a torn read and fail for the wrong reason.
+    try #require(reportReaches("0", at: helper.stateFile, within: 10),
+                 "the child never reported its state; the sampling below would measure nothing")
+
+    var samples = 0
+    var torn = 0
+    let deadline = Date().addingTimeInterval(2)
+    while Date() < deadline {
+        samples += 1
+        // `nil` is the file gone, `""` is the truncate window. The helper never
+        // means to publish either one; both are states only a non-atomic write
+        // can produce.
+        let seen = readReport(at: helper.stateFile)
+        if seen == nil || seen == "" { torn += 1 }
+    }
+
+    // Pins the second premise: a loop that barely ran could not have observed a
+    // window this narrow, and `torn == 0` would then hold vacuously. At idle
+    // this samples on the order of 70,000 times in the two seconds.
+    try #require(samples > 5_000,
+                 "only \(samples) samples in 2 s; too few to have crossed the write window")
+
+    #expect(torn == 0,
+            "\(torn) of \(samples) reads saw an empty or missing state file")
+}
+
 @Test func aSelfDemotedProcessLosesItsDemotionWhenItIsSIGKILLed() throws {
     // The requirement, from the handoff: "a crashed app must not leave a
     // process demoted". The probe demotes only itself — pinned by
