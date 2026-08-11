@@ -17,8 +17,10 @@
      battery percentage, duration or saving may appear until M6's measurement
      harness has produced one a user can reproduce.
   6. The binary is arm64 ONLY. Never write "Intel" or "universal".
-  7. Homebrew and the DMG both ship 0.2.1. The DMG is the signed and notarised
-     one; a Homebrew build is compiled locally and only ad-hoc signed.
+  7. The DMG ships 0.2.2. The Homebrew tap still pins v0.2.1, so the two
+     routes are one release apart until the formula is bumped. The DMG is the
+     signed and notarised one; a Homebrew build is compiled locally and only
+     ad-hoc signed.
 
   BRAND — assets/art/README.md is the source of truth.
   - TWO colours, two jobs. --state (#A2571E / #B8682A dark) is the liquid and
@@ -41,10 +43,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Changelog — coffee-bar</title>
-<meta name="description" content="Every released version of coffee-bar, newest first. v0.2.1 corrects what the app reported about its root helper, its hook wiring and its staple.">
+<meta name="description" content="Every released version of coffee-bar, newest first. v0.2.2 closes five root causes behind a test suite that could fail on a loaded machine while the code it covers was correct.">
 <link rel="canonical" href="https://arangogutierrez.github.io/coffee-bar/changelog.html">
 <meta property="og:title" content="Changelog — coffee-bar">
-<meta property="og:description" content="Every released version of coffee-bar, newest first. v0.2.1 corrects what the app reported about its root helper, its hook wiring and its staple.">
+<meta property="og:description" content="Every released version of coffee-bar, newest first. v0.2.2 closes five root causes behind a test suite that could fail on a loaded machine while the code it covers was correct.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://arangogutierrez.github.io/coffee-bar/changelog.html">
 <meta property="og:image" content="https://arangogutierrez.github.io/coffee-bar/social-preview-1280x640.png">
@@ -68,7 +70,7 @@
     <li><a href="docs.html">Docs</a></li>
     <li><a href="changelog.html" aria-current="page">Changelog</a></li>
   </ul>
-  <p class="sidebar-version"><a href="changelog.html">v0.2.1</a></p>
+  <p class="sidebar-version"><a href="changelog.html">v0.2.2</a></p>
 </nav>
 <div class="wrap">
 <!--
@@ -90,8 +92,70 @@
 
 <p>The format follows <a href="https://keepachangelog.com/en/1.1.0/">Keep a Changelog</a>. The project follows <a href="https://semver.org/spec/v2.0.0.html">Semantic Versioning</a>.</p>
 
-<section id="v0-2-1">
+<section id="v0-2-2">
 <p class="eyebrow">Current release</p>
+<h2>0.2.2 — 2026-08-11</h2>
+
+<p>A release about trusting the suite that certifies this app. Nothing here changes what coffee-bar does for you. Seven tests could fail on a loaded machine while the code they cover was correct, and a suite that cries wolf is one you stop reading — which is how a real defect ships behind 900 green checks.</p>
+
+<p>Five root causes, each traced to a specific line and each fix mutation-checked: delete the fix, the guard must go red.</p>
+
+<h3 class="eyebrow">Fixed</h3>
+
+<!-- The three timings in the third item below are wrapped in <code> ON PURPOSE.
+     They are readings taken from one past CI log, not product constants, and
+     `everyDurationStatedIsARealProductConstant` reads every duration in prose
+     and asserts it is a `StalePolicy` value. Unwrapping them turns the suite red
+     against sentences that are true. Same reasoning as the wrapped percentages
+     in the 0.1.0 section below. -->
+<ul class="does">
+  <li><strong>A test helper published its state non-atomically.</strong> It wrote with <code>fopen(path, "w")</code>, which truncates the file to zero bytes <em>before</em> writing, on a 50 ms cycle — so a reader could observe an empty file. Measured at 71 empty reads in 219,902 samples. Worse for the crash test, which reads after a <code>SIGKILL</code>: a kill landing inside that window left the file empty permanently. The helper now writes to a sibling path and <code>rename(2)</code>s over the target, so a reader sees the old report or the new one and never neither. (#84)</li>
+  <li><strong>A file-descriptor bound sat below its own noise floor.</strong> The leak guard allowed a delta of 20 over 40 spawns, but the descriptor count is process-global and the suite's parallel ramp alone was measured at 16 to 22 — so the bound was <em>under</em> the noise, and tripped on innocent runs. Now 200 iterations against a bound of 100: 4.5x clear of the worst observed ramp, and still a factor of four under the leak it exists to catch. (#57)</li>
+  <li><strong>Two hook-shim tests asserted a guarantee the shim does not make.</strong> The shim gives up after one second and exits silently, by design — a lost confirmation is not worth a diagnostic on every tool call. Under load that budget expired and the tests failed on behaviour that had not changed. The budget is now resolvable, and the tests raise it. (#90)</li>
+  <li><strong>Three tests built disk images at the same time.</strong> Their file declares no suite, so they ran concurrently, and concurrent <code>hdiutil create</code> fails with <code>Resource busy</code>. Measured from a CI log: all three started within <code>0.93 s</code> of each other and ran concurrently for about <code>45 s</code>. The create/attach/detach cycle is now serialised — pairwise overlap went from <code>96.10 s</code> to zero.</li>
+  <li><strong>A listener test pinned one curl exit code where two were correct.</strong> <code>52</code> (empty reply) and <code>55</code> (failed sending data) both describe the socket accepting a post and then dropping it; which arrives depends on where the drop lands relative to the write. The test now accepts exactly those two, and still fails on delivery or refusal.</li>
+</ul>
+
+<h3 class="eyebrow">Added</h3>
+
+<ul class="does">
+  <li><code>COFFEE_BAR_SHIM_TIMEOUT_SECONDS</code> sets the hook shim's total run budget. It is the only production change in this release and exists so tests can raise the budget above what a loaded machine costs. Absent, unparseable, zero, negative, non-finite or above the five-second ceiling all fall back to the shipped default of one second, so behaviour is unchanged unless you set it deliberately.</li>
+</ul>
+
+<h3 class="eyebrow">Not in this release</h3>
+
+<p><code>site/</code>, the app's UI and every user-facing behaviour are untouched. The only shipped binary difference is the shim's budget resolver above.</p>
+
+<div class="table-wrap">
+<table>
+  <caption>The 0.2.2 disk image</caption>
+  <thead>
+    <tr><th scope="col">Fact</th><th scope="col">Value</th></tr>
+  </thead>
+  <tbody>
+    <tr><th scope="row">File</th><td><code>coffee-bar-0.2.2.dmg</code></td></tr>
+    <tr><th scope="row">Size</th><td>860341 bytes</td></tr>
+    <tr><th scope="row">SHA-256</th><td><code>21839e1612b67a845943102b4737d4cd2f3984d5facee4e428a992774e08331b</code></td></tr>
+    <tr><th scope="row">Architecture</th><td>Apple silicon (<code>arm64</code>) only</td></tr>
+    <tr><th scope="row">Minimum macOS</th><td>14.0</td></tr>
+    <tr><th scope="row">Signature</th><td>Developer ID Application, team <code>85FN4Z37V8</code></td></tr>
+    <tr><th scope="row">Notarisation</th><td><code>spctl</code> accepts it, source <code>Notarized Developer ID</code></td></tr>
+    <tr><th scope="row">Staple</th><td><code>xcrun stapler validate</code> passes on the app and on the image</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>This is not a universal binary. <code>lipo -archs</code> on the shipped binary reports <code>arm64</code> alone, so an Intel Mac cannot run it.</p>
+
+<p>Verify the download before you open it:</p>
+
+<pre>shasum -a 256 coffee-bar-0.2.2.dmg
+spctl -a -t open --context context:primary-signature -vv coffee-bar-0.2.2.dmg</pre>
+
+</section>
+
+<section id="v0-2-1">
+<p class="eyebrow">Previous release</p>
 <h2>0.2.1 — 2026-08-10</h2>
 
 <p>A release about trust in what the app tells you. Four things it reported, or failed to report, were not true. Each is now correct, and each correction is held in place by a check that fails if it regresses.</p>
@@ -309,7 +373,7 @@ spctl -a -t open --context context:primary-signature -vv coffee-bar-0.1.1.dmg</p
 
 </section>
 
-<p><a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.2.1">v0.2.1 on GitHub</a> · <a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.2.0">v0.2.0 on GitHub</a> · <a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.1.1">v0.1.1 on GitHub</a> · <a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.1.0">v0.1.0 on GitHub</a></p>
+<p><a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.2.2">v0.2.2 on GitHub</a> · <a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.2.1">v0.2.1 on GitHub</a> · <a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.2.0">v0.2.0 on GitHub</a> · <a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.1.1">v0.1.1 on GitHub</a> · <a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.1.0">v0.1.0 on GitHub</a></p>
 
 <footer>
 <p>Apache-2.0 · <a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a> · <a href="https://github.com/ArangoGutierrez/coffee-bar/issues/new">Report a bug</a><br>
