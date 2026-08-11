@@ -51,6 +51,14 @@ let usage = """
                        ~/Library/Application Support/coffee-bar/ingest.sock
       --help           this text.
 
+    One environment variable is read, and all it changes is how long THIS
+    process waits for its own answer:
+
+      \(HookShim.totalTimeoutVariable)
+                       how long the whole run may take, in seconds. Defaults
+                       to \(HookShim.totalTimeout). Anything unparseable, zero, negative or
+                       above \(HookShim.maximumTotalTimeout) falls back to that default, in silence.
+
     Exits 0 whatever happens, and writes nothing to standard output: an agent
     reads a hook's stdout as a decision, and a failing hook holds up the agent.
     When coffee-bar is not running the payload is dropped in silence.
@@ -120,11 +128,28 @@ if body.isEmpty { exit(0) }
 
 // MARK: - Posting it
 
+/// How long the whole run gets, after the environment has had its say.
+///
+/// `HookShim.resolvedTotalTimeout(from:)` holds the bounds and the reasons; the
+/// shipped default is what runs unless a shell says otherwise, and every value
+/// it cannot use falls back to that default in silence.
+///
+/// **The security shape of reading a variable here.** It buys TIME in a process
+/// the invoking user already started with their own privileges, and nothing
+/// else. It cannot widen privilege, name a different destination — `--socket=`
+/// is the only thing that does that — change what is sent, or change what is
+/// said about it: the diagnostic below still carries a status and never a
+/// payload. The one abuse worth bounding is the opposite of a leak, and
+/// `HookShim.maximumTotalTimeout` is what bounds it: this runs on EVERY tool
+/// call, so a large value left in a shell profile would hold the agent up on
+/// all of them.
+let totalTimeout = HookShim.resolvedTotalTimeout(from: ProcessInfo.processInfo.environment)
+
 /// The deadline for the whole run, fixed before the first syscall.
 ///
 /// Every wait below takes what is LEFT of it, so the total cannot grow with the
 /// number of steps.
-let deadline = Date().addingTimeInterval(HookShim.totalTimeout)
+let deadline = Date().addingTimeInterval(totalTimeout)
 
 func remaining(cappedAt ceiling: TimeInterval) -> TimeInterval {
     max(0, min(ceiling, deadline.timeIntervalSinceNow))
@@ -193,7 +218,7 @@ _ = fcntl(descriptor, F_SETFL, originalFlags)
 // Blocking again, but with the rest of the deadline as the ceiling on each
 // side. A zero timeout means "wait for ever" to the kernel, so a spent budget
 // leaves now rather than blocking without a bound.
-let writeBudget = remaining(cappedAt: HookShim.totalTimeout)
+let writeBudget = remaining(cappedAt: totalTimeout)
 if writeBudget <= 0 { exit(0) }
 var sendTimeout = timeval(writeBudget)
 setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, &sendTimeout,
@@ -223,7 +248,7 @@ request.withUnsafeBytes { buffer in
 // process is still here to read the answer.
 shutdown(descriptor, SHUT_WR)
 
-let readBudget = remaining(cappedAt: HookShim.totalTimeout)
+let readBudget = remaining(cappedAt: totalTimeout)
 if readBudget <= 0 { exit(0) }
 var receiveTimeout = timeval(readBudget)
 setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &receiveTimeout,
