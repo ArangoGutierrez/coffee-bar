@@ -1013,18 +1013,20 @@ private func citedFile(named name: String) -> URL? {
 /// then inherited a stale pointer and repeated it. A line number is a reference
 /// that rots silently on every edit above it.
 ///
-/// **Scope, stated rather than hidden.** The line-number half refuses `.md`
-/// citations only. A first run of this guard found TEN more citations of Swift
-/// files by line, at NINE distinct targets — one target is cited twice — and
-/// they rot the same way. Fixing them is a wider edit than the round that added
-/// this guard, so they are recorded as follow-up rather than quietly excluded.
-/// The ANCHOR half below already covers every cited file, `.md` and `.swift`
-/// alike.
+/// **Scope.** The line-number half refuses BOTH `.md` and `.swift` targets. It
+/// refused `.md` alone when it landed, because the Swift citations were a wider
+/// edit than that round could carry; they were recorded as follow-up rather
+/// than quietly excluded, and this is that follow-up. A Swift line number rots
+/// exactly as an `.md` one does, and it rotted here before anyone converted it:
+/// two of the fourteen pointed more than a thousand lines away from the prose
+/// they claimed, into unrelated declarations. The ANCHOR half below covers
+/// every cited file, `.md` and `.swift` alike.
 ///
-/// Both numbers are measured, and no example of the shape is written out here.
-/// An earlier draft named two, and those two then counted themselves: a grep
-/// returned twelve where the tree holds ten. That is the same self-reference
-/// trap described below, met a second time while writing the note about it.
+/// Every number here is measured, and no example of the refused shape is
+/// written out. An earlier draft named two, and those two then counted
+/// themselves: a grep returned twelve where the tree held ten. That is the same
+/// self-reference trap described below, met a second time while writing the
+/// note about it.
 ///
 /// The line-number pattern is deliberately not written out in this comment. An
 /// earlier draft spelled one as an example, and this guard read its own
@@ -1051,7 +1053,7 @@ private func citedFile(named name: String) -> URL? {
 
         for (index, comment) in try commentFragments(of: body) {
 
-            for m in try citationMatches("[A-Za-z0-9_/.]+\\.md:[0-9]+", in: comment) {
+            for m in try citationMatches("[A-Za-z0-9_/.]+\\.(?:md|swift):[0-9]+", in: comment) {
                 lineCitations.append("\(short):\(index + 1) cites \(m[0])")
             }
 
@@ -1084,8 +1086,15 @@ private func citedFile(named name: String) -> URL? {
 
     // ANTI-VACUITY. A pattern that matches nothing passes silently, which is the
     // defect `everyControlNamedExistsInTheProduct` ships with today.
-    #expect(anchorsChecked >= 15, """
-        resolved \(anchorsChecked) anchor citation(s); this branch converted 15, \
-        so the citation pattern has rotted and this guard is reading nothing
+    //
+    // The floor is the MEASURED total, not a round number under it. It was 15
+    // when only the `.md` citations had been converted; the Swift round added
+    // fourteen more, and leaving the floor at 15 after the population doubled
+    // would let half of them stop resolving with this guard still green. Raise
+    // it with every conversion round, for the same reason.
+    #expect(anchorsChecked >= 29, """
+        resolved \(anchorsChecked) anchor citation(s) against a measured floor of \
+        29, so the citation pattern has rotted and this guard is reading less \
+        than the tree holds
         """)
 }

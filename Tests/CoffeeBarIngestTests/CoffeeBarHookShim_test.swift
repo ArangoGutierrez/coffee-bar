@@ -332,8 +332,9 @@ private func settledDescriptorCount(samples: Int = 6) throws -> Int {
     // it invalidates those during spawn. Nothing owns the read ends but this
     // helper, so a helper that drops them strands two descriptors per call.
     //
-    // That is the same defect `CommandRunner.swift:102-105` was fixed for, and
-    // it is not a private matter for this file. Descriptors are process-wide.
+    // That is the same defect `CommandRunner.swift` "Nothing owns the READ ends but this function"
+    // was fixed for, and it is not a private matter for this file. Descriptors
+    // are process-wide.
     // `realRunnerDoesNotStrandPipeDescriptorsAcrossRepeatedCalls` samples the
     // process total across 40 runs and allows 20 of headroom for tests running
     // beside it; a leak here spends that headroom and turns a real guard on a

@@ -529,10 +529,11 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
 
 @MainActor
 @Test func theTickerEnforcesTheFloorWithNobodyWatching() throws {
-    // The reason `startMonitoring` exists at all. The doc comment at
-    // `ServingModel.swift:91` puts it plainly: `MenuBarExtra` with
-    // `.menuBarExtraStyle(.window)` builds its content only while the panel is
-    // open, so a floor enforced only by the panel does not enforce the floor.
+    // The reason `startMonitoring` exists at all. Its doc comment puts it
+    // plainly — `ServingModel.swift` "builds its content only while the panel is open"
+    // — because `MenuBarExtra` with `.menuBarExtraStyle(.window)` builds nothing
+    // while the panel is shut, so a floor enforced only by the panel does not
+    // enforce the floor.
     //
     // Named bug this catches: `MainActor.assumeIsolated { model.refresh() }`
     // reduced to `_ = model`. `startMonitoring` then installs a timer that
@@ -631,9 +632,10 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
 @MainActor
 @Test func startMonitoringTwiceLeavesOnlyOneLiveTimer() throws {
     // The other of the two ways a second `Timer` reaches `RunLoop.main`. The
-    // doc comment at `ServingModel.swift:107` names a repeat call on the same
-    // instance and closes it with `timer?.invalidate()`; that line was closed
-    // in code and open in the suite.
+    // doc comment on `startMonitoring` names it —
+    // `ServingModel.swift` "a repeat call on the SAME instance" — and closes it
+    // with `timer?.invalidate()`; that line was closed in code and open in the
+    // suite.
     //
     // Named bug this catches: deleting that one line. `self.timer` is then
     // overwritten by the second call, so the first timer keeps its place on
@@ -691,8 +693,8 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // what separates coffee-bar from `caffeinate -d`. That half cannot be
     // killed from this layer: `DesiredPowerState` is built only in
     // `Sources/CoffeeBarCore/PowerBroker.swift`, and
-    // `Tests/CoffeeBarCoreTests/PowerBroker_test.swift:29` guards it there
-    // across every input combination.
+    // `Tests/CoffeeBarCoreTests/PowerBroker_test.swift` "the SERVING control can reach the display assertion"
+    // guards it there across every input combination.
     let reader = FakeReader(source: .battery, percent: 50)
     let spy = SpyHolder()
     let model = ServingModel(holder: spy, reader: reader,

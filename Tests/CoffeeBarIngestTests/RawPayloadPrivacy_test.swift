@@ -48,8 +48,9 @@ import Foundation
 //      fixed status message with no value in it.
 //
 //   3. COMMENTS ARE STRIPPED, and that is load-bearing rather than tidy.
-//      MEASURED on this tree: `IngestListener.swift:41` names `NSLog` inside a
-//      doc comment today, so a plain `contains` scan is RED on a CORRECT tree.
+//      MEASURED on this tree: `IngestListener.swift` "writes that to NSLog, where no user looks"
+//      names a route inside a doc comment today, so a plain `contains` scan is
+//      RED on a CORRECT tree.
 //      `AppLayerBoundary_test` met the same prose-versus-code problem and solved
 //      it the same way.
 //
@@ -697,7 +698,7 @@ private func ingestPathEntriesFound() throws -> [String] {
          "let a = 1 // NSLog(body)\nlet b = 2",
          "let a = 1 \nlet b = 2"),
 
-        // What `IngestListener.swift:41` says today.
+        // What `IngestListener.swift` "writes that to NSLog, where no user looks" says today.
         ("a doc comment naming a route goes",
          "/// main.swift writes that to NSLog, where no user looks\nlet a = 1",
          "\nlet a = 1"),

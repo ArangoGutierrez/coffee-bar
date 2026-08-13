@@ -51,7 +51,8 @@ private enum SurfaceScanError: Error, CustomStringConvertible {
 /// `versionLine(from:)` in four comments — so a RAW `contains` is satisfied by
 /// the explanation of the render it deleted. Measured against 635720c: removing
 /// the one `Text(PanelView.versionLine(...))` line from `PanelView.swift` left
-/// four matches standing, all of them comments. `PanelView.swift:64-69` already
+/// four matches standing, all of them comments.
+/// `PanelView.swift` "compiles to nothing and so proves nothing" already
 /// documents this hazard for the acceptance script.
 ///
 /// `swiftCodeWithoutComments` is the lexer `AppLayerBoundary_test.swift` rests
@@ -161,10 +162,11 @@ private let versionSurfaces = [(file: "PanelView.swift", type: "PanelView"),
         //
         // A SECOND LATENT INVERSION lives here, and it is worth knowing before
         // it fires rather than after. This passes today only because the key
-        // sits in exactly one place — `AppVersion.swift:16`,
-        // `static let bundleKey = "CFBundleShortVersionString"` — and neither
-        // scanned file is that one. Fold `AppVersion.display(from:)` into
-        // `PanelView.swift` and this expectation goes RED over a correct tree,
+        // sits in exactly one place — the `bundleKey` constant that
+        // `AppVersion.swift` "The Info.plist key that `scripts/build-app.sh` stamps"
+        // documents — and neither scanned file is that one. Fold
+        // `AppVersion.display(from:)` into `PanelView.swift` and this
+        // expectation goes RED over a correct tree,
         // because the surface would then legitimately contain the key it is
         // being told not to name.
         //

@@ -164,8 +164,9 @@ private func internalBatteryDescription(percent: Int,
     // literals, not re-derived from `onBattery(providingType:)`, so this fails
     // for a reading that decides the source by any other mechanism.
     //
-    // UPS power and an unreadable type are both `.ac`: BaselineProbes.swift:101
-    // documents that a UPS is an external supply, not "on battery".
+    // UPS power and an unreadable type are both `.ac`, because
+    // `BaselineProbes.swift` "a UPS is an external supply the run is not draining"
+    // documents why a UPS is not on battery.
     let cases: [(String?, PowerSource)] = [
         (kIOPSACPowerValue, .ac),
         (kIOPSBatteryPowerValue, .battery),
