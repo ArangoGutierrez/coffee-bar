@@ -127,7 +127,7 @@ private let documentedSurfaces = (markdownSurfaces + discoveredSitePages()).sort
 /// Comments go first and deliberately: the do-not-publish marker is a comment,
 /// and it is an instruction to the maintainer rather than a claim to a reader.
 /// `pre` and `style` go too, for the same reason fenced code goes from Markdown.
-private func htmlProse(_ text: String) -> String {
+func htmlProse(_ text: String) -> String {
     var s = text.replacingOccurrences(of: "<!--[\\s\\S]*?-->", with: " ",
                                       options: .regularExpression)
     s = s.replacingOccurrences(of: "<pre>[\\s\\S]*?</pre>", with: " ",
