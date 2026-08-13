@@ -4,6 +4,7 @@
 import Foundation
 import Testing
 import CoffeeBarCore
+import CoffeeBarTestSupport
 
 /// What the Preferences window must SAY, held by a source scan.
 ///

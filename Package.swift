@@ -51,11 +51,30 @@ let package = Package(
         // `--product coffee-bar`, so this never reaches a release.
         .executableTarget(name: "CoffeeBarGovernorHarness", dependencies: ["CoffeeBarPower"],
                           swiftSettings: [.swiftLanguageMode(.v6)]),
+        // Test scaffolding shared across test targets, and NOT a product.
+        //
+        // It holds the comment-stripping Swift lexer that several guards read
+        // source through. That lexer was declared inside
+        // `Tests/CoffeeBarUITests/AppLayerBoundary_test.swift`, so only
+        // `CoffeeBarUITests` could reach it: `PolicyDocumentClaims_test.swift`
+        // re-implemented a cruder `commentFragments` and said so, and
+        // `DocsClaims_test.swift` went without and let a control named only in
+        // a comment satisfy a presence guard. A second and third copy would
+        // make issue #54's detect-and-refuse fix apply twice or silently miss.
+        //
+        // A plain `.target`, because SwiftPM refuses a test target as a
+        // dependency and would compile a test target's `@Test` functions into
+        // every bundle that took it. Under `Tests/` rather than `Sources/`
+        // because it is scaffolding that must never ship — no product names it,
+        // and `scripts/build-app.sh` builds `--product coffee-bar`.
+        .target(name: "CoffeeBarTestSupport", path: "Tests/CoffeeBarTestSupport",
+                swiftSettings: [.swiftLanguageMode(.v6)]),
         .testTarget(name: "CoffeeBarCoreTests", dependencies: ["CoffeeBarCore"],
                     swiftSettings: [.swiftLanguageMode(.v6)]),
         .testTarget(name: "CoffeeBarPowerTests", dependencies: ["CoffeeBarPower"],
                     swiftSettings: [.swiftLanguageMode(.v6)]),
-        .testTarget(name: "CoffeeBarUITests", dependencies: ["CoffeeBarUI"],
+        .testTarget(name: "CoffeeBarUITests",
+                    dependencies: ["CoffeeBarUI", "CoffeeBarTestSupport"],
                     swiftSettings: [.swiftLanguageMode(.v6)]),
         .testTarget(name: "CoffeeBarIngestTests", dependencies: ["CoffeeBarIngest"],
                     swiftSettings: [.swiftLanguageMode(.v6)]),
