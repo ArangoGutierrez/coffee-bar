@@ -159,6 +159,77 @@ private func surfaceProse(_ name: String) throws -> String {
     return name.hasSuffix(".html") ? htmlProse(text) : readmeProse(text)
 }
 
+// MARK: - A record of a past release is not a claim about the product today
+
+/// One documented surface reduced to the claims it makes about the product AS
+/// IT SHIPS, with everything a released section RECORDS left out.
+///
+/// **Why this exists — issue #53, and there was a live instance.**
+/// `theBatteryFloorStatedIsTheRealDefault` asserts that every percentage in
+/// prose is the floor in force TODAY. A changelog's job is to say what each
+/// release shipped, so that rule forbids ever writing a floor change down:
+/// `CHANGELOG.md` says "It ships at 15%" under the released `## [0.2.0]`
+/// heading, and that sentence passes only because 0.2.0's floor happens to
+/// equal the current one. The next floor change turns a CORRECT sentence red,
+/// and the cheapest way out of a red guard is to falsify the history — which is
+/// a defect no test in this repository can ever detect.
+///
+/// The two 0.1.0 percentages were wrapped in code spans for exactly this
+/// reason, with a comment saying so. Hiding a true claim from a guard is a
+/// coverage hole with a note attached; teaching the guard what a release
+/// section IS lets the claim be written plainly and still be read.
+///
+/// **What is exempt, stated narrowly.** A `##`-level version heading in
+/// Markdown, and the `<section>` a version `<h2>` opens in HTML. Nothing else.
+/// `CHANGELOG.md`'s own header says a version heading means a tag exists, so
+/// text under one is a record by construction. Every other surface — README,
+/// SECURITY, the quick start, every page but the changelog — comes back
+/// BYTE-IDENTICAL, and `releaseHistoryIsExemptOnlyWhereAReleaseHistoryExists`
+/// pins that for all eleven surfaces rather than trusting it.
+///
+/// **What this cannot do, stated rather than hidden.** A wrong number inside a
+/// released section is now invisible to these guards, which is the price of
+/// being able to record a floor change at all. The exemption is bounded by
+/// position, never by content, so it cannot be widened by rewording a claim.
+private func currentClaimProse(_ name: String) throws -> String {
+    let raw = try surfaceText(name)
+    if name.hasSuffix(".html") {
+        return htmlProse(try htmlWithoutReleaseHistory(raw))
+    }
+    return readmeProse(markdownWithoutReleaseHistory(raw))
+}
+
+/// Markdown with every `##`-level version section removed.
+///
+/// LINE BASED rather than a multi-line regex: the boundary IS a line here, and
+/// a `[\s\S]*?` reaching for the next heading is the shape that has already
+/// deleted eighty-five lines when it should have deleted three.
+func markdownWithoutReleaseHistory(_ text: String) -> String {
+    var kept: [String] = []
+    var insideARelease = false
+    for line in text.components(separatedBy: "\n") {
+        if line.hasPrefix("## ") {
+            insideARelease = ((try? matches("^##\\s+\\[?\\d+\\.\\d+\\.\\d+\\]?", in: line)) ?? []).isEmpty == false
+        }
+        if !insideARelease { kept.append(line) }
+    }
+    return kept.joined(separator: "\n")
+}
+
+/// HTML with every `<section>` opened by a version `<h2>` removed.
+///
+/// The heading decides, not the `id`: `id="v0-1-0"` is a convention a page can
+/// change, while the heading is what a reader sees and what
+/// `everyReleaseInTheChangelogIsOnTheChangelogPage` already reads.
+func htmlWithoutReleaseHistory(_ text: String) throws -> String {
+    var kept = text
+    for m in try matches("<section\\b[^>]*>[\\s\\S]*?</section>", in: text) {
+        guard try !matches("<h2[^>]*>\\s*\\d+\\.\\d+\\.\\d+", in: m[0]).isEmpty else { continue }
+        kept = kept.replacingOccurrences(of: m[0], with: " ")
+    }
+    return kept
+}
+
 struct BadPattern: Error, CustomStringConvertible {
     let pattern: String
     var description: String {
@@ -406,12 +477,36 @@ func everyDocumentedSurfaceIsReadableAndSubstantial(_ name: String) throws {
     #expect(try !matches("`blockedTimeout`", in: try surfaceText("docs/QUICKSTART.md")).isEmpty,
             "the quick start no longer names blockedTimeout")
 
-    let readme = try surfaceProse("README.md")
-    #expect(try !matches(percentPattern, in: readme).isEmpty, "no percentage in the README")
-
     let site = try surfaceProse("site/index.html")
     #expect(try !matches(hookCountPattern, in: site).isEmpty, "no '<number> hooks' phrase on the site")
-    #expect(try !matches(percentPattern, in: site).isEmpty, "no percentage on the site")
+
+    // `percentPattern` is pinned across ALL ELEVEN surfaces, not the two it
+    // used to be. Issue #53 is why: the guards that read percentages now skip
+    // release sections, and an exemption is the cheapest way for coverage to
+    // vanish quietly. Two anchors could not tell "the pattern still works"
+    // from "nine surfaces are no longer being read".
+    //
+    // BOTH directions, which is what makes this a coverage map rather than a
+    // formality. A surface that should carry a percentage and does not means
+    // the pattern rotted or the claim was lost; a surface that should carry
+    // none and does means a new percentage claim landed somewhere nobody
+    // decided it belonged, and the map has to be read before it passes.
+    for name in documentedSurfaces {
+        let found = try matches(percentPattern, in: try surfaceProse(name)).count
+        if percentageCarryingSurfaces.contains(name) {
+            #expect(found > 0, """
+                \(name) states no percentage at all. It is listed as a surface \
+                that carries one, so either percentPattern has rotted and every \
+                sweep below is reading nothing, or the claim was deleted.
+                """)
+        } else {
+            #expect(found == 0, """
+                \(name) states \(found) percentage(s) and is not on the list of \
+                surfaces that carry one. Add it deliberately — that edit is the \
+                moment somebody reads the new claim against the real floor.
+                """)
+        }
+    }
 
     // `controlOfferPattern` is pinned against FIXTURES and not against a
     // surface, and that is a measurement rather than a preference: it yields
@@ -464,6 +559,27 @@ private let hookCountPattern = "\\b(three|four|five|six|seven)\\b[\\s\\S]{0,25}?
 /// for the reasoning and the cases.
 private let durationPattern = "(?<![\\d.])(\\d[\\d,_]*(?:\\.\\d+)?)[\\s-]*(second|minute|hour)s?"
 private let percentPattern = "(\\d+)\\s*%"
+
+/// The documented surfaces that state a percentage, named one by one.
+///
+/// This is the anti-vacuity map for `percentPattern`, and it covers all eleven
+/// surfaces rather than the README and the home page it used to. The four
+/// absent from it — the build guide, the install page and the two legal pages —
+/// are as load bearing as the seven in it: a percentage appearing on a page
+/// that stated none is a new claim about the floor, and it has to be read
+/// before it passes.
+///
+/// Measured over PROSE, so a number inside a code span or a `<code>` element is
+/// not counted here for the same reason the sweeps do not judge it.
+private let percentageCarryingSurfaces: Set<String> = [
+    "CHANGELOG.md",
+    "README.md",
+    "SECURITY.md",
+    "docs/QUICKSTART.md",
+    "site/changelog.html",
+    "site/docs.html",
+    "site/index.html",
+]
 private let numberWords = ["three": 3, "four": 4, "five": 5, "six": 6, "seven": 7]
 
 @Test(arguments: documentedSurfaces)
@@ -632,9 +748,137 @@ func everyNamedConstantMatchesTheNumberBesideIt(_ name: String) throws {
     }
 }
 
+/// The surfaces that carry a release history, and they are the only two.
+///
+/// A LITERAL, so that a page growing version sections — or a changelog losing
+/// them — has to be read by a human before the exemption follows it.
+private let releaseHistorySurfaces: Set<String> = ["CHANGELOG.md", "site/changelog.html"]
+
+/// The exemption reaches release sections and nothing else.
+///
+/// **Named bug this catches.** A stripper that is a little too greedy makes
+/// every guard downstream sweep an empty string, and that failure is SILENT —
+/// zero percentages found is indistinguishable from zero percentages wrong.
+/// Subtracting text from what a guard scans always carves a blind spot; this
+/// pins the blind spot's exact edges instead of trusting them.
+///
+/// Both directions, per surface, for all eleven:
+///
+///   * the nine surfaces with no release history come back BYTE-IDENTICAL, so
+///     the exemption cannot quietly spread to a page that makes live claims;
+///   * the two changelogs lose text, still lose at least one percentage, and
+///     still hand back a substantial preamble — a stripper that swallowed the
+///     whole file would satisfy "lost text" and fail here.
+@Test(arguments: documentedSurfaces)
+func releaseHistoryIsExemptOnlyWhereAReleaseHistoryExists(_ name: String) throws {
+    let whole = try surfaceProse(name)
+    let current = try currentClaimProse(name)
+
+    guard releaseHistorySurfaces.contains(name) else {
+        #expect(current == whole, """
+            \(name) carries no release history, and the exemption changed it \
+            anyway: \(whole.count) bytes of prose became \(current.count). \
+            Every live claim it removes is a claim no guard reads.
+            """)
+        return
+    }
+
+    #expect(current.count < whole.count, """
+        \(name) is a changelog and the release-section exemption removed \
+        nothing from it. Either the section boundaries moved or the pattern \
+        rotted; a percentage recording a past release is about to be judged \
+        against today's floor.
+        """)
+
+    let inWhole = try matches(percentPattern, in: whole).count
+    let inCurrent = try matches(percentPattern, in: current).count
+    #expect(inCurrent < inWhole, """
+        \(name) states \(inWhole) percentage(s) and \(inCurrent) of them \
+        survive the release-section exemption. This guard exists because those \
+        numbers are release history; if none is being removed it is reading \
+        the wrong regions.
+        """)
+
+    // A stripper that ate the whole file would pass both checks above. The
+    // preamble is what a reader meets before the first release, and it makes
+    // live claims — so it must survive.
+    #expect(current.count > 400, """
+        \(name) has \(current.count) bytes of prose left after the exemption. \
+        The preamble states the rule the file is written to and is a live \
+        claim; a guard reading almost nothing reports success at everything.
+        """)
+}
+
+/// A percentage moves from claim to record by CROSSING A HEADING, and nothing
+/// else about it changes.
+///
+/// Fixtures rather than the real documents, so the two cases differ by exactly
+/// one thing: which side of the version heading the sentence sits on. Anchoring
+/// this on `CHANGELOG.md` would tie it to today's wording and stop
+/// discriminating the moment somebody rewrites a release note.
+@Test func aPercentageBecomesHistoryOnlyByCrossingAVersionHeading() throws {
+    let markdown = """
+        # Changelog
+
+        The floor is 9% today.
+
+        ## [0.1.0] — 2026-08-03
+
+        The floor was 20% then.
+        """
+    let currentMarkdown = markdownWithoutReleaseHistory(markdown)
+    #expect(currentMarkdown.contains("9%"),
+            "the exemption removed a percentage stated ABOVE the first version heading")
+    #expect(!currentMarkdown.contains("20%"),
+            "the exemption kept a percentage stated UNDER a version heading, so history is still judged as a claim")
+
+    // A `##` heading that names no version is NOT a release section. The
+    // exemption is for a record of a shipped build, not for every subheading.
+    let notARelease = """
+        # Notes
+
+        ## How the floor works
+
+        The floor is 9% today.
+        """
+    #expect(markdownWithoutReleaseHistory(notARelease).contains("9%"),
+            "a plain ## heading was treated as a release section, which exempts live prose")
+
+    let html = """
+        <p>The floor is 9% today.</p>
+        <section id="v0-1-0">
+        <h2>0.1.0 — 2026-08-03</h2>
+        <p>The floor was 20% then.</p>
+        </section>
+        """
+    let currentHTML = try htmlWithoutReleaseHistory(html)
+    #expect(currentHTML.contains("9%"),
+            "the exemption removed a percentage stated outside any release section")
+    #expect(!currentHTML.contains("20%"),
+            "the exemption kept a percentage stated inside a version section")
+
+    // A `<section>` whose heading names no version stays.
+    let plainSection = """
+        <section id="how-it-works">
+        <h2>How the floor works</h2>
+        <p>The floor is 9% today.</p>
+        </section>
+        """
+    #expect(try htmlWithoutReleaseHistory(plainSection).contains("9%"),
+            "a section with a non-version heading was treated as release history")
+}
+
+/// Every percentage a document states about the product TODAY is the floor in
+/// force today.
+///
+/// `currentClaimProse` and not `surfaceProse`, and that is issue #53: a
+/// changelog RECORDS what each release shipped, so a percentage under a
+/// released heading is history and not a claim. Holding history to today's
+/// constant forbids ever writing a floor change down — see `currentClaimProse`
+/// for the live sentence that proved it.
 @Test(arguments: documentedSurfaces)
 func theBatteryFloorStatedIsTheRealDefault(_ name: String) throws {
-    let prose = try surfaceProse(name)
+    let prose = try currentClaimProse(name)
 
     // `batteryFloorPercent` is NOT passed, so the DEFAULT decides. Passing the
     // document's own number as the floor would make this tautological.
@@ -662,9 +906,12 @@ func theBatteryFloorStatedIsTheRealDefault(_ name: String) throws {
 /// the opposite of what happens at 20% itself. `ServingModel.swift` already
 /// carries this reasoning for the panel line; nothing enforced it for the docs,
 /// and `site/index.html` shipped the wording that comment condemns.
+/// Scoped to CURRENT claims for the same reason the floor guard above is.
+/// `CHANGELOG.md` records "at or below `20%`" under the released `## [0.1.0]`
+/// heading; that is a true statement about 0.1.0 and a false one about today.
 @Test(arguments: documentedSurfaces)
 func aBoundaryPhraseMatchesTheRealBoundary(_ name: String) throws {
-    let prose = try surfaceProse(name)
+    let prose = try currentClaimProse(name)
 
     for m in try matches("(at or below|below|under)\\s*(\\d+)\\s*%", in: prose) {
         guard let stated = Int(m[2]) else { continue }
