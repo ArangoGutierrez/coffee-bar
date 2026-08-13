@@ -190,8 +190,17 @@ private func shimEnvironment(totalTimeout: TimeInterval?,
 ///
 /// `totalTimeout` is the budget the child gives itself; `nil` leaves it on the
 /// shipped default, which is what every test here but the two refusals wants.
+///
+/// Issue #93: this parameter deliberately has NO default. It used to default to
+/// `nil`, which meant deleting `totalTimeout: shimRefusalBudget` from either
+/// refusal test left a call that still compiled and a suite that stayed green —
+/// silently restoring the #90 flake, to be found again only when CI was busy.
+/// Required, the same deletion is a compile error naming the file and line, and
+/// a compile error cannot be skipped, ignored, or left red. The cost is that the
+/// thirteen runs that want the shipped default say `totalTimeout: nil`, which
+/// reads as a choice rather than an omission — which is the entire point.
 private func runShim(_ arguments: [String], stdin: Data,
-                     totalTimeout: TimeInterval? = nil) throws -> ShimRun {
+                     totalTimeout: TimeInterval?) throws -> ShimRun {
     let binary = try shimBinaryPath()
 
     let inputFile = FileManager.default.temporaryDirectory
@@ -361,14 +370,14 @@ private func settledDescriptorCount(samples: Int = 6) throws -> Int {
 
     // A warm-up outside the measurement, so lazily-created globals are already
     // charged. Deliberately the same shape as the calls being measured.
-    _ = try runShim(["--socket=\(sandbox.path)"], stdin: payload)
+    _ = try runShim(["--socket=\(sandbox.path)"], stdin: payload, totalTimeout: nil)
 
     let before = try settledDescriptorCount()
     for _ in 0..<100 {
         // No listener is bound at this path, so each run takes the silent
         // not-running path and returns at once. The descriptors are opened
         // either way — this guard is about the helper, not about delivery.
-        let run = try runShim(["--socket=\(sandbox.path)"], stdin: payload)
+        let run = try runShim(["--socket=\(sandbox.path)"], stdin: payload, totalTimeout: nil)
         #expect(run.status == 0)
     }
     let after = try settledDescriptorCount()
@@ -455,7 +464,7 @@ private func fixtureString(_ key: String, in name: String) throws -> String {
     defer { listener.stop() }
 
     let payload = try fixture("pre-tool-use.json")
-    let run = try runShim(["--socket=\(sandbox.path)"], stdin: payload)
+    let run = try runShim(["--socket=\(sandbox.path)"], stdin: payload, totalTimeout: nil)
     expectHookModeContract(run)
 
     shimPump(until: { !collected.all.isEmpty })
@@ -491,7 +500,8 @@ private func fixtureString(_ key: String, in name: String) throws -> String {
 
     let payload = try fixture("stop.json")
     for name in ["claude-code", "codex"] {
-        let run = try runShim(["--tool=\(name)", "--socket=\(sandbox.path)"], stdin: payload)
+        let run = try runShim(["--tool=\(name)", "--socket=\(sandbox.path)"], stdin: payload,
+                              totalTimeout: nil)
         expectHookModeContract(run)
     }
 
@@ -520,7 +530,8 @@ func eachToolsOwnRecordedPayloadArrivesUnderItsOwnOrigin(_ tool: AgentTool) thro
     let payload = try Data(contentsOf: directory.appending(path: "session-start.json"))
     #expect(!payload.isEmpty, "the recorded payload is empty; the run below would be vacuous")
 
-    let run = try runShim(["--tool=\(tool.shimName)", "--socket=\(sandbox.path)"], stdin: payload)
+    let run = try runShim(["--tool=\(tool.shimName)", "--socket=\(sandbox.path)"], stdin: payload,
+                          totalTimeout: nil)
     expectHookModeContract(run)
     #expect(run.standardError.isEmpty,
             Comment(rawValue: "\(tool.shimName) was refused: \(run.errorText)"))
@@ -599,7 +610,8 @@ func eachToolsOwnRecordedPayloadArrivesUnderItsOwnOrigin(_ tool: AgentTool) thro
     #expect(!FileManager.default.fileExists(atPath: sandbox.path),
             "the premise is wrong: something is at the socket path")
 
-    let run = try runShim(["--socket=\(sandbox.path)"], stdin: try fixture("stop.json"))
+    let run = try runShim(["--socket=\(sandbox.path)"], stdin: try fixture("stop.json"),
+                          totalTimeout: nil)
     expectHookModeContract(run)
     #expect(run.standardError.isEmpty,
             Comment(rawValue: "a not-running app is normal and must be silent: \(run.errorText)"))
@@ -619,7 +631,8 @@ func eachToolsOwnRecordedPayloadArrivesUnderItsOwnOrigin(_ tool: AgentTool) thro
     #expect(FileManager.default.fileExists(atPath: sandbox.path),
             "the node did not survive its process; this test is not about a stale node")
 
-    let run = try runShim(["--socket=\(sandbox.path)"], stdin: try fixture("stop.json"))
+    let run = try runShim(["--socket=\(sandbox.path)"], stdin: try fixture("stop.json"),
+                          totalTimeout: nil)
     expectHookModeContract(run)
     #expect(run.standardError.isEmpty,
             Comment(rawValue: "a stale node after a crash is normal and must be silent: \(run.errorText)"))
@@ -642,7 +655,8 @@ func eachToolsOwnRecordedPayloadArrivesUnderItsOwnOrigin(_ tool: AgentTool) thro
     let deaf = try #require(BoundSocket(at: sandbox.path, listening: true))
     defer { deaf.close() }
 
-    let run = try runShim(["--socket=\(sandbox.path)"], stdin: try fixture("stop.json"))
+    let run = try runShim(["--socket=\(sandbox.path)"], stdin: try fixture("stop.json"),
+                          totalTimeout: nil)
     expectHookModeContract(run)
 
     // Five seconds against a 1 s bound. The slack absorbs the CPU
@@ -704,7 +718,7 @@ func eachToolsOwnRecordedPayloadArrivesUnderItsOwnOrigin(_ tool: AgentTool) thro
     let (listener, collected) = try startCollectingListener(at: sandbox)
     defer { listener.stop() }
 
-    let run = try runShim(["--socket=\(sandbox.path)"], stdin: Data())
+    let run = try runShim(["--socket=\(sandbox.path)"], stdin: Data(), totalTimeout: nil)
     expectHookModeContract(run)
 
     shimPump(until: { !collected.all.isEmpty }, seconds: 1)
@@ -726,7 +740,7 @@ func eachToolsOwnRecordedPayloadArrivesUnderItsOwnOrigin(_ tool: AgentTool) thro
     defer { listener.stop() }
 
     let run = try runShim(["--tool=claudecode", "--socket=\(sandbox.path)"],
-                          stdin: try fixture("stop.json"))
+                          stdin: try fixture("stop.json"), totalTimeout: nil)
     expectHookModeContract(run)
 
     shimPump(until: { !collected.all.isEmpty }, seconds: 1)
@@ -747,7 +761,7 @@ func eachToolsOwnRecordedPayloadArrivesUnderItsOwnOrigin(_ tool: AgentTool) thro
     defer { listener.stop() }
 
     let run = try runShim(["--endpoint=/event/cursor", "--socket=\(sandbox.path)"],
-                          stdin: try fixture("stop.json"))
+                          stdin: try fixture("stop.json"), totalTimeout: nil)
     expectHookModeContract(run)
 
     shimPump(until: { !collected.all.isEmpty }, seconds: 1)
@@ -761,7 +775,7 @@ func eachToolsOwnRecordedPayloadArrivesUnderItsOwnOrigin(_ tool: AgentTool) thro
     // standard output: the same binary is wired into an agent, and a user who
     // runs it by hand must not learn a habit the hook path forbids.
     // `coffee-bar-probe` writes its usage to standard error for the same reason.
-    let run = try runShim(["--help"], stdin: Data())
+    let run = try runShim(["--help"], stdin: Data(), totalTimeout: nil)
     #expect(!run.wasKilled)
     #expect(run.reason == .exit)
     #expect(run.status == 0, "asking for help is not an error")
@@ -930,7 +944,7 @@ private final class PseudoTerminal {
     let payload = try fixture("post-tool-use.json")
     var samples: [TimeInterval] = []
     for _ in 0..<5 {
-        let run = try runShim(["--socket=\(sandbox.path)"], stdin: payload)
+        let run = try runShim(["--socket=\(sandbox.path)"], stdin: payload, totalTimeout: nil)
         expectHookModeContract(run)
         samples.append(run.elapsed)
     }
