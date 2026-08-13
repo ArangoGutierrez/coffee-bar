@@ -24,16 +24,24 @@ import SwiftUI
 /// testable: `rgb` answers `nil` for it, and `CaseIterable` then carries it
 /// through the contrast walk described below.
 ///
-/// The app renders that pigment WITHOUT the role. `PanelView` writes the
-/// literal `.foregroundStyle(.orange)` on its four advisory lines — the ones
+/// AND THE APP NO LONGER RENDERS THAT PIGMENT ANYWHERE. It used to: `PanelView`
+/// wrote the semantic orange as a literal on its four advisory lines — the ones
 /// driven by `suppressionAdvisory`, `hookAdvisory`, `ingestAdvisory` and
-/// `staleHelperAdvisory` — and `orangeIsSpentOnlyOnTheAdvisories` in
-/// `PanelPaletteWiring_test.swift` asserts that literal appears exactly FOUR
-/// times. So wiring those lines through `brand(.warning)` later means moving
-/// that count guard in the same change; doing one without the other turns the
-/// guard red. Issue #81 added the fourth and moved the count in the same
-/// commit, which is that note working. The advisories' light-appearance
-/// contrast is tracked as issue #30 and is not fixed here.
+/// `staleHelperAdvisory` — without ever naming this role. Issue #30 measured
+/// what that cost: as caption TEXT on a light backdrop the pigment reaches
+/// 1.75:1 to 2.31:1 against a 4.5:1 floor. Those lines now render through
+/// `advisoryRow`, which carries an `exclamationmark.triangle` and a `.primary`
+/// sentence, so the meaning is in the SHAPE and the panel is back inside the
+/// rule assets/art/README.md line 22 states: neither accent carries body text.
+///
+/// So `brand(.warning)` is not the route back. It resolves to the same
+/// systemOrange the advisories just gave up, and
+/// `advisoriesCarryShapeRatherThanColour` in `PanelPaletteWiring_test.swift`
+/// refuses it by reading the ARGUMENT of every paint modifier on an advisory
+/// and allowing only the two neutral semantics — which is why that guard is a
+/// shape check and not the count of `.orange` literals it replaced. A count
+/// could only have moved from four to zero, and zero is also what a panel with
+/// no advisories at all scores.
 ///
 /// `CaseIterable` is load-bearing. `fixedRolesClearNonTextContrast` walks
 /// `allCases` and skips a role only because `rgb` answered `nil`. A role added
@@ -140,17 +148,21 @@ public enum BrandPalette {
     /// The system colour tracks the appearance and the Increase Contrast
     /// setting on its own, and a hex pinned here would freeze it.
     ///
-    /// It does NOT clear text contrast in the light appearance. Measured as
-    /// TEXT, systemOrange reaches 1.75:1 to 2.31:1 on plausible light
-    /// backdrops, where 4.5:1 is required; on dark backdrops it reaches 7.02:1
-    /// to 8.11:1. That light-appearance gap is a KNOWN one. It is pre-existing
-    /// on `main` and tracked as separate work, not fixed here, because any
-    /// orange that clears 4.5:1 on a light backdrop has darkened to about
-    /// `#8C5200` — which is no longer distinguishable from the roast `state`
-    /// colour, so the fix would delete the distinction it exists to draw.
+    /// It does NOT clear text contrast in the light appearance, and that is
+    /// permanent rather than pending. Measured as TEXT, systemOrange reaches
+    /// 1.75:1 to 2.31:1 on plausible light backdrops, where 4.5:1 is required;
+    /// on dark backdrops it reaches 7.02:1 to 8.11:1. No darker orange rescues
+    /// it: anything clearing 4.5:1 on a light backdrop has reached about
+    /// `#8C5200`, which is no longer distinguishable from the roast `state`
+    /// colour, so that fix would delete the distinction it exists to draw.
     ///
-    /// Until then: `.warning` marks an icon or a rule, never body text in the
-    /// light appearance.
+    /// Issue #30 was therefore answered by spending SHAPE instead. The panel's
+    /// advisories dropped the pigment for a symbol and a `.primary` sentence;
+    /// see `advisoryRow` in `PanelView.swift`. This value is unchanged because
+    /// nothing here was wrong — the role was never the carrier.
+    ///
+    /// So: `.warning` marks an icon or a rule, never body text in the light
+    /// appearance, and nothing in the app asks for it today.
     public static func rgb(_ role: ColorRole,
                            scheme: ColorScheme,
                            contrast: ColorSchemeContrast) -> RGB? {
