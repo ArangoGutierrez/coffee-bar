@@ -420,8 +420,8 @@ private func describePackage() throws -> ResolvedPackage {
 /// LIMIT, stated rather than hidden: this is a small lexer, not the Swift
 /// grammar. It handles `//`, nested `/* */`, escapes, multi-line `"""` and raw
 /// `#"…"#` strings, all of which are what the scanned targets contain today. A
-/// BARE REGEX LITERAL (`/…/`) would confuse it; the package uses none, and
-/// `swiftCodeWithoutCommentsKeepsCodeAndDropsComments` pins the behaviour.
+/// BARE REGEX LITERAL (`/…/`) it cannot tokenise at all, so it REFUSES to
+/// answer for source that might carry one — see `swiftSourceReading`.
 ///
 /// Internal rather than `private`, which in Swift is scoped to this file.
 /// `PreferencesView_test.swift` needs the same discriminator for the same
@@ -429,10 +429,42 @@ private func describePackage() throws -> ResolvedPackage {
 /// `contains` there is satisfied by the comment describing the render it
 /// deleted. One tested stripper in this target, not two.
 func swiftCodeWithoutComments(_ source: String) -> String {
+    swiftSourceReading(source).code
+}
+
+/// What one walk of `source` found: the code, and any reason to distrust it.
+struct SwiftSourceReading {
+    /// `source` with every COMMENT removed and every STRING LITERAL kept.
+    let code: String
+
+    /// The first line carrying something that might be a bare regex literal,
+    /// or `nil` when the walk met none.
+    ///
+    /// A reading with a suspect is a reading `code` cannot be trusted for: the
+    /// walk took the literal's contents for something else and everything
+    /// after it may be mis-classified in either direction.
+    let regexLiteralSuspect: String?
+}
+
+/// One walk of `source`, reported whole: the stripped code, and whether the
+/// walk met anything it cannot tokenise.
+///
+/// Separate from `swiftCodeWithoutComments` so the pinning table can state what
+/// the lexer DOES with a regex literal without tripping the refusal that
+/// entry point makes of it.
+///
+/// The suspect test is Swift's own disambiguation (SE-0354): a bare regex
+/// literal may not open with a space or tab, may not close with one, and lives
+/// on a single line. `total / 2 / 1` is division under that rule and reads
+/// clean; `/"/` is not, and refuses. It is deliberately one-sided — it can cry
+/// wolf over source that is really division, and that costs a false alarm,
+/// where staying silent over a real literal costs a wrong GREEN.
+func swiftSourceReading(_ source: String) -> SwiftSourceReading {
     let characters = Array(source)
     var kept: [Character] = []
     kept.reserveCapacity(characters.count)
     var index = 0
+    var regexLiteralSuspect: String?
 
     /// Whether `text` sits at `start`.
     func matches(_ text: [Character], at start: Int) -> Bool {
@@ -441,6 +473,38 @@ func swiftCodeWithoutComments(_ source: String) -> String {
             return false
         }
         return true
+    }
+
+    /// The whole line `start` sits on, so the refusal can quote it.
+    func line(around start: Int) -> String {
+        var from = start
+        while from > 0 && characters[from - 1] != "\n" { from -= 1 }
+        var through = start
+        while through < characters.count && characters[through] != "\n" { through += 1 }
+        return String(characters[from ..< through])
+    }
+
+    /// Whether the `/` at `start` could open a bare regex literal.
+    ///
+    /// Reached only for a `/` that opens neither `//` nor `/*`. It asks for the
+    /// two halves SE-0354 requires of the literal and forbids of division: a
+    /// non-blank character straight after the opening delimiter, and a closing
+    /// `/` later on the SAME line with a non-blank character straight before
+    /// it. A `//` or `/*` reached while looking for that close ends the search
+    /// — the rest of the line is a comment, so no closing delimiter is there.
+    func regexLiteralMightOpen(at start: Int) -> Bool {
+        let opening = start + 1
+        guard opening < characters.count, !characters[opening].isWhitespace else { return false }
+
+        var cursor = opening
+        while cursor < characters.count && characters[cursor] != "\n" {
+            if matches(["/", "/"], at: cursor) || matches(["/", "*"], at: cursor) { return false }
+            if characters[cursor] == "/"
+                && characters[cursor - 1] != "\\"
+                && !characters[cursor - 1].isWhitespace { return true }
+            cursor += 1
+        }
+        return false
     }
 
     while index < characters.count {
@@ -479,6 +543,12 @@ func swiftCodeWithoutComments(_ source: String) -> String {
 
         if hashes > 0 {
             // A `#` that opens no string: an attribute, a macro, `#filePath`.
+            // `#/` is the one thing it can be that this walk cannot read — an
+            // EXTENDED regex literal, which unlike the bare form may run over
+            // several lines, so `regexLiteralMightOpen` would not see its close.
+            if regexLiteralSuspect == nil && matches(["/"], at: index + hashes) {
+                regexLiteralSuspect = line(around: index)
+            }
             kept.append(contentsOf: characters[index ..< index + hashes])
             index += hashes
             continue
@@ -509,11 +579,18 @@ func swiftCodeWithoutComments(_ source: String) -> String {
             continue
         }
 
+        // Reached only by a `/` that opens neither comment: division, or a bare
+        // regex literal this walk is about to read as anything but one.
+        if regexLiteralSuspect == nil && characters[index] == "/"
+            && regexLiteralMightOpen(at: index) {
+            regexLiteralSuspect = line(around: index)
+        }
+
         kept.append(characters[index])
         index += 1
     }
 
-    return String(kept)
+    return SwiftSourceReading(code: String(kept), regexLiteralSuspect: regexLiteralSuspect)
 }
 
 /// The argument list of every `call` in `code`, one string per call site.
@@ -1697,60 +1774,115 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     //
     // Each case is a literal in, a literal out — never the function's own logic
     // re-run as the expectation.
-    let cases: [(name: String, source: String, expected: String)] = [
+    //
+    // `suspect` is the fourth column and the negative control for the refusal
+    // issue #54 added: every case carrying `nil` there is ordinary Swift the
+    // walk can tokenise, INCLUDING the two division cases, and each one must
+    // read clean. A detector that refused any of them would take every scan in
+    // this file down on correct code.
+    let cases: [(name: String, source: String, expected: String, suspect: String?)] = [
         ("a line comment goes, the code around it stays",
          "let a = 1 // PreventUserIdleDisplaySleep\nlet b = 2",
-         "let a = 1 \nlet b = 2"),
+         "let a = 1 \nlet b = 2",
+         nil),
 
         ("a doc comment naming the constant goes",
          "/// does **not** hold `PreventUserIdleDisplaySleep`.\nlet a = 1",
-         "\nlet a = 1"),
+         "\nlet a = 1",
+         nil),
 
         ("a block comment goes and keeps its line breaks",
          "let a = 1\n/* caffeinate -d\n   beginActivity */\nlet b = 2",
-         "let a = 1\n\n\nlet b = 2"),
+         "let a = 1\n\n\nlet b = 2",
+         nil),
 
         ("nested block comments close at the outer end, not the inner one",
          "let a = 1 /* outer /* inner */ still comment */ let b = 2",
-         "let a = 1  let b = 2"),
+         "let a = 1  let b = 2",
+         nil),
 
         // The escape route that stripping literals would open.
         ("a string literal survives, contents and all",
          "IOPMAssertionCreateWithName(\"PreventUserIdleDisplaySleep\" as CFString)",
-         "IOPMAssertionCreateWithName(\"PreventUserIdleDisplaySleep\" as CFString)"),
+         "IOPMAssertionCreateWithName(\"PreventUserIdleDisplaySleep\" as CFString)",
+         nil),
 
         ("`//` inside a string literal opens no comment",
          "let url = \"https://example.com/beginActivity\"\nlet a = 1",
-         "let url = \"https://example.com/beginActivity\"\nlet a = 1"),
+         "let url = \"https://example.com/beginActivity\"\nlet a = 1",
+         nil),
 
         ("`/*` inside a string literal opens no comment",
          "let glob = \"/*\"\nlet a = 1",
-         "let glob = \"/*\"\nlet a = 1"),
+         "let glob = \"/*\"\nlet a = 1",
+         nil),
 
         ("an escaped quote does not end the string early",
          "let a = \"he said \\\"caffeinate\\\" loudly\" // gone\nlet b = 2",
-         "let a = \"he said \\\"caffeinate\\\" loudly\" \nlet b = 2"),
+         "let a = \"he said \\\"caffeinate\\\" loudly\" \nlet b = 2",
+         nil),
 
         ("a raw string keeps its contents and its delimiters",
          "let a = #\"a \\#(x) caffeinate \"quoted\" here\"# // gone",
-         "let a = #\"a \\#(x) caffeinate \"quoted\" here\"# "),
+         "let a = #\"a \\#(x) caffeinate \"quoted\" here\"# ",
+         nil),
 
         ("a multi-line string keeps everything between the fences",
          "let a = \"\"\"\n// not a comment\ncaffeinate\n\"\"\"\nlet b = 2",
-         "let a = \"\"\"\n// not a comment\ncaffeinate\n\"\"\"\nlet b = 2"),
+         "let a = \"\"\"\n// not a comment\ncaffeinate\n\"\"\"\nlet b = 2",
+         nil),
 
         ("a `#` that opens no string is kept",
          "let p = #filePath // gone",
-         "let p = #filePath "),
+         "let p = #filePath ",
+         nil),
 
         ("division is not a comment",
          "let half = total / 2 / 1",
-         "let half = total / 2 / 1"),
+         "let half = total / 2 / 1",
+         nil),
+
+        ("division with no spaces around it is still not a regex literal",
+         "let half = total/2 // gone",
+         "let half = total/2 ",
+         nil),
+
+        // Issue #54, pinned as a fact rather than as prose. Read the third
+        // column: `// caffeinate` comes back as CODE. The `"` inside the regex
+        // literal opens a string as far as this walk is concerned, and the walk
+        // then copies the rest of the file verbatim — so a scan asking whether
+        // a name appears in code is answered by a comment. That is why the
+        // fourth column is not `nil`, and why `swiftCodeWithoutComments`
+        // refuses on this source instead of returning the second column.
+        ("a bare regex literal is source this lexer cannot read",
+         "let quote = /\"/\n// caffeinate\nlet a = 1",
+         "let quote = /\"/\n// caffeinate\nlet a = 1",
+         "let quote = /\"/"),
+
+        // The extended form may run over several lines, so the closing `/#`
+        // need not be on the line that opens it. `#/` is enough on its own:
+        // nothing else in Swift spells it.
+        ("an extended regex literal is source this lexer cannot read either",
+         "let quote = #/\n\"\n/#\nlet a = 1",
+         "let quote = #/\n\"\n/#\nlet a = 1",
+         "let quote = #/"),
     ]
 
     for testCase in cases {
-        #expect(swiftCodeWithoutComments(testCase.source) == testCase.expected,
-                "\(testCase.name): got \(swiftCodeWithoutComments(testCase.source).debugDescription)")
+        let reading = swiftSourceReading(testCase.source)
+        #expect(reading.code == testCase.expected,
+                "\(testCase.name): got \(reading.code.debugDescription)")
+        #expect(reading.regexLiteralSuspect == testCase.suspect,
+                "\(testCase.name): suspect \(String(describing: reading.regexLiteralSuspect))")
+
+        // The entry point every guard calls returns the reading's code for
+        // source the walk can tokenise, and only for that source. What it does
+        // with a suspect is
+        // `aScannedFileCarryingARegexLiteralRefusesRatherThanReportingGreen`.
+        if testCase.suspect == nil {
+            #expect(swiftCodeWithoutComments(testCase.source) == testCase.expected,
+                    "\(testCase.name): entry point got \(swiftCodeWithoutComments(testCase.source).debugDescription)")
+        }
     }
 }
 
