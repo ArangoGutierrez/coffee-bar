@@ -24,11 +24,12 @@ import Darwin
 //   after both               flags=0x101c010   both bits
 //
 // `getpriority` reports only the SELF channel. It reads 0 for an externally
-// demoted process even when that process asks about ITSELF. `DemotionProbe.swift:66`
-// already records this as an instrument limit — "the reading is only conclusive
-// when the target is us" — and it is a limit, never a statement about the
-// machine. An earlier version of this file read four consistent zeroes out of
-// that blind instrument and concluded that cross-process demotion does nothing.
+// demoted process even when that process asks about ITSELF.
+// `DemotionProbe.swift` "The reading is only conclusive when the target is us"
+// already records this as an instrument limit — and it is a limit, never a
+// statement about the machine. An earlier version of this file read four
+// consistent zeroes out of that blind instrument and concluded that
+// cross-process demotion does nothing.
 // It does. `getpriorityCannotReportAnotherProcessDarwinBackgroundState` pins the
 // limit so nobody promotes it into a property again.
 //
@@ -239,7 +240,8 @@ private func readReport(at path: String) -> String? {
     // Pins the premise. Without this the kill below would prove nothing: a
     // helper that never reached background state cannot demonstrate that the
     // state goes away. `1` is what `getpriority` reports for a process that
-    // demoted ITSELF, matching `SpikeProbe_test.swift:124`.
+    // demoted ITSELF, matching the test that
+    // `SpikeProbe_test.swift` "pins the two things S5 actually claims".
     try #require(reportReaches("1", at: helper.stateFile, within: 10),
                  "the child never entered Darwin background state; every assertion below would be vacuous")
 

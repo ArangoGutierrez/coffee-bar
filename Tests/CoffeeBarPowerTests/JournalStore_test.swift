@@ -565,7 +565,8 @@ private var packageRootForSyncCheck: URL {
     // `F_FULLFSYNC` with a no-op left that shape green.
     //
     // They protect different things. The first makes the journal's BYTES
-    // durable; the second (JournalStore.swift:141-150) makes its NAME durable,
+    // durable; the second makes its NAME durable — the rule is stated at the
+    // barrier itself, `JournalStore.swift` "does not make its NAME durable" —
     // because the rename is a directory metadata change and a power failure can
     // otherwise leave the entry absent while the mutation it describes has
     // already landed.

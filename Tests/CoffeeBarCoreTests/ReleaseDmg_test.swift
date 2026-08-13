@@ -200,8 +200,9 @@ private func makeFixtureApp(at root: URL) throws {
 /// invariant — at most one cycle in flight — where the cycle actually is, and
 /// leaves this file's five text-only guards parallel. The isolation is the same
 /// either way, and no wider: exactly like `.serialized` (the caveat is recorded
-/// at `ProbeRun_test.swift:29`) this orders THIS file's cycles and nothing
-/// else. Measured: no other test in the package shells out to `hdiutil`. One
+/// in `ProbeRun_test.swift` "orders a suite's own tests, not other suites") this
+/// orders THIS file's cycles and nothing else. Measured: no other test in the
+/// package shells out to `hdiutil`. One
 /// added elsewhere would have to take this same lock.
 private let imageCycleLock = NSLock()
 
@@ -341,8 +342,9 @@ private func withProducedImage(_ body: (URL, URL, String) throws -> Void) throws
     // `theReleaseFactsOnThePageAreTheOnesInTheChangelog` fails at the END of the
     // release — after the artifact is already built and notarised.
     //
-    // A LITERAL list, duplicated from `SiteClaims_test.swift:547` on purpose and
-    // for the reason stated there: deriving it from the script would let the
+    // A LITERAL list, duplicated on purpose from the one that
+    // `SiteClaims_test.swift` "let the two agree on nothing at all" explains,
+    // and for the reason stated there: deriving it from the script would let the
     // script agree with itself about an empty table. These two lists are meant
     // to be compared by a human when either changes.
     for fact in ["File", "Size", "SHA-256", "Architecture",
