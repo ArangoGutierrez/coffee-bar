@@ -69,7 +69,8 @@ let package = Package(
         // and `scripts/build-app.sh` builds `--product coffee-bar`.
         .target(name: "CoffeeBarTestSupport", path: "Tests/CoffeeBarTestSupport",
                 swiftSettings: [.swiftLanguageMode(.v6)]),
-        .testTarget(name: "CoffeeBarCoreTests", dependencies: ["CoffeeBarCore"],
+        .testTarget(name: "CoffeeBarCoreTests",
+                    dependencies: ["CoffeeBarCore", "CoffeeBarTestSupport"],
                     swiftSettings: [.swiftLanguageMode(.v6)]),
         .testTarget(name: "CoffeeBarPowerTests", dependencies: ["CoffeeBarPower"],
                     swiftSettings: [.swiftLanguageMode(.v6)]),

@@ -3,6 +3,7 @@
 
 import Foundation
 import Testing
+import CoffeeBarTestSupport
 @testable import CoffeeBarCore
 
 /// Guards the user-facing documents' factual claims against the constants that
@@ -411,6 +412,45 @@ func everyDocumentedSurfaceIsReadableAndSubstantial(_ name: String) throws {
     let site = try surfaceProse("site/index.html")
     #expect(try !matches(hookCountPattern, in: site).isEmpty, "no '<number> hooks' phrase on the site")
     #expect(try !matches(percentPattern, in: site).isEmpty, "no percentage on the site")
+
+    // `controlOfferPattern` is pinned against FIXTURES and not against a
+    // surface, and that is a measurement rather than a preference: it yields
+    // ZERO phrases across all eleven documented surfaces today, so a
+    // surface-anchored pin would be red on a correct tree.
+    //
+    // Which is the point. `everyControlNamedExistsInTheProduct` sweeps eleven
+    // surfaces and its loop body never runs — the guard is live and judging
+    // nothing, and nothing said so, because this test pinned four patterns and
+    // left that one alone. The limit is now STATED: these cases prove the
+    // pattern still reads the shape it was written for, never that a document
+    // still carries one.
+    //
+    // The positive is the sentence that actually shipped. "stay awake while
+    // blocked" was invented from the parameter name `holdAwakeWhileBlocked` and
+    // named a control existing in no build.
+    let shipped = try matches(controlOfferPattern,
+                              in: "unless you turn on \"stay awake while blocked\"")
+    #expect(shipped.count == 1,
+            "controlOfferPattern found \(shipped.count) offers in the sentence that shipped the false claim")
+    #expect(shipped.first?[1] == "stay awake while blocked",
+            "controlOfferPattern read the offered control as \(shipped.first?[1] ?? "<no match>")")
+
+    // The NEGATIVE half, which is what stops a pattern rotting into one that
+    // matches everything. Each case removes exactly one of the three things the
+    // pattern requires: the verb, the quoted phrase, and a phrase long enough
+    // to be a control name.
+    let notAnOffer = [
+        "the panel shows \"a working session\" while an agent runs",
+        "turn on the lamp before you read",
+        "enable \"on\"",
+    ]
+    for text in notAnOffer {
+        #expect(try matches(controlOfferPattern, in: text).isEmpty, """
+            controlOfferPattern read "\(text)" as an offer of a control. A \
+            pattern that matches an ordinary quoted phrase sends every reader \
+            hunting a control that was never offered.
+            """)
+    }
 }
 
 private let hookCountPattern = "\\b(three|four|five|six|seven)\\b[\\s\\S]{0,25}?hooks?"
@@ -647,15 +687,21 @@ func aBoundaryPhraseMatchesTheRealBoundary(_ name: String) throws {
 
 // MARK: - Claim 3: a named control must exist in the product
 
+/// A quoted phrase in a sentence that offers it as something the reader can
+/// operate. "unless you turn on \"stay awake while blocked\"" is the shape
+/// that shipped a control existing in no build.
+///
+/// File scope rather than a local, so `theGuardStillMatchesRealClaims` can pin
+/// it. It was a local, and it was the ONE pattern in this file nothing pinned —
+/// which is exactly why it could go quiet without anybody noticing.
+private let controlOfferPattern =
+    "(?:turn on|turn off|enable|disable|toggle|switch on|switch off|tick|check)"
+    + "[^\\n\"]{0,40}\"([^\"\\n]{4,60})\""
+
 @Test(arguments: documentedSurfaces)
 func everyControlNamedExistsInTheProduct(_ name: String) throws {
     let prose = try surfaceProse(name)
-
-    // A quoted phrase in a sentence that offers it as something the reader can
-    // operate. "unless you turn on \"stay awake while blocked\"" is the shape
-    // that shipped a control existing in no build.
-    let controlVerbs = "(?:turn on|turn off|enable|disable|toggle|switch on|switch off|tick|check)"
-    let found = try matches(controlVerbs + "[^\\n\"]{0,40}\"([^\"\\n]{4,60})\"", in: prose)
+    let found = try matches(controlOfferPattern, in: prose)
 
     for m in found {
         let phrase = m[1]
@@ -664,17 +710,78 @@ func everyControlNamedExistsInTheProduct(_ name: String) throws {
     }
 }
 
-/// True when any `.swift` file under `Sources/` contains `phrase` verbatim.
+/// True when the CODE of any `.swift` file under `Sources/` contains `phrase`.
 private func sourcesContain(_ phrase: String) -> Bool {
-    let sources = repoRoot().appending(path: "Sources")
-    guard let walker = FileManager.default.enumerator(atPath: sources.path) else { return false }
+    codeContains(phrase, inSwiftUnder: repoRoot().appending(path: "Sources"))
+}
+
+/// True when the CODE of any `.swift` file under `directory` contains `phrase`.
+///
+/// Takes the directory rather than reading `Sources/` itself, so
+/// `aControlNamedOnlyInACommentIsNotAControlThatExists` can hand it two files
+/// that differ by nothing but a comment marker.
+func codeContains(_ phrase: String, inSwiftUnder directory: URL) -> Bool {
+    guard let walker = FileManager.default.enumerator(atPath: directory.path) else { return false }
     for case let rel as String in walker where rel.hasSuffix(".swift") {
-        let url = sources.appending(path: rel)
-        if let body = try? String(contentsOf: url, encoding: .utf8), body.contains(phrase) {
-            return true
-        }
+        let url = directory.appending(path: rel)
+        guard let body = try? String(contentsOf: url, encoding: .utf8) else { continue }
+        if swiftCodeWithoutComments(body).contains(phrase) { return true }
     }
     return false
+}
+
+/// A control named only in a COMMENT is not a control the product offers.
+///
+/// **Named bug this catches, and it is issue #40.** `sourcesContain` was a raw
+/// `body.contains` over every `.swift` file under `Sources/`. The false claim
+/// this whole file was written for — "unless you turn on \"stay awake while
+/// blocked\"", a control that existed in no build — is satisfied by a doc
+/// comment that merely DESCRIBES such a control. The guard would report the
+/// control real because the prose explaining it is real, which is a guard
+/// certifying a claim with the claim.
+///
+/// **A TEMPORARY DIRECTORY, never `Sources/`.** Anchoring the pin on whatever
+/// phrase happens to sit in a comment in the tree today is a fixture that stops
+/// discriminating the moment somebody edits that comment, and stops silently.
+/// Two files differing by nothing but a `/// ` prefix cannot.
+@Test func aControlNamedOnlyInACommentIsNotAControlThatExists() throws {
+    let fixtures = FileManager.default.temporaryDirectory
+        .appending(path: "coffee-bar-control-scan-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: fixtures, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: fixtures) }
+
+    // Not a phrase this repository uses, so the fixture cannot be satisfied by
+    // something the walk found elsewhere.
+    let phrase = "hold while the lid is shut"
+
+    let described = """
+        /// The panel offers "\(phrase)" beside the Serving control.
+        let title = "a control with another name"
+        """
+    try described.write(to: fixtures.appending(path: "DescribedOnly.swift"),
+                        atomically: true, encoding: .utf8)
+
+    #expect(codeContains(phrase, inSwiftUnder: fixtures) == false, """
+        a doc comment naming "\(phrase)" satisfied the control-existence scan. \
+        Every false control claim this file exists to catch arrives with prose \
+        explaining the control, so a scan that reads comments passes over the \
+        exact defect it was written for.
+        """)
+
+    // The other direction, and it is what stops the check above passing because
+    // the walk reads nothing at all. Same directory, same phrase, in CODE.
+    let offered = """
+        let title = "\(phrase)"
+        """
+    try offered.write(to: fixtures.appending(path: "ReallyOffered.swift"),
+                      atomically: true, encoding: .utf8)
+
+    #expect(codeContains(phrase, inSwiftUnder: fixtures) == true, """
+        "\(phrase)" is a plain string literal in \
+        \(fixtures.appending(path: "ReallyOffered.swift").path) and the scan \
+        still did not find it, so this walk reads nothing and every control \
+        claim would fail against a correct product.
+        """)
 }
 
 // MARK: - Claim 4: the documented shim command works as documented
