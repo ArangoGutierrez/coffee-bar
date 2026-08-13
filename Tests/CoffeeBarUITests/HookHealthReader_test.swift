@@ -189,16 +189,24 @@ private func scratchCopy(of fixture: String) throws -> URL {
             "statuses() reached a Claude Code file this reader does not cover")
 }
 
-@Test func claudeCodeAloneIsExemptFromTheExistenceGate() throws {
-    // Named bug this catches, and it shipped: the gate applied to Claude Code
-    // as well, so a user who had never created `~/.claude/settings.json` got no
+@Test func theToolTheUserRunsIsExemptFromTheExistenceGateAndNoToolIsExemptByName() throws {
+    // **Issue #51.** This check replaces `claudeCodeAloneIsExemptFromTheExistenceGate`,
+    // whose subject — a hard-coded `tool == .claudeCode` branch in
+    // `status(for:)` — this task deletes. It asserts the same PROPERTY the old
+    // one did, from the signal that now supplies it: the user says which tools
+    // they run, so an absent file for a tool they DO run still reaches a
+    // verdict, and an absent file for a tool they do not run still reaches
+    // none.
+    //
+    // Named bug the old check caught, and it shipped: the gate applied to every
+    // tool, so a user who had never created `~/.claude/settings.json` got no
     // advisory at all. README says coffee-bar does nothing until those hooks
     // exist, so that user needs the advice most.
     //
-    // An absent file means "not set up yet" for Claude Code, the primary
-    // integration and the first-run path. It means "does not use this tool" for
-    // the other two. The discriminating pair is asserted in ONE check, because
-    // the exemption is only correct if it is narrow.
+    // Named bug THIS check adds: the exemption surviving as a special case on
+    // `.claudeCode`. `advising: []` is the discriminator — with the old branch
+    // still in place, Claude Code reaches `.unreadable` there and the first
+    // expectation goes red.
     let scratch = URL(fileURLWithPath: NSTemporaryDirectory())
         .appending(path: "coffee-bar-health-\(UUID().uuidString)")
     let files = FileManager.default
@@ -214,13 +222,44 @@ private func scratchCopy(of fixture: String) throws -> URL {
                                               .codex: absent,
                                               .cursor: absent])
 
-    #expect(reader.status(for: .claudeCode) == .unreadable,
-            "an absent Claude Code file gives no verdict; a first-run user is told nothing")
-    #expect(reader.status(for: .codex) == nil, "an absent Codex file reached a verdict")
-    #expect(reader.status(for: .cursor) == nil, "an absent Cursor file reached a verdict")
+    // NOBODY named. No file, no verdict — for Claude Code exactly as for the
+    // other two.
+    #expect(reader.statuses(advising: []) == [:],
+            "a tool nobody named reached a verdict with no file: \(reader.statuses(advising: []))")
+    #expect(reader.status(for: .claudeCode) == nil,
+            "Claude Code is still exempt by name; the exemption moved rather than went")
 
-    #expect(reader.statuses() == [.claudeCode: .unreadable],
-            "statuses() reported \(reader.statuses())")
+    // The tool the user RUNS, with no file: the first-run state, and the one
+    // this reader must speak about. `.codex` rather than `.claudeCode`, so the
+    // check cannot pass on the deleted branch.
+    #expect(reader.statuses(advising: [.codex]) == [.codex: .unreadable],
+            "statuses(advising: [.codex]) reported \(reader.statuses(advising: [.codex]))")
+    #expect(reader.status(for: .cursor, advising: [.codex]) == nil,
+            "naming one tool exempted another")
+
+    // What an unset selection assumes, and the cohort the old exemption
+    // protected: Claude Code, told about even with no file on disk.
+    #expect(reader.statuses(advising: [.claudeCode]) == [.claudeCode: .unreadable],
+            "statuses(advising: [.claudeCode]) reported \(reader.statuses(advising: [.claudeCode]))")
+}
+
+@Test func aToolWithAFileOnDiskIsReadWhetherOrNotItWasNamed() throws {
+    // The other half of the gate, and the half that keeps issue #51 from
+    // silencing an existing user: the file being there is still evidence, so a
+    // reader told about nobody still reports what it can see.
+    //
+    // Named bug this catches: `selected.contains(tool)` replacing the existence
+    // test rather than joining it. Every user who has never opened Preferences
+    // would then hear nothing about the tool they actually run.
+    let root = packageRoot.appending(path: "Tests/Fixtures")
+    let reader = HookHealthReader(hookFiles: [
+        .claudeCode: root.appending(path: "claude-settings/missing-stop.json"),
+        .codex: root.appending(path: "codex-settings/wired.json"),
+    ])
+
+    #expect(reader.status(for: .claudeCode, advising: []) == .missing(["Stop"]))
+    #expect(reader.status(for: .codex, advising: [.cursor]) == .wired,
+            "a file on disk went unread because its tool was not named")
 }
 
 @Test func eachToolIsReadThroughItsOwnParserAndItsOwnFile() throws {

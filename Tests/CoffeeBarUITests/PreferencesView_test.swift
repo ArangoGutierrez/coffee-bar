@@ -369,6 +369,13 @@ private let versionSurfaces = [(file: "PanelView.swift", type: "PanelView"),
         (needle: "$model.holdDisplayAwake", braces: 0, control: "the Display picker", enclosing: "nothing"),
         (needle: "Slider(", braces: 1, control: "the Battery floor slider", enclosing: "its HStack row"),
         (needle: "$model.quietEverythingElse", braces: 0, control: "the Quiet everything else toggle", enclosing: "nothing"),
+        // Issue #51's control, and the two braces are its row rather than a
+        // condition: the `ForEach` closure over `AgentTool.allCases`, then the
+        // `HStack` that carries the path and the buttons. `Toggle(isOn:` and not
+        // `Toggle(`, because the Quiet everything else toggle above spells its
+        // label first and `braceDepth(atFirst:)` would find that one.
+        (needle: "Toggle(isOn:", braces: 2, control: "the agent tool selection",
+         enclosing: "its ForEach row and that row's HStack"),
     ]
 
     for control in allowedNesting {
@@ -469,6 +476,49 @@ private let versionSurfaces = [(file: "PanelView.swift", type: "PanelView"),
             next tool uncopyable and nothing here would see it.
             """)
     }
+}
+
+@Test func everyToolRowOffersTheChoiceTheAdvisoryIsNarrowedBy() throws {
+    // Issue #51: the user says which tools they run, and until this window
+    // offers that choice the setting is one only `defaults write` can reach.
+    //
+    // Named bug this catches: the model gaining `advises(_:)` and
+    // `setAdvises(_:for:)` with nothing bound to them. Every model-side check
+    // stays green — the property works perfectly — and the window ships with no
+    // way to answer the question, which is the state this task found the
+    // product in.
+    //
+    // BOTH DIRECTIONS, and that is what makes it a control rather than a
+    // readout. A row that reads `model.advises(tool)` and never writes back is a
+    // checkbox that cannot be ticked; one that writes without reading shows the
+    // wrong state until the window is reopened.
+    //
+    // Scoped to `body` with the same two `braceBlock` calls the guards above
+    // use, and for the same reason: a `contains` over the whole file is
+    // satisfied by a helper no rendered surface reaches.
+    // `everyMovedControlIsRenderedAsUnconditionallyAsTheHeadingsAboveIt` holds
+    // the reachability half, through the entry this task adds to its table.
+    let code = try surfaceCode(named: "PreferencesView.swift")
+    let declared = try #require(braceBlock(after: "struct PreferencesView: View", in: code), """
+        PreferencesView.swift declares no `struct PreferencesView: View`, so \
+        this guard names a surface the package no longer has.
+        """)
+    let body = try #require(braceBlock(after: "var body: some View", in: declared.block),
+                            "PreferencesView declares no body to render a section into.")
+
+    #expect(body.block.contains("model.advises("), """
+        PreferencesView.body never reads which tools the user runs, so the \
+        selection control shows a state the panel does not act on.
+        """)
+    #expect(body.block.contains("model.setAdvises("), """
+        PreferencesView.body never records the user's choice, so the only way \
+        to reach the setting issue #51 adds is `defaults write`.
+        """)
+    #expect(body.block.contains("ServingModel.agentToolsLabel"), """
+        PreferencesView.body composes its own sentence about the selection. M1 \
+        design §5.4 rules out asserting on rendered AppKit text, so a sentence \
+        written here is a sentence no check reads.
+        """)
 }
 
 /// The label the copy button carries, read out of `PreferencesView.body`.
