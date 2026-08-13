@@ -109,6 +109,9 @@ private let syntheticReasonSentinel = "SYNTHETIC-FIXTURE-REASON-1f4a9c"
 /// Reported as a THROW and not as an empty list: outside a git checkout — a
 /// source tarball, for example — an empty list would fail the count assert with
 /// a message blaming the repo root, which sends the reader to the wrong place.
+///
+/// Private even though `trackedTextFiles()` below is not: untyped `throws`
+/// erases this to `any Error` at the call site, and no caller names the type.
 private struct GitListingFailed: Error, CustomStringConvertible {
     let status: Int32
     var description: String {
@@ -122,7 +125,13 @@ private struct GitListingFailed: Error, CustomStringConvertible {
 /// public repository by being COMMITTED, and an untracked scratch file with the
 /// same markers is nobody's problem. Binary files are excluded by extension
 /// rather than by sniffing, because the corpus is text.
-private func trackedTextFiles() throws -> [String] {
+///
+/// Internal rather than private, so `ReleaseDmg_test.swift` — same target —
+/// shares this one definition for its own tracked-file scan. The trade is the
+/// one `repoRoot()` in `DocsClaims_test.swift` records: a second copy of the
+/// corpus resolver is a second thing to get wrong, and two copies would not
+/// have to drift far to disagree about which files count as scanned.
+func trackedTextFiles() throws -> [String] {
     let repoRoot = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()    // …/Tests/CoffeeBarCoreTests
         .deletingLastPathComponent()    // …/Tests
