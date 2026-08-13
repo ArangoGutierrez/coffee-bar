@@ -755,7 +755,12 @@ private struct FixedPower: PowerReadingProviding {
 /// checks have no business opening.
 private struct WiredHooks: HookHealthProviding {
     func status() -> HookHealthStatus { .wired }
-    func statuses() -> [AgentTool: HookHealthStatus] { [.claudeCode: .wired] }
+    /// The selection is IGNORED here, and visibly so: nothing in this file turns
+    /// on which tools the user runs, and a double that answered differently per
+    /// selection would be inventing a behaviour no check in this file reads.
+    func statuses(advising selected: Set<AgentTool>) -> [AgentTool: HookHealthStatus] {
+        [.claudeCode: .wired]
+    }
 }
 
 /// Binds nothing. The shipping default is the REAL listener, which would take

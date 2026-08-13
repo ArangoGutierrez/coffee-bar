@@ -860,8 +860,9 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // BOTH sources of `.unreadable` drive this wording, and both are checked:
     // a Claude Code file that is ABSENT, and one that EXISTS and will not
     // parse. The absent case is the first-run user — see
-    // `aFirstRunUserWithNoSettingsFileIsStillToldToWireTheHooks` — and Claude
-    // Code is exempt from the existence gate for exactly that reason.
+    // `aFirstRunUserWithNoSettingsFileIsStillToldToWireTheHooks` — and this
+    // model has an unset selection, which `ServingModel.assumedAgentTools`
+    // resolves to Claude Code for exactly that reason.
     for fixture in ["definitely-not-here.json", "malformed.json"] {
         let unreadable = ServingModel(holder: SpyHolder(),
                                       reader: FakeReader(source: .ac, percent: 80),
@@ -1026,7 +1027,8 @@ private func fixtureHealth(_ files: [AgentTool: String]) -> HookHealthReader {
 
 @MainActor
 @Test func aFirstRunUserWithNoSettingsFileIsStillToldToWireTheHooks() {
-    // **Claude Code is EXEMPT from the existence gate, and this is why.**
+    // **A user who has never chosen is assumed to run Claude Code, and this is
+    // why.**
     //
     // Named bug this catches, and it shipped in the first round of #10c: the
     // gate was applied to all three tools, so a user who had never created
@@ -1038,6 +1040,15 @@ private func fixtureHealth(_ files: [AgentTool: String]) -> HookHealthReader {
     // primary integration and the first-run path. It means "does not use this
     // tool" for Codex and for Cursor. The two readings are different claims
     // about different cohorts, so the two are treated differently.
+    //
+    // WHAT CHANGED IN ISSUE #51, and why this check did not: the difference used
+    // to be a hard-coded `tool == .claudeCode` branch inside
+    // `HookHealthReader.status(for:)`, which stood in for a question nobody had
+    // asked the user. It is now `ServingModel.assumedAgentTools`, the selection
+    // coffee-bar assumes while the user has not made one — and this model's
+    // `FakeSettings()` holds no selection. Every expectation below is the one
+    // that was here before, unchanged: the behaviour a user sees is the point,
+    // and it must not move when the mechanism under it does.
     let model = ServingModel(holder: SpyHolder(),
                              reader: FakeReader(source: .ac, percent: 80),
                              health: fixtureHealth([.claudeCode: "definitely-not-here.json",
@@ -1138,6 +1149,219 @@ private func fixtureHealth(_ files: [AgentTool: String]) -> HookHealthReader {
         """)
 }
 
+// MARK: - Which tools the user says they run (issue #51)
+//
+// coffee-bar used to decide which tools to advise about by looking for their
+// files. The user never said. This section holds what the answer is when they
+// have not said, and what changes the moment they do.
+
+@MainActor
+@Test func anUnsetSelectionAdvisesExactlyAsTheFileGateAlwaysHas() {
+    // **The unset case, pinned against the build that shipped before issue
+    // #51.** An existing user who has never opened Preferences must read exactly
+    // what they read yesterday, and the fifth key is `Optional` throughout, so
+    // that has to be a DECISION rather than a `?? []` that happens to work.
+    //
+    // The decision, in two named halves:
+    //
+    //   - `ServingModel.assumedAgentTools` says which tools coffee-bar assumes
+    //     when nobody has chosen. It is `[.claudeCode]`, which is the old
+    //     hard-coded exemption restated as a default the user may now override.
+    //   - `advises(_:)` falls back to "the reader had something to say about
+    //     it", which is the old file-existence inference, unchanged.
+    //
+    // All three tools are driven at once, because the unset behaviour is a
+    // different claim for each cohort and a check that drove one would pass over
+    // a change to the others:
+    //
+    //   - Claude Code, NO FILE — a line, because that is the first-run user.
+    //   - Codex, a file that IS there and is missing entries — a line.
+    //   - Cursor, NO FILE — silence, because nothing says the user runs it.
+    //
+    // Mutating either half turns this red: `assumedAgentTools = []` drops the
+    // Claude Code line, and an `advises(_:)` whose unset branch answers `true`
+    // adds a Cursor one.
+    let settings = FakeSettings()
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth([.claudeCode: "definitely-not-here.json",
+                                                    .codex: "missing-two.json",
+                                                    .cursor: "definitely-not-here.json"]),
+                             settings: settings)
+    model.refresh()
+
+    #expect(model.selectedAgentTools == nil,
+            "the model invented a selection for a user who has never chosen")
+
+    // A literal. Building it from `hookHealths` would let both sides agree on a
+    // line that names no file and tells the user nothing.
+    #expect(model.hookAdvisory == """
+        Cannot read ~/.claude/settings.json, so coffee-bar cannot confirm its \
+        hooks are installed. Agent sessions may not arrive.
+
+        No coffee-bar hooks for Stop, UserPromptSubmit in ~/.codex/hooks.json.
+        """)
+
+    // NOT SEEDED. Writing the key as a side effect of reading it makes a default
+    // indistinguishable from a choice, and issue #52's wizard has to tell those
+    // apart to know whom it is for.
+    #expect(settings.stringArray(forKey: SettingsKey.agentTools) == nil,
+            "reading the selection wrote it; a default is now indistinguishable from a choice")
+}
+
+@MainActor
+@Test func aSelectedSubsetNarrowsTheAdvisoryToThatSubset() {
+    // **The defect issue #51 exists to fix**, stated as the panel a user reads.
+    // Every one of these three files is on disk and every one of them is
+    // missing entries, so the build before this task printed three lines — two
+    // of them about tools this user does not run and cannot act on.
+    //
+    // Named bug this catches: a narrowing applied to the READ rather than to
+    // what is SAID. `hookHealths` still carries the evidence for all three —
+    // asserted below — and the advisory speaks about one. A model that dropped
+    // the other two from the collection would pass a check that only read
+    // `hookAdvisory`, and would then have to re-read the files the moment the
+    // user changed their mind.
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth([.claudeCode: "missing-stop.json",
+                                                    .codex: "missing-stop.json",
+                                                    .cursor: "missing-session-start.json"]),
+                             settings: FakeSettings([SettingsKey.agentTools: ["codex"]]))
+    model.refresh()
+
+    #expect(model.hookHealths[.claudeCode] == .missing(["Stop"]),
+            "the evidence for an unselected tool was thrown away rather than left unspoken")
+    #expect(model.hookHealths[.cursor] == .missing(["sessionStart"]))
+
+    #expect(model.hookAdvisory == """
+        No coffee-bar hooks for Stop in ~/.codex/hooks.json.
+        """)
+}
+
+@MainActor
+@Test func aToolTheUserRunsIsAdvisedAboutEvenWithNoFileOnDisk() {
+    // The signal the deleted `.claudeCode` exemption was standing in for, now
+    // supplied by the user — and supplied for a tool the exemption never
+    // covered. A Codex user who has not wired anything yet has no
+    // `~/.codex/hooks.json` at all, which is exactly the first-run state the
+    // advisory exists for, and the old build told them nothing.
+    //
+    // Named bug this catches: a selection that only ever narrows. Filtering
+    // `AgentTool.allCases` down to the chosen set, with the existence gate left
+    // whole underneath it, keeps every check above green and leaves this user in
+    // the silence issue #51 is meant to end.
+    //
+    // `.claudeCode` is deliberately NOT the selected tool here: with the old
+    // exemption still in place this check would pass on it.
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth([.claudeCode: "wired.json",
+                                                    .codex: "definitely-not-here.json"]),
+                             settings: FakeSettings([SettingsKey.agentTools: ["codex"]]))
+    model.refresh()
+
+    #expect(model.hookAdvisory == """
+        Cannot read ~/.codex/hooks.json, so coffee-bar cannot confirm its \
+        hooks are installed. Agent sessions may not arrive.
+        """)
+}
+
+@MainActor
+@Test func turningAToolOffRecordsTheChoiceAndSilencesItAtOnce() {
+    // The control's whole job, driven through the model the window binds to.
+    //
+    // Named bug 1: a setter that changes the property and never reaches the
+    // store, so the choice is lost on the next launch and the app goes back to
+    // guessing with nothing to report.
+    //
+    // Named bug 2: a setter that stores the choice and does not reconcile, so
+    // the panel keeps printing the advisory the user just switched off until the
+    // next 30-second tick. `holdDisplayAwake` and `quietEverythingElse` both
+    // reconcile on the set for the same reason.
+    //
+    // Named bug 3: a setter that writes only the tool it was handed. The user
+    // ticks Codex off and Claude Code — inferred until that moment — goes with
+    // it, because the implicit selection was never frozen before being edited.
+    let settings = FakeSettings()
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth([.claudeCode: "missing-stop.json",
+                                                    .codex: "missing-stop.json"]),
+                             settings: settings)
+    model.refresh()
+
+    // Both tools are advised about while nobody has chosen: that is the state
+    // being edited, and without it the assertions below would measure nothing.
+    #expect(model.advises(.claudeCode))
+    #expect(model.advises(.codex))
+
+    model.setAdvises(false, for: .codex)
+
+    #expect(model.advises(.codex) == false)
+    #expect(model.advises(.claudeCode),
+            "switching Codex off took Claude Code with it")
+    #expect(settings.stringArray(forKey: SettingsKey.agentTools) == ["claudeCode"],
+            """
+            the choice never reached the store: \
+            \(String(describing: settings.stringArray(forKey: SettingsKey.agentTools)))
+            """)
+
+    #expect(model.hookAdvisory == """
+        No coffee-bar hooks for Stop in ~/.claude/settings.json. If yours are in \
+        a project's .claude/settings.json, ingest may still be working.
+        """)
+}
+
+@MainActor
+@Test func aUserWhoSelectsNothingIsToldNothing() {
+    // The third state, and the reason the stored value is `Optional`: choosing
+    // NO tool is an answer, and it is not the same answer as never having been
+    // asked. The same fixtures under an unset key print two lines —
+    // `turningAToolOffRecordsTheChoiceAndSilencesItAtOnce` asserts that
+    // directly — so this is the pair that proves `[]` is honoured rather than
+    // read as "never chosen".
+    //
+    // Named bug this catches: `?? []` folded the other way, `selection ?? all`,
+    // or any read that treats an empty list as absent. The user asked for
+    // silence and would keep hearing about every file on their disk.
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth([.claudeCode: "missing-stop.json",
+                                                    .codex: "missing-stop.json"]),
+                             settings: FakeSettings([SettingsKey.agentTools: [String]()]))
+    model.refresh()
+
+    #expect(model.selectedAgentTools == [],
+            "an empty selection read back as \(String(describing: model.selectedAgentTools))")
+    #expect(model.hookAdvisory == nil)
+}
+
+@MainActor
+@Test func theSelectionLabelNamesNoToolAndPromisesNoWriting() {
+    // The sentence the window shows above the tool rows, asserted here because
+    // M1 design §5.4 rules out asserting on rendered AppKit text — a label
+    // written in the view is a label no check reads.
+    //
+    // Named bug 1: a sentence that lists the tools. `AgentTool.allCases` is the
+    // one place the list lives; a fourth tool would arrive with the caption
+    // above it still naming three, and no check would see it.
+    //
+    // Named bug 2: a sentence that offers to install anything. Design §6 is
+    // print-never-touch for every one of these files, and the section below this
+    // caption offers a Copy button for exactly that reason.
+    let label = ServingModel.agentToolsLabel
+
+    for tool in AgentTool.allCases {
+        #expect(!label.localizedCaseInsensitiveContains(tool.rawValue),
+                "the caption names \(tool.rawValue), so a fourth tool makes it a lie: \(label)")
+    }
+    #expect(!label.localizedCaseInsensitiveContains("install"),
+            "the caption offers to install something: \(label)")
+    #expect(label.localizedCaseInsensitiveContains("hook"),
+            "the caption says nothing about what the selection is for: \(label)")
+}
+
 /// A reader whose two read methods deliberately DISAGREE.
 ///
 /// This is the only way to catch the bug below, and the reason is worth stating.
@@ -1148,7 +1372,13 @@ private func fixtureHealth(_ files: [AgentTool: String]) -> HookHealthReader {
 /// separately-read one.
 private struct DisagreeingHealth: HookHealthProviding {
     /// What the collection says. `hookHealth` must be THIS.
-    func statuses() -> [AgentTool: HookHealthStatus] { [.claudeCode: .wired] }
+    ///
+    /// The selection is ignored: the disagreement this double exists to stage is
+    /// between the two READS, and making it turn on the selection as well would
+    /// stage two faults at once and tell the reader nothing about either.
+    func statuses(advising selected: Set<AgentTool>) -> [AgentTool: HookHealthStatus] {
+        [.claudeCode: .wired]
+    }
     /// What a second, independent read would say. `hookHealth` must NOT be this.
     func status() -> HookHealthStatus { .missing(["Stop"]) }
 }

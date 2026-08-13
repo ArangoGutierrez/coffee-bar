@@ -3,6 +3,7 @@
 
 import Foundation
 import Testing
+import CoffeeBarCore
 
 @testable import CoffeeBarPower
 
@@ -282,6 +283,107 @@ struct SettingsStoreTests {
         store.setStringArray(["node", "node", "Xcode"], forKey: SettingsKey.demotableProcessNames)
 
         #expect(store.demotableProcessNames() == ["node", "Xcode"])
+    }
+
+    // MARK: - Which agent tools the user runs (issue #51)
+
+    @Test func theAgentToolsKeyStringNeverChangesAndCollidesWithNothing() {
+        // Held for the reason the other four keys are: a rename discards the
+        // selection of every user who made one. Here that is worse than losing a
+        // switch — the app falls back to ASSUMING, and the assumption is the
+        // behaviour issue #51 exists to replace, so the regression is silent and
+        // looks exactly like the old build.
+        #expect(SettingsKey.agentTools == "agentTools")
+        #expect(SettingsKey.agentTools != SettingsKey.holdDisplayAwake)
+        #expect(SettingsKey.agentTools != SettingsKey.batteryFloorPercent)
+        #expect(SettingsKey.agentTools != SettingsKey.demotableProcessNames)
+        #expect(SettingsKey.agentTools != SettingsKey.quietEverythingElse)
+    }
+
+    @Test func anUnsetSelectionIsNilAndNotAnEmptyChoice() throws {
+        // **THE SHARP EDGE of issue #51, in one check.** Three states have to
+        // stay tellable apart and only two of them are sets:
+        //
+        //   - NEVER CHOSEN — `nil`. coffee-bar assumes, as it always has.
+        //   - CHOSE NOTHING — `[]`. The user asked for silence and gets it.
+        //   - CHOSE SOMETHING — a set.
+        //
+        // Named bug this catches: `?? []` on the read. That folds the first two
+        // together, so an existing user who has never opened Preferences is
+        // treated as one who ticked every box off, and the panel goes quiet for
+        // the first-run user the advisory exists for. Issue #52's wizard has to
+        // tell the same two apart to know whom to show itself to.
+        let suite = try throwawaySuite()
+        defer { suite.defaults.removePersistentDomain(forName: suite.name) }
+        let store = UserDefaultsSettingsStore(defaults: suite.defaults)
+
+        #expect(store.stringArray(forKey: SettingsKey.agentTools) == nil)
+        #expect(store.selectedAgentTools() == nil,
+                "an unset key answered \(String(describing: store.selectedAgentTools()))")
+
+        // The discriminating half. Without it, a `selectedAgentTools()` that
+        // returned `nil` for everything would pass the line above.
+        store.setSelectedAgentTools([])
+        #expect(store.selectedAgentTools() == [],
+                "choosing no tool at all read back as never having chosen")
+    }
+
+    @Test func aSelectionSurvivesARestart() throws {
+        // A STORED FORMAT: written on one launch and read on the next. A second
+        // store over the same storage is what a restart looks like, and an
+        // in-memory-only selection would pass a same-store read-back — after
+        // which every relaunch would silently assume again.
+        let suite = try throwawaySuite()
+        defer { suite.defaults.removePersistentDomain(forName: suite.name) }
+        UserDefaultsSettingsStore(defaults: suite.defaults)
+            .setSelectedAgentTools([.cursor, .codex])
+
+        let nextLaunch = UserDefaultsSettingsStore(defaults: suite.defaults)
+        #expect(nextLaunch.selectedAgentTools() == [.codex, .cursor])
+    }
+
+    @Test func aSelectionIsStoredInAFixedOrderWhateverOrderItArrivesIn() throws {
+        // A `Set` has no order and a plist entry does. Named bug this catches: a
+        // selection whose stored order reshuffles on every write, so a user
+        // watching their preferences file — or a `defaults read` in a bug report
+        // — sees a change where nothing changed.
+        let suite = try throwawaySuite()
+        defer { suite.defaults.removePersistentDomain(forName: suite.name) }
+        let store = UserDefaultsSettingsStore(defaults: suite.defaults)
+
+        store.setSelectedAgentTools([.cursor, .claudeCode, .codex])
+        #expect(store.stringArray(forKey: SettingsKey.agentTools)
+                == ["claudeCode", "codex", "cursor"])
+    }
+
+    @Test func aToolNameThisBuildDoesNotKnowIsDroppedAndTheRestSurvive() throws {
+        // `UserDefaults` holds whatever anybody writes, and this key can also be
+        // written by a NEWER build that knows a fourth tool. Named bug this
+        // catches: a force-unwrapped `AgentTool(rawValue:)`, which traps at
+        // launch on a preferences file this app does not own.
+        //
+        // The rest surviving is the half that matters: dropping the whole
+        // selection would silently re-enable the assumption for a user who HAD
+        // chosen.
+        let suite = try throwawaySuite()
+        defer { suite.defaults.removePersistentDomain(forName: suite.name) }
+        suite.defaults.set(["codex", "windsurf"], forKey: SettingsKey.agentTools)
+        let store = UserDefaultsSettingsStore(defaults: suite.defaults)
+
+        #expect(store.selectedAgentTools() == [.codex])
+    }
+
+    @Test func aValueOfTheWrongTypeReadsAsNeverHavingChosen() throws {
+        // A plist carrying a bare string where a list belongs. `nil` is the
+        // right answer here and `[]` is the wrong one, for the reason
+        // `anUnsetSelectionIsNilAndNotAnEmptyChoice` gives: `[]` is a user
+        // asking for silence, and nothing about a malformed value says that.
+        let suite = try throwawaySuite()
+        defer { suite.defaults.removePersistentDomain(forName: suite.name) }
+        suite.defaults.set("codex", forKey: SettingsKey.agentTools)
+        let store = UserDefaultsSettingsStore(defaults: suite.defaults)
+
+        #expect(store.selectedAgentTools() == nil)
     }
 
     // MARK: - The documented way to set it

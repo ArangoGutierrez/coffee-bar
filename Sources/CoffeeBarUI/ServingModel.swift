@@ -163,17 +163,114 @@ public final class ServingModel {
         hookHealths[.claudeCode] ?? .unreadable
     }
 
-    /// Every agent tool whose hook file is on this machine, with what that file
-    /// says about coffee-bar's entries.
+    /// Every agent tool this machine has EVIDENCE for, with what that tool's
+    /// hook file says about coffee-bar's entries.
     ///
-    /// A tool is ABSENT from this map when its hook file is not on disk, and
-    /// that is the claim the panel needs: an absent file means the user does not
-    /// run that tool, so a Claude-Code-only user is never told to wire Cursor.
+    /// A tool is in this map when the user named it or when its hook file is on
+    /// disk. It is absent when neither is true, and that is the claim the panel
+    /// needs: nothing says the user runs it, so a Claude-Code-only user is never
+    /// told to wire Cursor.
+    ///
+    /// **The user's choice does NOT narrow this map — it narrows `hookAdvisory`
+    /// (issue #51).** Everything read is kept, so switching a tool back on says
+    /// something immediately instead of waiting for the next read, and an
+    /// unselected tool's evidence stays visible to a check.
     ///
     /// Empty until the first `refresh()`. Nothing renders it before then —
     /// `PanelView.onAppear` calls `refresh()`, and the menu-bar label reads
     /// `isServing` only.
     public private(set) var hookHealths: [AgentTool: HookHealthStatus] = [:]
+
+    /// The agent tools the user chose in Preferences, or `nil` when they have
+    /// never chosen (issue #51).
+    ///
+    /// **`nil` is a THIRD state and not a synonym for empty.** `[]` is a user
+    /// who switched every tool off and asked for silence; `nil` is a user who
+    /// has not been asked. They lead to opposite behaviour, and
+    /// `SettingsKey.agentTools` carries the rest of that argument.
+    ///
+    /// Read ONCE in `init`, like the three settings below it and for the same
+    /// reason: this app is the only writer, and re-reading the store on every
+    /// 30-second `refresh()` would let an external edit move the user's control
+    /// under them.
+    public private(set) var selectedAgentTools: Set<AgentTool>?
+
+    /// Which tools coffee-bar assumes when the user has never chosen.
+    ///
+    /// **`.claudeCode` and nothing else, and this constant IS the unset
+    /// decision** — the hard-coded exemption that used to sit in
+    /// `HookHealthReader.status(for:)`, restated in one named place the user can
+    /// now override. It is what makes an unset key reproduce the behaviour that
+    /// shipped before issue #51 exactly: Claude Code is spoken about with or
+    /// without a file, every other tool only with one.
+    ///
+    /// Why Claude Code and not all three: an absent file means different things
+    /// for different cohorts. Claude Code is the primary integration and the
+    /// first-run path, and the README tells the reader coffee-bar does nothing
+    /// until those hooks exist. Codex and Cursor are opt-in, and assuming them
+    /// would hand every user two lines about files they do not have — the noise
+    /// issue #10c removed.
+    ///
+    /// It is used for ONE thing: deciding which hook files are read even when
+    /// they are not there. What is SAID is `advises(_:)` below.
+    public static let assumedAgentTools: Set<AgentTool> = [.claudeCode]
+
+    /// Whether coffee-bar speaks about `tool`.
+    ///
+    /// The window's checkbox and the panel's advisory are the same question, so
+    /// they read the same answer. A window that showed one thing while the panel
+    /// did another would be a settings screen the user cannot trust.
+    ///
+    /// **The unset branch is the second half of the issue #51 default**, and it
+    /// is today's inference unchanged: coffee-bar speaks about a tool it found
+    /// evidence for. `hookHealths` already holds exactly that — the tools whose
+    /// file is on disk, plus `assumedAgentTools` — so an unset key narrows
+    /// nothing and every existing user reads what they read yesterday.
+    ///
+    /// LIMIT, stated rather than hidden: before the first `refresh()` an unset
+    /// model has no evidence and answers `false` for everything. Nothing renders
+    /// this before then, for the reason `hookHealths` gives.
+    public func advises(_ tool: AgentTool) -> Bool {
+        if let chosen = selectedAgentTools { return chosen.contains(tool) }
+        return hookHealths[tool] != nil
+    }
+
+    /// Records that the user does or does not run `tool`.
+    ///
+    /// **It freezes the whole answer, not the one tool it was handed.** Until
+    /// the first call there is no stored selection at all, only an inference, so
+    /// writing `[tool]` here would silently discard every other tool the user
+    /// runs — switch Codex off and Claude Code goes with it. Building the set
+    /// from `advises(_:)` writes down what the window was showing and then
+    /// applies the one edit.
+    ///
+    /// The setter WRITES BEFORE it reconciles, like the three settings below: a
+    /// crash between the two would lose a choice the user has already seen take
+    /// effect. It reconciles at all because a user switching a tool off is
+    /// asking for that advisory to go NOW, not at the next 30-second tick.
+    public func setAdvises(_ advises: Bool, for tool: AgentTool) {
+        var chosen = Set(AgentTool.allCases.filter { self.advises($0) })
+        if advises { chosen.insert(tool) } else { chosen.remove(tool) }
+        selectedAgentTools = chosen
+        settings.setSelectedAgentTools(chosen)
+        refresh()
+    }
+
+    /// What the tool selection is FOR, in one sentence above the rows.
+    ///
+    /// Here rather than in the window, for the reason `quietOthersLabel` is:
+    /// design §5.4 rules out asserting on rendered AppKit text, so a sentence
+    /// written in the view is a sentence no check reads.
+    ///
+    /// **It names no tool.** `AgentTool.allCases` is the one place that list
+    /// lives, and a caption spelling it out would still say three when a fourth
+    /// arrived, with nothing able to see it.
+    ///
+    /// It promises no installation either. Design §6 is print-never-touch for
+    /// every one of these files, and the rows below offer a Copy button for
+    /// exactly that reason.
+    /// `theSelectionLabelNamesNoToolAndPromisesNoWriting` holds both halves.
+    static let agentToolsLabel = "coffee-bar reports hook health for the tools selected here."
 
     /// What the root helper on this Mac is, relative to the one this build
     /// ships, or `nil` before anything has been read.
@@ -245,15 +342,23 @@ public final class ServingModel {
     /// `HookHealth.status(of:for:)` never returns `.missing([])`: it reports
     /// `.wired` when nothing is missing. So no list below is ever empty.
     ///
-    /// **One line per tool, in `AgentTool.allCases` order.** A property that
-    /// returned only the first finding would drop two-thirds of the advice for a
-    /// user who runs all three, and `PanelView` renders this verbatim so no
-    /// check could see it happen. The order is fixed because a dictionary has
-    /// none, and an order that reshuffled between refreshes would rewrite the
-    /// panel every 30 seconds under a user trying to read it.
+    /// **One line per tool the user runs, in `AgentTool.allCases` order.** A
+    /// property that returned only the first finding would drop two-thirds of
+    /// the advice for a user who runs all three, and `PanelView` renders this
+    /// verbatim so no check could see it happen. The order is fixed because a
+    /// dictionary has none, and an order that reshuffled between refreshes would
+    /// rewrite the panel every 30 seconds under a user trying to read it.
+    ///
+    /// **`advises(_:)` is what narrows it, and that is issue #51.** coffee-bar
+    /// used to speak about every tool it found a file for, which handed a user
+    /// advice about tools they do not run and cannot act on. The narrowing is
+    /// applied HERE, to what is said, rather than to `hookHealths` — the
+    /// evidence is worth keeping, and a user who switches a tool back on gets an
+    /// answer without waiting for the next read.
     public var hookAdvisory: String? {
-        let lines = AgentTool.allCases.compactMap { tool in
-            hookHealths[tool].flatMap { Self.advisory(for: tool, status: $0) }
+        let lines = AgentTool.allCases.compactMap { tool -> String? in
+            guard advises(tool) else { return nil }
+            return hookHealths[tool].flatMap { Self.advisory(for: tool, status: $0) }
         }
         return lines.isEmpty ? nil : lines.joined(separator: "\n\n")
     }
@@ -971,6 +1076,17 @@ public final class ServingModel {
         // demotes nothing for a user who never asked.
         self.quietEverythingElseStorage =
             settings.bool(forKey: SettingsKey.quietEverythingElse) ?? false
+        // Read once, here, for the reason above. **NO `??` on this one, and that
+        // is the point of issue #51's fifth key**: `nil` is a user who has never
+        // been asked and `[]` is one who asked for silence, and a coalesce in
+        // either direction would make the two the same user. What an unset key
+        // MEANS is decided in `assumedAgentTools` and `advises(_:)`, where it is
+        // named and can be read.
+        //
+        // Reading does NOT write. A default seeded here would be
+        // indistinguishable from a choice a second later, and issue #52's wizard
+        // has to tell those apart to know whom it is for.
+        self.selectedAgentTools = settings.selectedAgentTools()
     }
 
     // There is deliberately NO `deinit` here, and none may be added.
@@ -1207,7 +1323,14 @@ public final class ServingModel {
         // to paste the snippet back, and this app runs for days. It re-reads
         // every TOOL's file for the same reason, and because a user who
         // installs Cursor while the app runs must not wait for a relaunch.
-        hookHealths = health.statuses()
+        //
+        // The selection WIDENS this read and never narrows it (issue #51): a
+        // tool the user says they run is read whether or not its file is there,
+        // because that user is mid-setup. An unset selection falls back to
+        // `assumedAgentTools`, which is what makes a user who has never opened
+        // Preferences see exactly what they saw before the key existed.
+        hookHealths = health.statuses(
+            advising: selectedAgentTools ?? Self.assumedAgentTools)
         // Re-read every time, not once in `init`, for the reason above and one
         // of its own: the user's recovery path here is to paste the install
         // command the advisory carries, and a state frozen at launch would keep
