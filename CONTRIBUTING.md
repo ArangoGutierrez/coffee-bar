@@ -285,9 +285,10 @@ explains why. State a breaking change explicitly.
 - Fill in the template: problem, approach, testing done, breaking changes, and
   `Closes #N`. Paste real command output under "testing done".
 
-CI runs on `macos-15` and does exactly what you ran locally: `swift --version`,
-`swift build`, `swift build -c release`, `swift test`. See
-`.github/workflows/ci.yml`.
+CI runs on `macos-15` and does what you ran locally — `swift --version`,
+`swift build`, `swift build -c release`, `swift test` — and then assembles the
+app bundle with `scripts/build-app.sh`, so a break in the bundle path fails a
+pull request instead of waiting for a release. See `.github/workflows/ci.yml`.
 
 ## The 0.x non-goals
 
