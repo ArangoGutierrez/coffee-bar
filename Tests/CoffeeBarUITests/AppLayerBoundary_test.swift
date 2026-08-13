@@ -420,8 +420,20 @@ private func describePackage() throws -> ResolvedPackage {
 /// LIMIT, stated rather than hidden: this is a small lexer, not the Swift
 /// grammar. It handles `//`, nested `/* */`, escapes, multi-line `"""` and raw
 /// `#"…"#` strings, all of which are what the scanned targets contain today. A
-/// BARE REGEX LITERAL (`/…/`) it cannot tokenise at all, so it REFUSES to
-/// answer for source that might carry one — see `swiftSourceReading`.
+/// BARE REGEX LITERAL (`/…/`) it cannot tokenise at all.
+///
+/// INVARIANT, and it is the whole of issue #54: this returns a verdict only for
+/// source it can TOKENISE. Anything that might be a regex literal makes it
+/// refuse — loudly, as a recorded issue — because a wrong GREEN on the network
+/// scan is a guard reporting a forbidden capability absent while it is present,
+/// and a false alarm is not. The refusal is therefore one-sided on purpose: it
+/// may cry wolf over source that is really division, and it may not stay quiet
+/// over source that is really a literal.
+///
+/// Every guard in this package reaches the lexer through THIS function, so the
+/// refusal covers all of them rather than the three the issue names. Reach for
+/// `swiftSourceReading` instead only to state what the walk itself does, which
+/// is what the pinning table is for.
 ///
 /// Internal rather than `private`, which in Swift is scoped to this file.
 /// `PreferencesView_test.swift` needs the same discriminator for the same
@@ -429,7 +441,21 @@ private func describePackage() throws -> ResolvedPackage {
 /// `contains` there is satisfied by the comment describing the render it
 /// deleted. One tested stripper in this target, not two.
 func swiftCodeWithoutComments(_ source: String) -> String {
-    swiftSourceReading(source).code
+    let reading = swiftSourceReading(source)
+    if let suspect = reading.regexLiteralSuspect {
+        Issue.record("""
+            this scan REFUSES a verdict rather than reporting one it cannot \
+            support. The source it was handed carries what may be a bare regex \
+            literal — \(suspect.debugDescription) — and this lexer cannot \
+            tokenise one: the text after it comes back mis-classified, a \
+            comment as code or code as a comment, so a check downstream can \
+            report a forbidden capability absent while it is present (issue \
+            #54). Either take the literal out of that source, or teach the \
+            lexer to read one and pin the new behaviour in \
+            swiftCodeWithoutCommentsKeepsCodeAndDropsComments.
+            """)
+    }
+    return reading.code
 }
 
 /// What one walk of `source` found: the code, and any reason to distrust it.
@@ -1329,6 +1355,14 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // `IOPMAssertionCreateWithName("PreventUserIdleDisplaySleep" as CFString, …)`
     // is still caught.
     //
+    // The limit that discriminator carries, stated at this site because the
+    // verdict is this site's (issue #54): a bare regex literal is source it
+    // cannot tokenise, and rather than answer for one it records an issue and
+    // this scan fails. A file that refuses is a file this check has NOT
+    // cleared — which is the safe direction, because the alternative is
+    // reporting that nothing below the app raises a display assertion when
+    // something does.
+    //
     // ONE file is entitled to cross that line, for ONE symbol: issue #12 made
     // the display hold an opt-in DEFAULT rather than a promise, so
     // `AssertionHolder.swift` may raise `PreventUserIdleDisplaySleep`. See
@@ -1540,6 +1574,13 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // these APIs in prose to explain why they are not used, and that prose is
     // the reasoning nobody should delete. Naming one in a comment is required;
     // calling one is what this refuses.
+    //
+    // The limit that stripping carries, stated at this site because the verdict
+    // is this site's (issue #54): a bare regex literal is source
+    // `swiftCodeWithoutComments` cannot tokenise, and rather than answer for
+    // one it records an issue and this scan fails. On a SECURITY rule the
+    // refusal is the point: a file this check has not cleared must not read as
+    // a file it cleared.
     let targets = try linkedClosure(fromTarget: "CoffeeBarApp").sorted()
         + probeLayerTargets
     let files = try sources(ofTargets: targets)
@@ -1603,6 +1644,13 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // shipped design, and `swiftCodeWithoutComments` keeps string literals — so
     // banning the word would be red on exactly the correct code. What is banned
     // is EXECUTING with elevated privilege, not naming the command.
+    //
+    // The limit that discriminator carries, stated at this site because the
+    // verdict is this site's (issue #54): a bare regex literal is source it
+    // cannot tokenise, and rather than answer for one it records an issue and
+    // this scan fails. A green run of THIS check is a claim that the app layer
+    // cannot elevate itself, so it may only be made about source the lexer
+    // actually read.
     let files = try appLayerSources()
     #expect(files.count == expectedSourceCount,
             "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
@@ -1647,6 +1695,14 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // name an IP address or a hostname. So the forbidden set is the APIs that
     // can only mean an off-machine peer. `AF_UNIX` and `sockaddr_un` are
     // deliberately absent from it: those ARE the filesystem socket.
+    //
+    // The limit `swiftCodeWithoutComments` carries, stated at this site because
+    // the verdict is this site's (issue #54): a bare regex literal is source it
+    // cannot tokenise, and rather than answer for one it records an issue and
+    // this scan fails. This is the check the issue's argument turns on — a
+    // GREEN here tells a reader of SECURITY.md that nothing linked into the
+    // binary can reach the network, and that sentence may not rest on a file
+    // the lexer mis-read.
     let linked = try linkedClosure(fromTarget: "CoffeeBarApp").sorted()
     let files = try sources(ofTargets: linked)
 
@@ -1685,6 +1741,15 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // that line and the listener binds TCP — reachable from off the machine —
     // while every name in the forbidden list above stays absent and
     // `noLinkedTargetCanReachTheNetworkByAddress` stays green.
+    //
+    // The limit `swiftCodeWithoutComments` carries, stated at this site because
+    // the verdict is this site's (issue #54): a bare regex literal is source it
+    // cannot tokenise, and rather than answer for one it records an issue and
+    // this scan fails. This guard is `contains`-POSITIVE, which is the shape
+    // the hole defeats most cheaply — the required line appearing in a comment
+    // is enough — and
+    // `aScannedFileCarryingARegexLiteralRefusesRatherThanReportingGreen`
+    // constructs exactly that file against exactly this check.
     let linked = try linkedClosure(fromTarget: "CoffeeBarApp").sorted()
     let files = try sources(ofTargets: linked)
 
@@ -1883,6 +1948,67 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
             #expect(swiftCodeWithoutComments(testCase.source) == testCase.expected,
                     "\(testCase.name): entry point got \(swiftCodeWithoutComments(testCase.source).debugDescription)")
         }
+    }
+}
+
+@Test func aScannedFileCarryingARegexLiteralRefusesRatherThanReportingGreen() throws {
+    // Issue #54, executed rather than described. `Sources/` carries no regex
+    // literal today, so this CONSTRUCTS the file the lexer cannot read and puts
+    // it through the pipeline every scan in this file runs: read, strip, ask
+    // what the remaining code says.
+    //
+    // Named bug this catches, and it is why the refusal exists rather than a
+    // paragraph of prose. What the constructed file DOES is build NWParameters
+    // and set no local endpoint on them — a listener that binds a TCP port,
+    // reachable from off this machine, which is the one thing
+    // `theOnlyListenerIsPinnedToAFilesystemEndpoint` exists to refuse. The two
+    // lines that guard requires appear in a COMMENT and nowhere else, and the
+    // walk hands them back as code. Without the refusal that guard reports
+    // GREEN on a file that opens the machine to the network.
+    let files = FileManager.default
+    let scratch = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appending(path: "coffee-bar-regex-literal-\(UUID().uuidString)")
+    try files.createDirectory(at: scratch, withIntermediateDirectories: true)
+    defer { try? files.removeItem(at: scratch) }
+
+    let constructed = scratch.appending(path: "IngestListener.swift")
+    try #"""
+        let quote = /"/
+        // requiredLocalEndpoint = .unix(path: socketPath)
+        let parameters = NWParameters()
+        """#.write(to: constructed, atomically: true, encoding: .utf8)
+    let source = try String(contentsOf: constructed, encoding: .utf8)
+
+    // The mis-read itself. `swiftSourceReading` is the walk WITHOUT the
+    // refusal, so these state what the lexer returns rather than what the guard
+    // does about it — and they are the verdict
+    // `theOnlyListenerIsPinnedToAFilesystemEndpoint` would reach on this file:
+    // it sees NWParameters, so it checks, and both `contains` it makes are
+    // satisfied by the comment. GREEN, on source that pins nothing to the
+    // filesystem.
+    //
+    // If one of these ever fails, the lexer learned to read regex literals
+    // (issue #54's option 3) and the premise of this test is gone: rewrite it
+    // against the new behaviour rather than deleting it.
+    let reading = swiftSourceReading(source)
+    #expect(reading.code.contains("NWParameters"),
+            "the constructed file no longer reaches the endpoint guard at all")
+    #expect(reading.code.contains("requiredLocalEndpoint"), """
+        the walk no longer hands the comment back as code, so the hole this \
+        test is about has closed: \(reading.code.debugDescription)
+        """)
+    #expect(reading.code.contains(".unix("), """
+        the walk no longer hands the comment back as code, so the hole this \
+        test is about has closed: \(reading.code.debugDescription)
+        """)
+
+    // What the entry point every guard calls does with the same source: it
+    // refuses, and the refusal is an ISSUE rather than a return value because
+    // no string it could return would fail a `!code.contains(name)` denylist.
+    // `withKnownIssue` fails when NO issue is recorded inside it, so deleting
+    // the refusal turns this test red.
+    withKnownIssue("the scan refuses a verdict on source carrying a regex literal") {
+        _ = swiftCodeWithoutComments(source)
     }
 }
 
