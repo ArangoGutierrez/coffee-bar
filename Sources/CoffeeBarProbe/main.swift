@@ -199,17 +199,23 @@ case .report:
             print("nothing armed")
             exit(0)
         }
+        // Both clocks, sampled together, exactly as the watchdog loop below
+        // samples them — and for the same reason. `record.expiry` used to be
+        // what this printed: `setAt` plus the TTL, both in the wall frame,
+        // while the cap is enforced on elapsed MONOTONIC time. After any clock
+        // step the two disagree, and this verb is the ONLY way a user can learn
+        // when a hold ends, because the journal belongs to root (#85).
+        //
+        // `ArmedHoldReport` decides what a deadline already passed reads as —
+        // it is reachable, since the daemon ticks every 5 s — and feeds both
+        // output paths, so the human and `--json` answers cannot diverge.
+        let hold = ArmedHoldReport(record: record,
+                                   now: Date(),
+                                   monotonicNow: SystemMonotonicClock.now())
         if invocation.wantsJSON {
-            print(try OutputFormatter.json(record))
+            print(try OutputFormatter.json(hold))
         } else {
-            print("""
-                armed:   \(record.intent.rawValue)
-                since:   \(record.setAt)
-                expires: \(record.expiry)
-                restore: SleepDisabled=\(record.priorValue ? 1 : 0)
-                armedBy: pid \(record.armedBy.pid), uid \(record.armedBy.uid), \
-                \(record.armedBy.binaryPath)
-                """)
+            print(OutputFormatter.human(hold))
         }
     } catch {
         fail("could not read the journal: \(error)", code: 70)
