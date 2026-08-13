@@ -1789,13 +1789,40 @@ private func recordFromTheEarlierBoot() -> JournalRecord {
     // built past its terminator would leave the whole suite green and the
     // shipped daemon reverting every arm on its first tick.
     //
-    // `kern.bootsessionuuid` is documented as a UUID string, so parsing it as
-    // one is a check with a shape to fail against rather than "not empty":
-    // a truncated or over-long buffer does not parse.
+    // `kern.bootsessionuuid` is documented as a UUID string. Parsing it as one
+    // is NOT sufficient, and an earlier version of this comment claimed it was:
+    // `UUID(uuidString:)` accepts a 37-character string whose final byte is the
+    // NUL that sysctl wrote, so a decode keeping the terminator parses exactly
+    // as happily as one that drops it. That was measured, not reasoned: with
+    // the truncation removed, this test and the other 957 all stayed green.
+    //
+    // So the SHAPE is asserted directly. What rung 2 relies on is not
+    // parseability — `isFromAnotherBoot` compares STRINGS — and the truncated
+    // and untruncated forms are unequal to each other while both parse.
     let identity = try #require(SystemBootTime.currentSessionID(),
                                 "this machine reports no kern.bootsessionuuid")
-    #expect(UUID(uuidString: identity) != nil,
-            "kern.bootsessionuuid did not read back as a UUID: \(identity)")
+
+    // The assertion that fails when the reader decodes the whole buffer rather
+    // than the bytes before the terminator: sysctl sizes that buffer at 37 to
+    // make room for the NUL, so keeping it yields 37 characters, not 36.
+    #expect(identity.count == 36,
+            """
+            expected a 36-character UUID string, got \(identity.count): \
+            \(identity.debugDescription)
+            """)
+    #expect(!identity.contains("\0"),
+            "the decoded identity still carries the NUL terminator sysctl wrote")
+
+    // ...and it is the CANONICAL spelling of the UUID it parses as. A string
+    // carrying anything past the terminator is not, which is what makes this
+    // catch a stray byte the count alone would miss.
+    let parsed = try #require(UUID(uuidString: identity),
+                              "kern.bootsessionuuid did not read back as a UUID: \(identity)")
+    #expect(parsed.uuidString.caseInsensitiveCompare(identity) == .orderedSame,
+            """
+            decoded identity is not the canonical spelling of the UUID it \
+            parses as: \(identity.debugDescription) vs \(parsed.uuidString)
+            """)
 
     // A boot identity that changed between two reads inside one boot would be
     // useless for the comparison rung 2 makes.
