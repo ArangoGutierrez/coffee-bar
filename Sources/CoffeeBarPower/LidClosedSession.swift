@@ -567,12 +567,16 @@ public enum SystemBootTime {
               size > 0 else {
             return nil
         }
-        var buffer = [CChar](repeating: 0, count: size)
+        var buffer = [UInt8](repeating: 0, count: size)
         guard sysctlbyname("kern.bootsessionuuid", &buffer, &size, nil, 0) == 0
         else {
             return nil
         }
-        let identity = String(cString: buffer)
+        // `String(cString:)` over an array is deprecated. sysctl writes a
+        // NUL-terminated C string into a buffer it sized to include that
+        // terminator, so the bytes before the first NUL are the value.
+        let identity = String(decoding: buffer.prefix(while: { $0 != 0 }),
+                              as: UTF8.self)
         // An empty answer is an unreadable one. Collapsing the two here means
         // no caller has to know that the sysctl can succeed and say nothing.
         return identity.isEmpty ? nil : identity
