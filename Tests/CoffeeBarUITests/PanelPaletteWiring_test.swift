@@ -325,30 +325,231 @@ func indicatorComesFromTheModel() throws {
             "the indicator must come from ServingModel.indicator(isServing:)")
 }
 
-@Test("orange is spent on exactly the four advisory lines")
-func orangeIsSpentOnlyOnTheAdvisories() throws {
-    let source = try panelSource()
-    let occurrences = source.components(separatedBy: ".foregroundStyle(.orange)").count - 1
+/// The four model values that drive an advisory line, spelled as
+/// `PanelView.swift` reads them.
+///
+/// `staleHelperAdvisory(` keeps its parenthesis because that one is a CALL
+/// taking the probe path while the other three are properties, and the shorter
+/// needle would also match the `ServingModel` mention in a neighbouring
+/// expression. All four are named here rather than counted, so an advisory
+/// DELETED from the panel fails the guard below instead of shrinking a total
+/// that still balances.
+private let advisoryValues = [
+    "model.suppressionAdvisory",
+    "model.hookAdvisory",
+    "model.ingestAdvisory",
+    "model.staleHelperAdvisory(",
+]
 
-    // A COUNT, not a presence check. A guard reads what a file says and cannot
-    // see what it omits, so presence alone would stay green if a fifth orange
-    // element appeared or an advisory silently lost its colour. This panel has
-    // already shipped one undocumented control; the count is what catches the
-    // next one.
+/// The two foreground styles that carry NO pigment.
+private let neutralForegrounds: Set<String> = [".primary", ".secondary"]
+
+/// Every colour a span of view code paints, as the ARGUMENT each paint modifier
+/// was handed.
+///
+/// The caller then applies an ALLOWLIST, and that direction is the whole
+/// design. Issue #30's guard was a count of `.foregroundStyle(.orange)`, which
+/// pins one spelling of one pigment: `.foregroundColor(.orange)`,
+/// `.foregroundStyle(Color.orange)` and `.foregroundStyle(brand(.warning))`
+/// all put the same systemOrange on the same line and all walk straight past a
+/// search for that literal. Reading the ARGUMENT and requiring it to be one of
+/// the two non-colour semantics refuses every spelling of every pigment,
+/// including one nobody has written yet — which is what a count of ZERO cannot
+/// do, because a count of zero is also what an empty file scores.
+///
+/// The argument is read to the first `)` or newline, so a nested call arrives
+/// truncated and unbalanced — `brand(.warning` — which is never `.primary` and
+/// is therefore refused. That is the right answer rather than a limitation: a
+/// call is exactly how a pigment reaches this modifier without naming a colour.
+///
+/// `tint(` is read alongside the two foreground modifiers because `.tint` is an
+/// Environment value: one on a container paints every control below it, which
+/// is the regression `tintIsConfinedToTheHeldSegments` above already measured.
+private func paints(in code: String) -> [String] {
+    var arguments: [String] = []
+    for modifier in ["foregroundStyle(", "foregroundColor(", "tint("] {
+        for span in code.components(separatedBy: modifier).dropFirst() {
+            arguments.append(String(span.prefix { $0 != ")" && $0 != "\n" })
+                .trimmingCharacters(in: .whitespaces))
+        }
+    }
+    return arguments
+}
+
+/// The paints in `code` that are not one of the two neutral semantics.
+private func pigments(in code: String) -> [String] {
+    paints(in: code).filter { neutralForegrounds.contains($0) == false }
+}
+
+@Test("each advisory carries the warning symbol, and no advisory carries a colour")
+func advisoriesCarryShapeRatherThanColour() throws {
+    let source = try panelSource()
+
+    // REPLACES a count of `.foregroundStyle(.orange)` that asserted exactly
+    // four. That guard pinned the defect issue #30 is about: systemOrange as
+    // caption TEXT reaches 1.75:1 to 2.31:1 on the light backdrops this panel
+    // draws on, where WCAG asks 4.5:1 below ~18pt. Dark appearance passes at
+    // 7.62:1 and up; light does not, and darkening the pigment until it clears
+    // 4.5:1 lands on roughly `#8C5200` — the roast `state` colour, which
+    // collapses the one distinction the two accents exist to draw.
     //
-    // It caught issue #81's line, which is why this says four. The
-    // stale-helper advisory arrived, this guard went red at 4 against a
-    // deliberate change, and the count moved in the same commit — which is the
-    // note below working rather than a guard being edited to fit.
+    // The count could not simply move to 0, and that is the reason this guard
+    // is shaped the way it is. Zero is what a correct panel scores AND what a
+    // panel with no advisories at all scores, AND what a panel that paints them
+    // `.foregroundColor(.orange)` scores. Every assertion below is therefore
+    // POSITIVE — it names what the advisory must BE — and the one negative
+    // check is an allowlist over what it may paint, never a search for the
+    // spelling that happened to ship.
     //
     // COUPLED TO `ColorRole.warning`, and this note is one half of a pair.
-    // The four advisories render `.orange` as a LITERAL, never through
-    // `brand(.warning)`, so `.warning` has no production caller and this count
-    // is what pins the literal down. Routing the advisories through the role —
-    // which is what fixing issue #30 will want — takes this count to 0 and
-    // turns this test red. That is the guard working, not a regression: move
-    // the count in the same change. `BrandPalette.swift` carries the other
-    // half of this note, on the `ColorRole` declaration.
-    #expect(occurrences == 4,
-            "expected 4 orange advisory lines, found \(occurrences)")
+    // `.warning` still has no production caller: routing the advisories through
+    // `brand(.warning)` would resolve to the same systemOrange this guard now
+    // refuses. `BrandPalette.swift` carries the other half, on the `ColorRole`
+    // declaration, and its note about a count of four is what this replaces.
+
+    // ONE treatment. The count is load-bearing: the checks below reach all four
+    // advisories through `advisoryRow(`, so a second declaration of that name
+    // would let two of them drift apart while both halves of this guard stayed
+    // green.
+    let declarations = source.components(separatedBy: "func advisoryRow(").count - 1
+    #expect(declarations == 1, """
+        PanelView.swift declares func advisoryRow( \(declarations) times. This \
+        guard reads ONE treatment and requires all four advisories to route \
+        through it; at any other count it is measuring something else.
+        """)
+
+    let treatment = try #require(braceBlock(after: "func advisoryRow(", in: source)?.block, """
+        PanelView.swift names advisoryRow( but opens no balanced block after it, \
+        so this guard cannot tell what an advisory renders.
+        """)
+
+    // THE SYMBOL, which is what carries the meaning now that the colour is
+    // gone. Issue #30's own words: the warnings get quieter, and the dead
+    // socket is the line users most need to notice. Drop the symbol and the
+    // advisory is an unremarkable caption in a column of captions — the exact
+    // cost this change accepted and undertook to pay in shape instead.
+    #expect(treatment.contains("exclamationmark.triangle"), """
+        the advisory treatment in PanelView.swift renders no \
+        exclamationmark.triangle. With the orange gone the symbol is the ONLY \
+        thing separating a warning from the ordinary caption above it.
+        """)
+
+    // ANTI-VACUITY for the check above: a treatment that draws a symbol and no
+    // sentence would satisfy it while telling the user nothing.
+    #expect(treatment.contains("Text(line)"), """
+        the advisory treatment in PanelView.swift draws no Text(line), so \
+        whatever the model published reaches the user nowhere.
+        """)
+
+    // The treatment states its own non-colour foreground rather than inheriting
+    // one. `.primary` and not `.secondary`: the summary line beside it is
+    // already `.secondary`, and an advisory that reads lighter than the neutral
+    // sentence above it is quieter than the thing it interrupts.
+    #expect(paints(in: treatment).contains(".primary"), """
+        the advisory treatment in PanelView.swift states no .primary foreground, \
+        so the advisory takes whatever the enclosing stack happens to set — \
+        including .secondary, which draws a warning fainter than the neutral \
+        line beside it.
+        """)
+
+    // Every advisory routes through that one treatment, and paints nothing.
+    for value in advisoryValues {
+        let block = try #require(braceBlock(after: value, in: source)?.block, """
+            PanelView.swift does not open a balanced block after \(value), so \
+            this guard cannot read what that advisory renders. Issue #30 covers \
+            FOUR advisory lines; a missing one is a failure, not a skip.
+            """)
+
+        #expect(block.contains("advisoryRow("), """
+            the advisory driven by \(value) does not render through \
+            advisoryRow(, so it carries neither the symbol nor the foreground \
+            the other three do. A second treatment written out at one site is \
+            how the four drift apart.
+            """)
+
+        #expect(pigments(in: block).isEmpty, """
+            the advisory driven by \(value) paints \(pigments(in: block)). \
+            Advisory text carries no pigment at all: assets/art/README.md line \
+            22 states the rule — "Neither accent carries body text" — and issue \
+            #30 measured why systemOrange in particular cannot, at 1.75:1 to \
+            2.31:1 on a light backdrop against a 4.5:1 floor.
+            """)
+    }
+
+    #expect(pigments(in: treatment).isEmpty, """
+        the advisory treatment in PanelView.swift paints \
+        \(pigments(in: treatment)). Painting it once, in the shared treatment, \
+        colours all four advisories at a stroke.
+        """)
+
+    // AND NOWHERE ELSE IN THE PANEL. The guard this replaces said "orange is
+    // spent on exactly the four advisory lines", so it also held the rest of
+    // the file; dropping that half would leave the panel free to paint the Quit
+    // button or a heading with the pigment the advisories just gave up.
+    //
+    // An allowlist again, and `brand(` is what makes it one: every remaining
+    // paint in this file asks `BrandPalette` for a role, which is the route
+    // `BrandPalette` exists to force. A hex or a system colour named directly
+    // is refused whatever it is.
+    let panelPaints = paints(in: source)
+    #expect(panelPaints.isEmpty == false, """
+        this guard found no foreground style at all in PanelView.swift, which \
+        means it is reading something other than the panel.
+        """)
+    let unrouted = panelPaints.filter {
+        neutralForegrounds.contains($0) == false && $0.hasPrefix("brand(") == false
+    }
+    #expect(unrouted.isEmpty, """
+        PanelView.swift paints \(unrouted) directly. Colour in this panel comes \
+        from brand(_:) — so a test can read the value — or it is one of the \
+        neutral semantics. A colour named in the view is a colour no check reads.
+        """)
+}
+
+@Test("the advisory guard refuses every spelling of a pigment, not just the one that shipped")
+func theAdvisoryGuardRefusesEverySpellingOfAPigment() throws {
+    // The four routes to systemOrange on a caption. The first is what shipped
+    // and what the count this replaces was written against; the other three
+    // paint the identical pigment and walk past a search for it. `.red` is here
+    // because the defect is a COLOUR on advisory text, not an orange one.
+    for spelling in [".orange", "Color.orange", "brand(.warning)", ".red"] {
+        let painted = """
+            if let line = model.hookAdvisory {
+                advisoryRow(line)
+                    .foregroundStyle(\(spelling))
+            }
+            """
+        #expect(pigments(in: painted).isEmpty == false,
+                "a .foregroundStyle(\(spelling)) on an advisory must be refused")
+    }
+
+    // `.foregroundColor` is the deprecated spelling and still compiles, so a
+    // guard that reads only `.foregroundStyle` has a hole the size of one
+    // autocomplete.
+    #expect(pigments(in: "Text(line).foregroundColor(.orange)").isEmpty == false,
+            "the deprecated foregroundColor spelling must be refused too")
+
+    // `.tint` descends through the Environment, so one on the container above
+    // an advisory paints it without ever naming it.
+    #expect(pigments(in: "VStack { advisoryRow(line) }.tint(.orange)").isEmpty == false,
+            "a .tint above an advisory must be refused")
+
+    // THE POSITIVE CONTROL. Without it every assertion above is satisfied by a
+    // `pigments` that answers non-empty for any input at all — including the
+    // shipped panel, where this guard would then be red forever and get
+    // deleted rather than believed.
+    let neutral = """
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            Image(systemName: "exclamationmark.triangle.fill")
+            Text(line)
+        }
+        .foregroundStyle(.primary)
+        """
+    #expect(pigments(in: neutral).isEmpty,
+            "the shipped shape — a symbol and a .primary sentence — must pass")
+
+    // The second control, on the other half: a paint that is neutral in one
+    // place and a pigment in another is a reader that cannot tell them apart.
+    #expect(paints(in: neutral) == [".primary"],
+            "the reader must return the argument it was handed, not a verdict")
 }
