@@ -82,7 +82,13 @@ public struct PreferencesView: View {
                     )
                     // A slider without a readout is unreadable; the picker it
                     // replaces at least named its positions.
-                    Text(ServingModel.floorLabel(for: model.batteryFloorPercent))
+                    //
+                    // `floorReadout` and not `floorLabel(for: batteryFloorPercent)`.
+                    // The stored setting is unbounded, so this line stated a
+                    // floor the product does not enforce — issue #68. The model
+                    // hands over a finished string, which leaves no number here
+                    // to pick the wrong one of.
+                    Text(model.floorReadout)
                         .monospacedDigit()
                 }
 

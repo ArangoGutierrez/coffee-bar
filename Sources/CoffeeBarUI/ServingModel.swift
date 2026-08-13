@@ -783,8 +783,51 @@ public final class ServingModel {
     /// It carries the `%`, because the segments sit under a heading and a bare
     /// "20" beside "30" reads as a count of something rather than as a charge.
     /// `suppressionAdvisory` above quotes the same number the same way.
+    ///
+    /// It FORMATS a percent and chooses none. Which number the readout shows is
+    /// `floorReadout`'s business, below, and issue #68 is why the two are
+    /// separate: a formatter that picks its own number would be a second place
+    /// the floor is decided.
     static func floorLabel(for percent: Int) -> String {
         "\(percent)%"
+    }
+
+    /// What the floor control's readout SAYS, ready to render.
+    ///
+    /// **`controller.floorInForce`, never `batteryFloorPercentStorage`** — the
+    /// rule `refresh()` already applies to the suppression sentence, and issue
+    /// #68 is what its absence cost here. The stored setting is unbounded, the
+    /// slider is built over `BatteryFloor.permitted`, and `PowerInputs.init`
+    /// bounds what the decision uses, so a floor of 75 left over from the old
+    /// `5...100` policy pegged the slider at 50, printed "75%" beside it, and
+    /// was enforced as 50. Three numbers for one setting, in one window.
+    ///
+    /// It READS the bounded value; it does not bound one. `BatteryFloor` names
+    /// `PowerInputs.init` as the single bounding site and `PreferencesView`
+    /// already refuses to add a second — a `BatteryFloor.bounded` call here
+    /// would be the third, which issue #68's own acceptance rules out.
+    /// `theFloorReadoutNamesTheDefaultUntilTheFirstRefresh` goes red on that
+    /// mutant specifically.
+    ///
+    /// A finished STRING rather than an `Int`, so the view has no number left to
+    /// get wrong. The defect was a call site handing the formatter the stored
+    /// setting, and a readout that still takes a percent can still be handed
+    /// one.
+    ///
+    /// It does not rewrite what the user stored. Clamping the setting on read
+    /// was weighed in the issue and rejected: it removes the same disagreement
+    /// by editing a preference the user set, which this project does not do
+    /// silently. `batteryFloorPercent` still reports their choice.
+    ///
+    /// LIMIT, stated rather than hidden: `floorInForce` is `BatteryFloor.default`
+    /// until the first `evaluate`, and `init` deliberately makes no decision, so
+    /// a readout drawn before the first `refresh()` names the default rather
+    /// than the stored floor. What makes that window narrow is the route — the
+    /// panel refreshes on appear, the `SettingsLink` inside it opens this
+    /// window, and the ticker refreshes every 30 seconds regardless. The window
+    /// is pinned by the check named above rather than left to this paragraph.
+    public var floorReadout: String {
+        Self.floorLabel(for: controller.floorInForce)
     }
 
     /// The one line the panel shows about what is held right now.
