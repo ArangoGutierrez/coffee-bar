@@ -860,8 +860,9 @@ private func fixtureHealth(_ name: String = "wired.json") -> HookHealthReader {
     // BOTH sources of `.unreadable` drive this wording, and both are checked:
     // a Claude Code file that is ABSENT, and one that EXISTS and will not
     // parse. The absent case is the first-run user — see
-    // `aFirstRunUserWithNoSettingsFileIsStillToldToWireTheHooks` — and Claude
-    // Code is exempt from the existence gate for exactly that reason.
+    // `aFirstRunUserWithNoSettingsFileIsStillToldToWireTheHooks` — and this
+    // model has an unset selection, which `ServingModel.assumedAgentTools`
+    // resolves to Claude Code for exactly that reason.
     for fixture in ["definitely-not-here.json", "malformed.json"] {
         let unreadable = ServingModel(holder: SpyHolder(),
                                       reader: FakeReader(source: .ac, percent: 80),
@@ -1026,7 +1027,8 @@ private func fixtureHealth(_ files: [AgentTool: String]) -> HookHealthReader {
 
 @MainActor
 @Test func aFirstRunUserWithNoSettingsFileIsStillToldToWireTheHooks() {
-    // **Claude Code is EXEMPT from the existence gate, and this is why.**
+    // **A user who has never chosen is assumed to run Claude Code, and this is
+    // why.**
     //
     // Named bug this catches, and it shipped in the first round of #10c: the
     // gate was applied to all three tools, so a user who had never created
@@ -1038,6 +1040,15 @@ private func fixtureHealth(_ files: [AgentTool: String]) -> HookHealthReader {
     // primary integration and the first-run path. It means "does not use this
     // tool" for Codex and for Cursor. The two readings are different claims
     // about different cohorts, so the two are treated differently.
+    //
+    // WHAT CHANGED IN ISSUE #51, and why this check did not: the difference used
+    // to be a hard-coded `tool == .claudeCode` branch inside
+    // `HookHealthReader.status(for:)`, which stood in for a question nobody had
+    // asked the user. It is now `ServingModel.assumedAgentTools`, the selection
+    // coffee-bar assumes while the user has not made one — and this model's
+    // `FakeSettings()` holds no selection. Every expectation below is the one
+    // that was here before, unchanged: the behaviour a user sees is the point,
+    // and it must not move when the mechanism under it does.
     let model = ServingModel(holder: SpyHolder(),
                              reader: FakeReader(source: .ac, percent: 80),
                              health: fixtureHealth([.claudeCode: "definitely-not-here.json",
@@ -1291,8 +1302,10 @@ private func fixtureHealth(_ files: [AgentTool: String]) -> HookHealthReader {
     #expect(model.advises(.claudeCode),
             "switching Codex off took Claude Code with it")
     #expect(settings.stringArray(forKey: SettingsKey.agentTools) == ["claudeCode"],
-            "the choice never reached the store: \
-            \(String(describing: settings.stringArray(forKey: SettingsKey.agentTools)))")
+            """
+            the choice never reached the store: \
+            \(String(describing: settings.stringArray(forKey: SettingsKey.agentTools)))
+            """)
 
     #expect(model.hookAdvisory == """
         No coffee-bar hooks for Stop in ~/.claude/settings.json. If yours are in \
@@ -1343,7 +1356,8 @@ private func fixtureHealth(_ files: [AgentTool: String]) -> HookHealthReader {
         #expect(!label.localizedCaseInsensitiveContains(tool.rawValue),
                 "the caption names \(tool.rawValue), so a fourth tool makes it a lie: \(label)")
     }
-    #expect(!label.localizedCaseInsensitiveContains("install"), label)
+    #expect(!label.localizedCaseInsensitiveContains("install"),
+            "the caption offers to install something: \(label)")
     #expect(label.localizedCaseInsensitiveContains("hook"),
             "the caption says nothing about what the selection is for: \(label)")
 }
