@@ -526,35 +526,22 @@ public struct WatchdogService: Sendable {
     }
 }
 
-/// This machine's boot, as a wall-clock time and as an identity.
+/// This machine's boot, as an identity.
 ///
-/// §8.2(4) turns on the IDENTITY, and `currentSessionID` is the reader the
-/// decision path uses. `current` remains for anything that needs a DATE to show
-/// a human; nothing that decides anything reads it, and the doc comment on
-/// `currentSessionID` says why it must not.
+/// §8.2(4) turns on the IDENTITY, and `currentSessionID` is the only reader
+/// here because it is the only one anything needs. A `current()` returning the
+/// boot as a `Date` from `kern.boottime` stood here until `#83`; rung 2 was its
+/// only caller, and reading a wall clock is exactly what that rung stopped
+/// doing. `git show b9bd084` has it if a caller ever turns up.
 public enum SystemBootTime {
-    public static func current() -> Date {
-        var boot = timeval()
-        var size = MemoryLayout<timeval>.stride
-        guard sysctlbyname("kern.boottime", &boot, &size, nil, 0) == 0 else {
-            // An unknown boot time must not switch a check off. `now` makes
-            // every journal look older than the boot, so every armed run
-            // reverts. That loses the feature and keeps the machine safe, which
-            // is the right way round.
-            return Date()
-        }
-        return Date(timeIntervalSince1970:
-            Double(boot.tv_sec) + Double(boot.tv_usec) / 1_000_000)
-    }
-
     /// `kern.bootsessionuuid`: a fresh UUID string for each boot of this
     /// machine, and the value §8.2(4) is decided on.
     ///
-    /// It is an identity, not a reading, which is the whole point. `current`
-    /// above is a realtime `timeval`, so it is one of TWO wall-clock values the
-    /// reboot check used to compare — and only the other one, the journal's
-    /// `setAt`, is frozen on disk. Whatever a clock step does to a pair of
-    /// timestamps, it cannot make two different UUIDs equal.
+    /// It is an identity, not a reading, which is the whole point. The check
+    /// used to compare TWO wall-clock values — a realtime `kern.boottime`
+    /// against the journal's `setAt`, and only the second of those is frozen on
+    /// disk, so a step of the clock moved the answer. Whatever a clock step does
+    /// to a pair of timestamps, it cannot make two different UUIDs equal.
     ///
     /// `nil` when the identity cannot be read, and deliberately NOT a sentinel
     /// string. A sentinel would compare EQUAL to the sentinel an arm that could
