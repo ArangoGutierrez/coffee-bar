@@ -279,3 +279,72 @@ private func request(target: String, body: String) -> Data {
                 "the request line \"\(line)\" produced a target")
     }
 }
+
+// MARK: - The request method, which the documented `-X POST` rests on
+
+// The framer already walked past the request line to reach `Content-Length`,
+// and it threw the method away. Every snippet this project emits and every line
+// of `docs/QUICKSTART.md` says `-X POST`, so the listener needs the verb to make
+// that statement enforceable rather than merely conventional.
+//
+// The method comes from the SAME parse as the target, so the two can never
+// disagree about which request line they read, and the arity guard covers both
+// or neither.
+
+private func request(method: String, target: String, body: String) -> Data {
+    Data("""
+        \(method) \(target) HTTP/1.1\r
+        Host: localhost\r
+        Content-Length: \(body.utf8.count)\r
+        \r
+        \(body)
+        """.utf8)
+}
+
+@Test func theRequestMethodIsReadFromTheRequestLine() {
+    var framer = HTTPRequestFramer()
+    #expect(framer.append(request(method: "PUT", target: "/event", body: body))
+            == .body(Data(body.utf8)))
+    #expect(framer.requestMethod == "PUT")
+    // Read from the same line, so the target must still be right beside it.
+    #expect(framer.requestTarget == "/event")
+}
+
+@Test func theRequestMethodIsReportedWithItsCaseIntact() {
+    // Named bug this catches: lowercasing the method the way
+    // `contentLength(in:)` lowercases field names. RFC 9110 §9.1 makes methods
+    // case-SENSITIVE and §5.1 makes field names case-insensitive, so the two
+    // are correctly different. Normalising here would make `post`
+    // indistinguishable from `POST` for every caller, and the caller is the one
+    // deciding whether to serve the request.
+    var framer = HTTPRequestFramer()
+    _ = framer.append(request(method: "post", target: "/event", body: body))
+    #expect(framer.requestMethod == "post")
+}
+
+@Test func theRequestMethodIsNilBeforeAnyHeaderBlockArrives() {
+    // The mirror of `theRequestTargetIsNilBeforeAnyHeaderBlockArrives`: a method
+    // read from a partial buffer would be a truncated verb, and the listener
+    // would refuse a request that is merely still in flight.
+    var framer = HTTPRequestFramer()
+    #expect(framer.append(Data("POST /event/cur".utf8)) == .needMore)
+    #expect(framer.requestMethod == nil)
+}
+
+@Test func aRequestLineOfTheWrongShapeYieldsNoMethodEither() {
+    // Named bug this catches: surfacing `fields[0]` with no arity check, or from
+    // a scan separate from the target's. A method that survived a line whose
+    // target did not would let the listener answer 405 for a request it cannot
+    // route at all — a NEW failure mode for a malformed line, where today it is
+    // a 404. The refusal being added is for a wrong method, not a broken one.
+    for line in ["POST\r", "POST /event\r", "GET\r", "\r",
+                 "POST /event HTTP/1.1 extra\r"] {
+        var framer = HTTPRequestFramer()
+        let raw = Data("\(line)\nContent-Length: 0\r\n\r\n".utf8)
+        _ = framer.append(raw)
+        #expect(framer.requestMethod == nil,
+                "the request line \"\(line)\" produced a method")
+        #expect(framer.requestTarget == nil,
+                "the request line \"\(line)\" produced a target")
+    }
+}
