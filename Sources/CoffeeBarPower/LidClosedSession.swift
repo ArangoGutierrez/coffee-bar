@@ -97,6 +97,7 @@ public struct ArmService: Sendable {
     private let display: any DisplaySleepForcing
     private let clock: @Sendable () -> Date
     private let monotonicClock: @Sendable () -> TimeInterval
+    private let bootSession: @Sendable () -> String?
     private let displayVerifyDelay: TimeInterval
 
     /// `clock` and `displayVerifyDelay` stay injectable so tests need no wall
@@ -114,6 +115,8 @@ public struct ArmService: Sendable {
                 clock: @escaping @Sendable () -> Date = HostInfo.now,
                 monotonicClock: @escaping @Sendable () -> TimeInterval
                     = SystemMonotonicClock.now,
+                bootSession: @escaping @Sendable () -> String?
+                    = SystemBootTime.currentSessionID,
                 displayVerifyDelay: TimeInterval = 5) {
         self.journal = journal
         self.reader = reader
@@ -122,6 +125,7 @@ public struct ArmService: Sendable {
         self.display = display
         self.clock = clock
         self.monotonicClock = monotonicClock
+        self.bootSession = bootSession
         self.displayVerifyDelay = displayVerifyDelay
     }
 
@@ -178,6 +182,15 @@ public struct ArmService: Sendable {
             // against. The wall stamp stays because a human reading `report`
             // needs a date, not a since-boot number.
             setAtMonotonic: monotonicClock(),
+            // Which boot this hold belongs to, so the daemon can tell an
+            // unclean exit from its own start without consulting a clock.
+            //
+            // `""` when the identity cannot be read. The daemon treats that as
+            // a different boot and reverts on its next tick — the same
+            // direction an unreadable `kern.boottime` used to take, and the
+            // reason the unknown is not a sentinel that could match another
+            // unknown.
+            bootSessionID: bootSession() ?? "",
             ttlSeconds: ttlSeconds,
             armedBy: Self.provenance())
 
@@ -203,9 +216,10 @@ public struct ArmService: Sendable {
                 throw ArmError.displayStayedAwake
             }
 
-            // The second guard, and the general one. Deriving the boot time
-            // removed the daemon's REASON to revert on its first tick; it did
-            // not remove its ABILITY, and nothing stops a future policy, an
+            // The second guard, and the general one. Deciding §8.2(4) from the
+            // MACHINE's boot rather than from this process's start removed the
+            // daemon's REASON to revert on its first tick; it did not remove
+            // its ABILITY, and nothing stops a future policy, an
             // operator running `revert`, or a race nobody has thought of from
             // clearing the journal in this window.
             //
@@ -315,10 +329,10 @@ public struct WatchdogService: Sendable {
     private let notifier: any Notifying
     private let environment: any WatchdogEnvironmentSensing
     private let policy: WatchdogPolicy
-    private let bootTime: @Sendable () -> Date
+    private let bootSession: @Sendable () -> String?
 
-    /// `bootTime` is injectable so a test can drive both sides of §8.2(4)
-    /// without rebooting. Production reads `kern.boottime`.
+    /// `bootSession` is injectable so a test can drive both sides of §8.2(4)
+    /// without rebooting. Production reads `kern.bootsessionuuid`.
     ///
     /// `environment` has NO default, deliberately. A default of
     /// `SystemWatchdogEnvironment()` would let a caller reach a decision
@@ -332,14 +346,35 @@ public struct WatchdogService: Sendable {
                 notifier: any Notifying,
                 environment: any WatchdogEnvironmentSensing,
                 policy: WatchdogPolicy = .default,
-                bootTime: @escaping @Sendable () -> Date = SystemBootTime.current) {
+                bootSession: @escaping @Sendable () -> String?
+                    = SystemBootTime.currentSessionID) {
         self.reader = reader
         self.power = power
         self.supervisor = supervisor
         self.notifier = notifier
         self.environment = environment
         self.policy = policy
-        self.bootTime = bootTime
+        self.bootSession = bootSession
+    }
+
+    /// Whether this journal was written in a DIFFERENT boot than the one now
+    /// running — §8.2(4)'s question, asked of two identities.
+    ///
+    /// UNKNOWN on either side counts as another boot. Every uncertain path in
+    /// this component resolves toward reverting, and an identity nobody can
+    /// read is no evidence that the armer survived: answering "same boot" there
+    /// would keep `SleepDisabled` set for a process that may be long gone.
+    ///
+    /// The emptiness checks are the reason this is a function rather than a
+    /// `!=`. Two unreadable identities are not one boot, but `"" == ""` is
+    /// true — so the naive comparison says "same boot" precisely when least is
+    /// known, which is the answer that suppresses the revert.
+    private static func isFromAnotherBoot(record: JournalRecord,
+                                          current: String?) -> Bool {
+        guard let current, !current.isEmpty, !record.bootSessionID.isEmpty else {
+            return true
+        }
+        return record.bootSessionID != current
     }
 
     private enum JournalState {
@@ -399,11 +434,13 @@ public struct WatchdogService: Sendable {
                 // measured end state was sleep held, journal deleted and the
                 // daemon booted out, with no attacker anywhere near it.
                 //
-                // `setAt` is truncated DOWN to the second by `HostInfo.now`, so
-                // a journal written in the same second as the boot can read as
-                // older than it. That errs toward reverting, which is the safe
-                // direction.
-                isBootEvaluation: record.setAt < bootTime(),
+                // Asked of the boot's IDENTITY, and no longer of its clock.
+                // This compared `record.setAt` against `kern.boottime` — a
+                // frozen stamp against a live realtime reading, so the two
+                // respond differently to a step of the wall clock and the
+                // answer moves with it. Two UUIDs do not (#83).
+                isBootEvaluation: Self.isFromAnotherBoot(record: record,
+                                                         current: bootSession()),
                 // §8.1: thermal is the abort that matters most here — a MacBook
                 // vents through the hinge area, and a closed lid under
                 // sustained agent load is the worst case the handoff names.
@@ -489,22 +526,46 @@ public struct WatchdogService: Sendable {
     }
 }
 
-/// When this machine last booted, from `kern.boottime`.
+/// This machine's boot, as an identity.
 ///
-/// §8.2(4) turns on this value: a journal written BEFORE the last boot is
-/// evidence of an unclean exit, and one written after it is not.
+/// §8.2(4) turns on the IDENTITY, and `currentSessionID` is the only reader
+/// here because it is the only one anything needs. A `current()` returning the
+/// boot as a `Date` from `kern.boottime` stood here until `#83`; rung 2 was its
+/// only caller, and reading a wall clock is exactly what that rung stopped
+/// doing. `git show b9bd084` has it if a caller ever turns up.
 public enum SystemBootTime {
-    public static func current() -> Date {
-        var boot = timeval()
-        var size = MemoryLayout<timeval>.stride
-        guard sysctlbyname("kern.boottime", &boot, &size, nil, 0) == 0 else {
-            // An unknown boot time must not switch the check off. `now` makes
-            // every journal look older than the boot, so every armed run
-            // reverts on the next tick. That loses the feature and keeps the
-            // machine safe, which is the right way round.
-            return Date()
+    /// `kern.bootsessionuuid`: a fresh UUID string for each boot of this
+    /// machine, and the value §8.2(4) is decided on.
+    ///
+    /// It is an identity, not a reading, which is the whole point. The check
+    /// used to compare TWO wall-clock values — a realtime `kern.boottime`
+    /// against the journal's `setAt`, and only the second of those is frozen on
+    /// disk, so a step of the clock moved the answer. Whatever a clock step does
+    /// to a pair of timestamps, it cannot make two different UUIDs equal.
+    ///
+    /// `nil` when the identity cannot be read, and deliberately NOT a sentinel
+    /// string. A sentinel would compare EQUAL to the sentinel an arm that could
+    /// not read it either stamped into the journal, and equal is the answer
+    /// that suppresses the revert. The caller resolves the unknown toward
+    /// reverting; see `WatchdogService`.
+    public static func currentSessionID() -> String? {
+        var size = 0
+        guard sysctlbyname("kern.bootsessionuuid", nil, &size, nil, 0) == 0,
+              size > 0 else {
+            return nil
         }
-        return Date(timeIntervalSince1970:
-            Double(boot.tv_sec) + Double(boot.tv_usec) / 1_000_000)
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctlbyname("kern.bootsessionuuid", &buffer, &size, nil, 0) == 0
+        else {
+            return nil
+        }
+        // `String(cString:)` over an array is deprecated. sysctl writes a
+        // NUL-terminated C string into a buffer it sized to include that
+        // terminator, so the bytes before the first NUL are the value.
+        let identity = String(decoding: buffer.prefix(while: { $0 != 0 }),
+                              as: UTF8.self)
+        // An empty answer is an unreadable one. Collapsing the two here means
+        // no caller has to know that the sysctl can succeed and say nothing.
+        return identity.isEmpty ? nil : identity
     }
 }

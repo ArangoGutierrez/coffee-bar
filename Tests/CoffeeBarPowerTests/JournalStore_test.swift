@@ -61,7 +61,9 @@ private let prov = ArmProvenance(pid: 7, binaryPath: "/x", uid: 501)
 private func sample(prior: Bool = false) -> JournalRecord {
     JournalRecord(intent: .sleepDisabled, priorValue: prior,
                   setAt: Date(timeIntervalSince1970: 1_000_000),
-                  setAtMonotonic: 10_000, ttlSeconds: 900, armedBy: prov)
+                  setAtMonotonic: 10_000,
+                  bootSessionID: "1BE0B007-0000-4000-8000-000000000007",
+                  ttlSeconds: 900, armedBy: prov)
 }
 
 @Test func loadOnMissingFileReturnsNil() throws {
@@ -401,7 +403,9 @@ func clearStillThrowsWhenTheJournalCannotBeRemoved() throws {
     let fractional = JournalRecord(
         intent: .sleepDisabled, priorValue: false,
         setAt: Date(timeIntervalSince1970: 1_000_000.75),
-        setAtMonotonic: 10_000, ttlSeconds: 900, armedBy: prov)
+        setAtMonotonic: 10_000,
+        bootSessionID: "1BE0B007-0000-4000-8000-000000000007",
+        ttlSeconds: 900, armedBy: prov)
     try store.write(fractional)
     let reloaded = try store.load()
     #expect(reloaded != fractional)                      // the lossy case
@@ -412,7 +416,9 @@ func clearStillThrowsWhenTheJournalCannotBeRemoved() throws {
     let whole = JournalRecord(
         intent: .sleepDisabled, priorValue: false,
         setAt: Date(timeIntervalSince1970: 1_000_000),
-        setAtMonotonic: 10_000, ttlSeconds: 900, armedBy: prov)
+        setAtMonotonic: 10_000,
+        bootSessionID: "1BE0B007-0000-4000-8000-000000000007",
+        ttlSeconds: 900, armedBy: prov)
     try store.write(whole)
     #expect(try store.load() == whole)
 }

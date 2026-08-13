@@ -60,7 +60,9 @@ private func makeRecord(priorValue: Bool = false,
                         setAt: Date = Date(timeIntervalSince1970: 1_800_000_000),
                         ttlSeconds: Int = 3600) -> JournalRecord {
     JournalRecord(intent: .sleepDisabled, priorValue: priorValue, setAt: setAt,
-                  setAtMonotonic: 10_000, ttlSeconds: ttlSeconds,
+                  setAtMonotonic: 10_000,
+                  bootSessionID: "1BE0B007-0000-4000-8000-000000000004",
+                  ttlSeconds: ttlSeconds,
                   armedBy: ArmProvenance(pid: 1234, binaryPath: "/usr/local/bin/probe",
                                          uid: 501))
 }
