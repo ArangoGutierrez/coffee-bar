@@ -413,9 +413,24 @@ private func withProducedImage(_ body: (URL, URL, String) throws -> Void) throws
 /// trip, so an app copied out of an unstapled image has nothing local to check
 /// against on a first launch offline.
 ///
-/// Text-read, because notarising needs an Apple ID and the network. The
-/// executed proof is the release itself, whose acceptance runs an offline
-/// launch.
+/// **That last sentence is READ, not measured.** It is Apple's documented
+/// reason for stapling, and this project has never put it to the test: no
+/// offline first launch has ever been executed here — not by a release
+/// acceptance, not by hand, not anywhere. Issue #91 is open on exactly that
+/// gap. The design spec said so from the start, in
+/// `docs/superpowers/specs/2026-08-09-v0.2.1-upgrade-trust-design.md`
+/// "Not verified: the offline failure mode itself".
+///
+/// An earlier version of this comment claimed the release acceptance ran one.
+/// It did not, and no release has. That claim is retracted; the checklist in
+/// `.github/ISSUE_TEMPLATE/release.yml` stops at `stapler validate` on the
+/// mounted image, which proves a ticket is attached, not that a machine with
+/// no network can open the app.
+///
+/// So the assertions below are text-read, because notarising needs an Apple ID
+/// and the network. What they prove is narrower than the paragraph above and
+/// is true: the script staples the app itself, and it does so before the image
+/// is assembled around it.
 @Test func theAppIsNotarisedAndStapledBeforeTheImageIsBuilt() throws {
     // Comments come out FIRST, and every assertion below reads the stripped
     // text. This script names `ditto -c -k --keepParent` and `hdiutil create` in
