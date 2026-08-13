@@ -3,6 +3,7 @@
 
 import Foundation
 import Testing
+import CoffeeBarTestSupport
 
 /// Reads `PanelView.swift` as CODE. `#filePath` anchors the lookup to THIS
 /// source file, never to an installed or deployed copy, so the guard cannot

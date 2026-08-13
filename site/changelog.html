@@ -347,13 +347,15 @@ spctl -a -t open --context context:primary-signature -vv coffee-bar-0.1.1.dmg</p
   <li>The wake policy. Under <code>Auto</code>, coffee-bar holds a <code>PreventUserIdleSystemSleep</code> assertion while an agent session is <code>starting</code> or <code>working</code>. It releases the assertion when every session waits on a human. Under <code>Auto</code>, a session that waits on you holds nothing.</li>
   <li>The Serving control, with three positions. <code>Off</code> never holds, and it outranks an active session. <code>Auto</code> is the default, and the sessions decide. <code>On</code> holds whatever the sessions do. The battery floor below still applies to <code>Auto</code> and to <code>On</code>.</li>
   <li>The Display control, with two positions. <code>Sleeps</code> is the default, so the screen goes dark while the machine stays awake. <code>Stays on</code> adds a <code>PreventUserIdleDisplaySleep</code> assertion. That assertion rides the system hold and never outlives it.</li>
-  <!-- The two percentages below are the floor 0.1.0 shipped, in <code> ON
-       PURPOSE. They record a past release rather than claiming the current
-       default, and the default has since moved.
-       `theBatteryFloorStatedIsTheRealDefault` reads every percentage in prose
-       and asserts it is the floor in force today, so unwrapping these turns
-       the suite red against a sentence that is true. -->
-  <li>The battery floor. On battery, at or below <code>20%</code>, coffee-bar does not hold. The floor also refuses the display assertion. "At or below" is exact: at <code>20%</code> itself coffee-bar does not hold.</li>
+  <!-- The two percentages below are the floor 0.1.0 shipped, written plainly.
+       They were wrapped in <code> because
+       `theBatteryFloorStatedIsTheRealDefault` read every percentage in prose
+       and asserted it was the floor in force today, which reddened a sentence
+       that is true. That guard now stops at a version section — see
+       `currentClaimProse` in DocsClaims_test.swift — so a released section may
+       record what it shipped. Do not update these to the current default:
+       they say what 0.1.0 did. -->
+  <li>The battery floor. On battery, at or below 20%, coffee-bar does not hold. The floor also refuses the display assertion. "At or below" is exact: at 20% itself coffee-bar does not hold.</li>
   <li>Ingest over a unix socket with mode 0600. Five Claude Code hooks feed it: <code>SessionStart</code>, <code>PreToolUse</code>, <code>PostToolUse</code>, <code>PermissionDenied</code> and <code>Stop</code>. The app learns what your sessions do from these hooks and from nothing else.</li>
   <li>The attention list in the panel. It names the sessions blocked on you: <code>awaitingPermission</code> and <code>awaitingInput</code>.</li>
   <li>Distribution through Homebrew. The tap builds the app from source.</li>

@@ -5,6 +5,7 @@ import Foundation
 import Testing
 import CoffeeBarCore
 import CoffeeBarPower
+import CoffeeBarTestSupport
 @testable import CoffeeBarUI
 
 /// The lid-closed surfaces, and the measurement that bounds them.
