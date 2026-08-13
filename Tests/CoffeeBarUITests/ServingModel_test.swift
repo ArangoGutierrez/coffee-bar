@@ -2084,6 +2084,114 @@ private struct DisagreeingHealth: HookHealthProviding {
 }
 
 @MainActor
+@Test func theFloorReadoutNamesTheFloorEnforcedAndNotTheOneStored() {
+    // Issue #68. The stored floor is UNBOUNDED — reachable by `defaults write`,
+    // and reached by every user who chose one under the old `5...100` policy —
+    // so a readout built from the setting states a number the product will not
+    // honour. Named bug this catches: "1000%" beside a decision made on 50, and
+    // "0%" beside one made on 10.
+    //
+    // The suppression sentence is asserted BESIDE the readout on purpose. The
+    // two quote the same floor one line apart in the same window, so the defect
+    // that matters is not a wrong string in isolation, it is two surfaces
+    // naming different floors for one setting.
+    let high = ServingModel(
+        holder: SpyHolder(), reader: FakeReader(source: .battery, percent: 45),
+        health: fixtureHealth(),
+        settings: FakeSettings([SettingsKey.batteryFloorPercent: 1000]))
+    high.intent = .serve
+
+    #expect(high.floorReadout == "50%",
+            "the readout quoted a floor nothing enforces: \(high.floorReadout)")
+    #expect(high.suppressionAdvisory?.contains("at or below 50%") == true,
+            "the sentence and the readout disagree: \(high.suppressionAdvisory ?? "nil")")
+    // REPORTED, never rewritten. Issue #68 weighed clamping the stored value on
+    // read and rejected it: this project does not silently edit a preference a
+    // user set. The disagreement is removed by showing the enforced number, not
+    // by destroying the stored one.
+    #expect(high.batteryFloorPercent == 1000,
+            "the readout fix rewrote the user's stored setting")
+
+    // 5% and a stored 0, which is the pair the comment on `refresh()` records:
+    // `5 <= 0` is false, so a readout on the raw setting printed "0%" while the
+    // decision refused on the bounded 10.
+    let low = ServingModel(
+        holder: SpyHolder(), reader: FakeReader(source: .battery, percent: 5),
+        health: fixtureHealth(),
+        settings: FakeSettings([SettingsKey.batteryFloorPercent: 0]))
+    low.intent = .serve
+
+    #expect(low.floorReadout == "10%",
+            "the readout quoted a floor nothing enforces: \(low.floorReadout)")
+    #expect(low.suppressionAdvisory?.contains("at or below 10%") == true,
+            "the sentence and the readout disagree: \(low.suppressionAdvisory ?? "nil")")
+    #expect(low.batteryFloorPercent == 0,
+            "the readout fix rewrote the user's stored setting")
+}
+
+@MainActor
+@Test func anInRangeStoredFloorIsReadOutUnchanged() {
+    // The regression that matters. Every floor a user can actually reach on the
+    // slider is inside `BatteryFloor.permitted`, so the fix above is worthless
+    // if it moves any of them. Named bug this catches: a readout wired to a
+    // floor that has not been evaluated yet, or to the wrong end of a bound —
+    // both of which would leave the ordinary case naming a number the user
+    // never chose.
+    //
+    // Literal pairs rather than a `map` over `BatteryFloor.choices`: an
+    // expectation computed the way the subject computes it agrees with a broken
+    // subject.
+    for (stored, expected) in [(10, "10%"), (15, "15%"), (40, "40%"), (50, "50%")] {
+        let model = ServingModel(
+            holder: SpyHolder(), reader: FakeReader(source: .battery, percent: 80),
+            health: fixtureHealth(),
+            settings: FakeSettings([SettingsKey.batteryFloorPercent: stored]))
+        model.refresh()
+        #expect(model.floorReadout == expected,
+                "a stored \(stored) read out as \(model.floorReadout)")
+    }
+
+    // And the live path: dragging the slider moves the readout on the same
+    // pass, not at the next 30-second tick. The setter reconciles, so the floor
+    // in force is current by the time the view reads it back.
+    let model = ServingModel(
+        holder: SpyHolder(), reader: FakeReader(source: .battery, percent: 80),
+        health: fixtureHealth(), settings: FakeSettings())
+    model.batteryFloorPercent = 30
+    #expect(model.floorReadout == "30%",
+            "the readout lagged the control: \(model.floorReadout)")
+}
+
+@MainActor
+@Test func theFloorReadoutNamesTheDefaultUntilTheFirstRefresh() {
+    // The LIMIT of reporting instead of re-deriving, pinned rather than left in
+    // prose. `HoldController.floorInForce` is `BatteryFloor.default` until the
+    // first `evaluate`, and `ServingModel.init` deliberately makes no decision,
+    // so a readout drawn before the first `refresh()` names 15 rather than the
+    // stored 40.
+    //
+    // It is also the DISCRIMINATOR against the fix issue #68 forbids: a readout
+    // that called `BatteryFloor.bounded` on the stored setting — a third
+    // bounding site — would answer "40%" on the first line here and pass every
+    // other check in this file. This one goes red on it.
+    let model = ServingModel(
+        holder: SpyHolder(), reader: FakeReader(source: .battery, percent: 80),
+        health: fixtureHealth(),
+        settings: FakeSettings([SettingsKey.batteryFloorPercent: 40]))
+
+    #expect(model.floorReadout == "15%",
+            "the readout re-derived a floor no decision has used: \(model.floorReadout)")
+
+    // And one refresh heals it, which is what makes the window above narrow
+    // rather than permanent: the panel refreshes on appear, `SettingsLink`
+    // inside that panel is the route to this window, and the ticker refreshes
+    // every 30 seconds regardless.
+    model.refresh()
+    #expect(model.floorReadout == "40%",
+            "the first refresh did not heal the readout: \(model.floorReadout)")
+}
+
+@MainActor
 @Test func loweringTheFloorDropsTheSentenceThatNamedTheOldOne() {
     // A defect issue #11 CREATES, and the reason `reason(_:stillTrueOf:)` had
     // to change. Before the floor was settable it could not move, so judging a
