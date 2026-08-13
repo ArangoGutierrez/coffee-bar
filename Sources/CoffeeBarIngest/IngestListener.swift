@@ -627,6 +627,34 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
                         self.respond(connection, status: "404 Not Found", state: state)
                         return
                     }
+
+                    // The method is checked AFTER the target resolves, and only
+                    // then. 405 asserts that this resource exists and rejects
+                    // the verb, so a path serving nothing stays a 404; and a
+                    // request line the framer could not parse has already left
+                    // through that 404 above, which is what it did before this
+                    // check existed. The refusal is for a WRONG method, not a
+                    // new answer for a malformed request.
+                    //
+                    // Compared EXACTLY. RFC 9110 §9.1 makes methods
+                    // case-sensitive, so `post` is not `POST`. The framer
+                    // lowercases field names a few lines away under §5.1, which
+                    // makes those case-insensitive — the two are correctly
+                    // different and must not be made to match.
+                    //
+                    // This makes an existing statement enforceable rather than
+                    // adding a defence: every snippet this project emits, and
+                    // docs/QUICKSTART.md, already specify `-X POST`. It is not
+                    // a privilege boundary. Design §4.1 says plainly that any
+                    // process running as this user can post here, and the unix
+                    // socket's filesystem permissions are what bound that.
+                    guard state.framer.requestMethod == "POST" else {
+                        // RFC 9110 §15.5.6 requires `Allow` on a 405.
+                        self.respond(connection, status: "405 Method Not Allowed",
+                                     allow: "POST", state: state)
+                        return
+                    }
+
                     if let event = Self.decode(body, from: tool) {
                         onEvent(tool, event)
                         self.respond(connection, status: "204 No Content", state: state)
@@ -654,8 +682,8 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
     }
 
     private func respond(_ connection: NWConnection, status: String,
-                         state: ConnectionState) {
-        connection.send(content: Self.response(status),
+                         allow: String? = nil, state: ConnectionState) {
+        connection.send(content: Self.response(status, allow: allow),
                         completion: .contentProcessed { [weak self] _ in
                             guard let self else { connection.cancel(); return }
                             self.finish(connection, state: state)
@@ -669,7 +697,13 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
                         completion: .contentProcessed { _ in connection.cancel() })
     }
 
-    private static func response(_ status: String) -> Data {
-        Data("HTTP/1.1 \(status)\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8)
+    /// `allow` names the methods a resource does accept, and exists for one
+    /// status: RFC 9110 §15.5.6 requires `Allow` on a 405. It is a named
+    /// parameter rather than a general list of extra headers because there is
+    /// one header to send and one status that must send it; the other six
+    /// statuses this file emits pass `nil` and are unchanged on the wire.
+    private static func response(_ status: String, allow: String? = nil) -> Data {
+        let allowed = allow.map { "Allow: \($0)\r\n" } ?? ""
+        return Data("HTTP/1.1 \(status)\r\n\(allowed)Content-Length: 0\r\nConnection: close\r\n\r\n".utf8)
     }
 }

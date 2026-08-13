@@ -202,6 +202,30 @@ private final class RawClient {
         return false
     }
 
+    /// Everything the server sent, read to its close.
+    ///
+    /// BOUNDED, never an open-ended block. A listener that answers nothing is
+    /// precisely the bug this reads for, and an unbounded `recv` would hang the
+    /// test body rather than fail it — the failure `postTimeoutSeconds`
+    /// documents, where one wedged body took a whole 375-test run with it.
+    ///
+    /// The loop runs to EOF rather than taking one `recv`: every response this
+    /// listener writes fits in a single delivery today, and a test that assumed
+    /// so would start truncating silently the day one did not.
+    func readResponse(seconds: Int = 30) -> String {
+        var window = timeval(tv_sec: seconds, tv_usec: 0)
+        setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &window,
+                   socklen_t(MemoryLayout<timeval>.size))
+        var text = ""
+        var chunk = [UInt8](repeating: 0, count: 1024)
+        while true {
+            let got = recv(descriptor, &chunk, chunk.count, 0)
+            guard got > 0 else { break }
+            text += String(decoding: chunk[0..<got], as: UTF8.self)
+        }
+        return text
+    }
+
     func close() { Darwin.close(descriptor) }
 }
 
@@ -1487,5 +1511,181 @@ private func fixture(_ corpus: String, _ name: String) throws -> String {
 
     #expect(try post(try fixture("cursor-hooks", "after-file-edit.json"),
                      to: sandbox.path, endpoint: "/event") == 22)
+    #expect(collected.count == 0)
+}
+
+// MARK: - The method, over the wire
+
+// The documented hook command has always said `-X POST`. The listener ignored
+// the verb, so that line described a convention rather than a requirement, and
+// no reader could tell which. These drive the REAL listener over a REAL socket
+// with a real `curl`, because the method lives in the request line and only the
+// wire carries it.
+//
+// This is not a privilege boundary. The socket is a unix domain socket under
+// the user's Application Support directory and design §4.1 is explicit that any
+// process running as this user may post to it; filesystem permissions bound who
+// can reach it, and a method check moves that boundary not at all. What changes
+// is that a documented contract is now enforceable.
+//
+// `collected.count` is read straight after a refusal with no `pump`, and that is
+// deterministic rather than lucky: `onEvent` is invoked on `.main` BEFORE the
+// response is written, so anything a served request delivered is already
+// recorded by the time these helpers see a single response byte.
+
+/// Sends one request with a chosen method and returns the RAW response text.
+///
+/// `--fail` is deliberately absent, unlike every other helper in this file.
+/// Under `--fail` curl prints nothing and exits 22 for a 400, a 404 and a 405
+/// alike, so an exit code cannot say WHICH refusal came back — and the status
+/// line is the whole contract here. `--include` puts the response headers on
+/// stdout, where this can read them.
+private func exchange(_ json: String, method: String,
+                      to socketPath: String, endpoint: String) throws -> String {
+    let outPipe = Pipe()
+    // `Process` takes only the write end. Nothing else owns the read end, so
+    // both are closed here, exactly as `CoffeeBarHookShim_test.swift` does it.
+    defer {
+        try? outPipe.fileHandleForReading.close()
+        try? outPipe.fileHandleForWriting.close()
+    }
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+    process.arguments = ["--silent", "--show-error", "--include",
+                         "--max-time", postTimeoutSeconds,
+                         "--unix-socket", socketPath,
+                         "-X", method,
+                         "-H", "Content-Type: application/json",
+                         "--data", json,
+                         "http://localhost\(endpoint)"]
+    process.standardOutput = outPipe
+    process.standardError = FileHandle.nullDevice
+    try process.run()
+    // Read to end of stream BEFORE waiting, for the reason the shim tests give.
+    let out = outPipe.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    return String(decoding: out, as: UTF8.self)
+}
+
+private let stopPayload = #"{"hook_event_name":"Stop","session_id":"s1"}"#
+
+@Test func anEventSentWithTheWrongMethodIsRefusedWithFourOhFive() throws {
+    // The misconfiguration is real, not synthetic: `curl -T file --unix-socket …`
+    // sends PUT with a body, and anyone adapting the documented command by hand
+    // can send any verb at all. Before this refusal the verb was discarded in
+    // the framer, so such a hook WORKED — while the snippet, docs/QUICKSTART.md
+    // and site/install.html all said POST.
+    //
+    // Named bug this catches: routing on the target alone, which is what the
+    // listener did.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let collected = CollectedOrigins()
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+
+    try listener.start { tool, event in collected.record(tool, event) }
+    try requireReady(listener)
+
+    let response = try exchange(stopPayload, method: "PUT",
+                                to: sandbox.path, endpoint: "/event")
+    #expect(response.contains("HTTP/1.1 405 Method Not Allowed"),
+            "a PUT to the event path was not refused: \(response)")
+    // RFC 9110 §15.5.6: a 405 MUST carry `Allow`. A refusal that will not say
+    // what it does accept sends the user back to the docs to guess.
+    #expect(response.contains("Allow: POST"),
+            "the 405 carried no Allow header: \(response)")
+    #expect(collected.count == 0, "the refused PUT was delivered anyway")
+
+    // An unknown path stays a 404. A 405 asserts that a RESOURCE exists and
+    // rejects the verb, so checking the method first would advertise
+    // `Allow: POST` for paths that serve nothing at all.
+    let unknown = try exchange(stopPayload, method: "PUT",
+                               to: sandbox.path, endpoint: "/event/gemini")
+    #expect(unknown.contains("HTTP/1.1 404 Not Found"),
+            "an unknown path answered something other than 404: \(unknown)")
+
+    // Refusing must not stop ingest. A check that killed the listener would
+    // satisfy every assertion above.
+    #expect(try post(stopPayload, to: sandbox.path, endpoint: "/event") == 0)
+    pump(until: { collected.count > 0 })
+    #expect(collected.count == 1, "the refused requests arrived after all")
+}
+
+@Test func aLowercasedPostIsADifferentMethodAndIsRefused() throws {
+    // RFC 9110 §9.1 makes methods case-SENSITIVE. Named bug this catches: a
+    // `caseInsensitiveCompare`, or lowercasing the verb the way the framer
+    // lowercases `content-length`. That would be consistent and wrong — §5.1
+    // makes FIELD NAMES case-insensitive and methods are not field names.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let collected = CollectedOrigins()
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+
+    try listener.start { tool, event in collected.record(tool, event) }
+    try requireReady(listener)
+
+    let response = try exchange(stopPayload, method: "post",
+                                to: sandbox.path, endpoint: "/event")
+    #expect(response.contains("HTTP/1.1 405 Method Not Allowed"),
+            "a lowercased `post` was served as if it were POST: \(response)")
+    #expect(collected.count == 0, "the lowercased post was delivered anyway")
+}
+
+@Test func aPostToTheEventPathStillAnswersTwoOhFourAndDelivers() throws {
+    // The regression that matters most, and the reason the status is asserted
+    // rather than curl's exit code: "not an error" would also pass for a 200, a
+    // 201, or anything else a broken refusal path might emit. Every hook this
+    // project has ever documented posts here.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let collected = CollectedOrigins()
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+
+    try listener.start { tool, event in collected.record(tool, event) }
+    try requireReady(listener)
+
+    let response = try exchange(stopPayload, method: "POST",
+                                to: sandbox.path, endpoint: "/event")
+    #expect(response.contains("HTTP/1.1 204 No Content"),
+            "the documented method stopped being served: \(response)")
+    #expect(!response.contains("405"),
+            "a POST drew a method refusal: \(response)")
+
+    pump(until: { collected.count > 0 })
+    let (tool, event) = try #require(collected.all.first)
+    #expect(tool == .claudeCode)
+    #expect(event.hookEventName == "Stop")
+}
+
+@Test func aRequestLineTheFramerCannotParseIsStillAFourOhFour() throws {
+    // What is being added is a refusal for a WRONG method, NOT a new failure
+    // mode for a broken request. A line the framer cannot parse yields no
+    // method and no target, and that has always been a 404. Answering 405 there
+    // would blame the client's verb for a request in which no resource was ever
+    // found — and would need a method the framer deliberately does not report.
+    //
+    // `curl` cannot send this: it always writes three fields. Hence the raw
+    // client, which is why it exists.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let collected = CollectedOrigins()
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+
+    try listener.start { tool, event in collected.record(tool, event) }
+    try requireReady(listener)
+
+    let client = try #require(RawClient(path: sandbox.path))
+    defer { client.close() }
+    client.transmit("BOGUS\r\nContent-Length: 0\r\n\r\n")
+    let response = client.readResponse()
+
+    #expect(response.contains("HTTP/1.1 404 Not Found"),
+            "an unparseable request line changed its answer: \(response)")
+    #expect(!response.contains("405"),
+            "an unparseable request line drew a method refusal: \(response)")
     #expect(collected.count == 0)
 }
