@@ -231,6 +231,12 @@ func anUncreatableTempFileSurfacesWriteFailed() throws {
 }
 
 @Test func clearOnMissingFileIsNotAnError() throws {
+    // Unchanged text, changed meaning. While `clear()` began with an existence
+    // check this passed because the guard short-circuited on a file that never
+    // existed, and it said nothing about the removal. It now drives the removal
+    // for real and is the behavioural half of the not-found tolerance: the
+    // journal is absent, `removeItem` reports `.fileNoSuchFile`, and the caller
+    // still sees success.
     let store = FileJournalStore(url: tempURL())
     try store.clear()   // must not throw
     #expect(try store.load() == nil)
