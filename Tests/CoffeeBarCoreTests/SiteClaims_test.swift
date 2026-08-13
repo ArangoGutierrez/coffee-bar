@@ -704,3 +704,111 @@ private func newestReleaseSection(of text: String,
                 "the footer on \(entry.page) differs from the one on \(reference.page). First difference, \(reference.page) then \(entry.page), \(firstDifference(reference.block, entry.block))")
     }
 }
+
+// MARK: - Guard 6: a JSON-LD answer cannot say what the page does not
+
+/// The `FAQPage` block `site/docs.html` publishes for search engines.
+///
+/// `Decodable` rather than a chain of casts, for the reason `PolicyRow` is: a
+/// block whose shape this guard no longer understands becomes a decode error —
+/// a loud failure — instead of an empty question list that the sweep below would
+/// run over zero times and call clean.
+private struct PublishedFAQ: Decodable {
+    struct Question: Decodable {
+        struct Answer: Decodable { let text: String }
+        let name: String
+        let acceptedAnswer: Answer
+    }
+    let mainEntity: [Question]
+}
+
+/// The page as a reader sees it: the structured data removed first, then the
+/// markup stripped.
+///
+/// **Removing `<script>` is the entire reason this helper exists rather than a
+/// call to `surfaceProse`.** `htmlProse` strips comments, `pre`, `style`, `code`
+/// and tags, but not script blocks, so the JSON-LD's own answer text survives
+/// into the prose. A guard that asked "is this answer somewhere in the prose"
+/// without stripping it would be asking whether the answer equals itself, and it
+/// would stay green on a page whose visible text says the opposite. That is
+/// measured rather than argued: with a JSON-LD answer mutated away from its
+/// sentence, the unstripped reading still finds every answer.
+///
+/// **Whitespace is deliberately NOT collapsed.** Note B requires each lifted
+/// sentence to sit on ONE source line, and wrapping one is the exact breakage it
+/// warns about. Collapsing runs of whitespace would fold that newline into a
+/// space and make this guard blind to it.
+private func visibleProse(of page: String) -> String {
+    htmlUnescaped(htmlProse(page.replacingOccurrences(
+        of: "<script[\\s\\S]*?</script>", with: " ", options: .regularExpression)))
+}
+
+/// The exact wording of page note B, which this guard is the enforcement of.
+private let noteB = "B. EVERY FAQ ANSWER IS A SENTENCE THAT ALSO APPEARS VISIBLY ON THIS PAGE."
+
+/// Every JSON-LD FAQ answer on `site/docs.html` also appears in that page's
+/// visible text.
+///
+/// **The invariant, in page note B's own words** (`site/docs.html`, the
+/// do-not-publish comment near the top of the file):
+///
+/// > EVERY FAQ ANSWER IS A SENTENCE THAT ALSO APPEARS VISIBLY ON THIS PAGE.
+/// > Each lifted sentence sits on ONE source line and carries NO inline markup,
+/// > so the answer survives a plain tag-strip byte for byte. Wrapping such a
+/// > line or putting a word of it in `<code>` breaks that, and a JSON-LD answer
+/// > that contradicts the visible text is worse than no JSON-LD at all.
+///
+/// Until now that was a note asking a maintainer to remember. A JSON-LD answer
+/// is the sentence a search engine quotes as the product's own words, and it is
+/// the one piece of the page no reader can see to check, so drift there is a
+/// false claim with the site's authority and no reader able to catch it.
+///
+/// The note's wording is asserted too. The note and this guard are one claim in
+/// two places; pinning the sentence means softening or deleting the note fails
+/// HERE, rather than leaving a guard enforcing a rule the page no longer makes.
+///
+/// Both halves of note B fall out of a plain substring test against the stripped
+/// prose, which is why the comparison is `contains` and not a normalised match:
+/// a wrapped sentence puts a newline where the answer has a space, and a word in
+/// `<code>` is deleted outright by `htmlProse`. Normalising either away would
+/// leave the guard green through the two breakages the note names.
+///
+/// **What this cannot do.** It proves the two copies agree; it cannot prove the
+/// sentence is TRUE. An answer that is wrong in both places passes here — that
+/// is `DocsClaims_test.swift`'s job, and it reads the visible copy. It is also
+/// scoped to `site/docs.html`, the only page carrying a `FAQPage` block today: a
+/// block added to another page is not swept until this guard is widened.
+@Test func everyFAQAnswerOnTheDocsPageAlsoAppearsVisiblyOnIt() throws {
+    let page = try surfaceText("site/docs.html")
+
+    #expect(page.contains(noteB),
+            "site/docs.html no longer carries page note B verbatim; this guard is that note's enforcement and the two must not drift apart")
+
+    let blocks = try matches("<script type=\"application/ld\\+json\">([\\s\\S]*?)</script>",
+                             in: page)
+    #expect(blocks.count == 1,
+            "site/docs.html has \(blocks.count) JSON-LD blocks; this guard needs exactly one")
+    guard let raw = blocks.first?[1] else { return }
+
+    let faq = try JSONDecoder().decode(PublishedFAQ.self, from: Data(raw.utf8))
+
+    // Anti-vacuity, and it is the failure this whole guard exists against: a
+    // block that parsed to zero questions loops zero times and reports success,
+    // which is indistinguishable from a page whose answers all check out.
+    #expect(faq.mainEntity.count >= 8,
+            "parsed \(faq.mainEntity.count) FAQ question(s) from site/docs.html; the page published 8 when this guard was written")
+
+    let visible = visibleProse(of: page)
+
+    // The reader is reading the PAGE, not the structured data it is judging.
+    // `acceptedAnswer` appears nowhere in this file outside the JSON-LD, so
+    // finding it here means the script strip failed and every comparison below
+    // would be an answer matching its own copy.
+    #expect(!visible.contains("acceptedAnswer"),
+            "the visible-text reader still carries the JSON-LD block, so every answer below would be compared against itself")
+
+    for question in faq.mainEntity {
+        #expect(visible.contains(question.acceptedAnswer.text),
+                "the JSON-LD answer to \"\(question.name)\" is not in the visible text of site/docs.html. Note B requires it to be a sentence that appears on the page, on ONE source line and with no inline markup. Answer: \(question.acceptedAnswer.text)")
+    }
+}
