@@ -494,6 +494,55 @@ private let durationSweepExclusions: Set<String> = ["SECURITY.md", "site/docs.ht
     }
 }
 
+/// `0.93 seconds` is 0.93 seconds, not 93 of them.
+///
+/// Named bug this catches (#99): the capture was `(\d[\d,_]*)`, a character
+/// set with no decimal point in it, so the match started AFTER the point and
+/// the sweep below compared the fraction on its own. Written `0.93 seconds`,
+/// read `93 seconds`. Written `1.5 hours`, read `5 hours`. Both directions are
+/// live: a false claim passes whenever its tail digits happen to be a real
+/// constant, and a true claim fails and sends the author hunting a defect that
+/// is not there — which is how a guard teaches people to route around it.
+///
+/// The deliberate decision on a malformed number, which #99 asks for
+/// explicitly: a bare `.5` and a trailing `1.` REFUSE TO MATCH. They are not
+/// coerced, and — the part that matters — they do not match a FRAGMENT of
+/// themselves either, which is what `.5 seconds` did when it yielded `5`.
+/// Reading half a number produces a comparison unrelated to the claim, so a
+/// number this pattern cannot read in full must produce no comparison at all.
+/// The decision lives entirely in the pattern; the sweep's comparison logic is
+/// untouched.
+@Test func theDurationPatternReadsAWholeDecimalNumber() throws {
+    // Expectations are literals. Re-deriving them from the pattern would
+    // restate the implementation instead of checking it.
+    let wellFormed: [(text: String, number: String, unit: String)] = [
+        ("0.93 seconds", "0.93", "second"),   // #99: was read as "93"
+        ("1.5 hours", "1.5", "hour"),         // #99: was read as "5"
+        ("14400 seconds", "14400", "second"), // integers, unchanged
+        ("1,800 seconds", "1,800", "second"),
+        ("900-second", "900", "second"),
+    ]
+
+    for c in wellFormed {
+        let found = try matches(durationPattern, in: c.text)
+        #expect(found.count == 1,
+                "\"\(c.text)\" is one duration, but the pattern found \(found.map { $0[0] })")
+        #expect(found.first?[1] == c.number,
+                "\"\(c.text)\" reads as \(found.first?[1] ?? "<no match>"), not \(c.number)")
+        #expect(found.first?[2] == c.unit,
+                "\"\(c.text)\" reads the unit as \(found.first?[2] ?? "<no match>"), not \(c.unit)")
+    }
+
+    // A number the pattern cannot read in full yields nothing at all — no
+    // fragment, no comparison. `.5 seconds` matching "5" is the same defect as
+    // `0.93` matching "93".
+    for text in [".5 seconds", "1. seconds", "1.5.3 hours"] {
+        let found = try matches(durationPattern, in: text)
+        #expect(found.isEmpty,
+                "\"\(text)\" is malformed and must not be read at all, but the pattern took \(found.map { $0[1] })")
+    }
+}
+
 @Test(arguments: documentedSurfaces)
 func everyDurationStatedIsARealProductConstant(_ name: String) throws {
     // Swept by CoffeeBarPowerTests instead, from the only target that can reach
