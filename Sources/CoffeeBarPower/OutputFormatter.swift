@@ -57,6 +57,33 @@ public enum OutputFormatter {
         return lines.joined(separator: "\n")
     }
 
+    /// The human form of `report`.
+    ///
+    /// The ENFORCED value is the prominent one and the wall-clock date is
+    /// labelled a projection, which is the shape #85 asked for: a date is more
+    /// readable, so it stays, but it must not be the line the reader takes for
+    /// the answer. Both come off `ArmedHoldReport`, so this and the `--json`
+    /// path cannot give different answers.
+    public static func human(_ hold: ArmedHoldReport) -> String {
+        let record = hold.record
+        let seconds = Int(hold.enforcedSecondsRemaining.rounded())
+        // Past the cap reads as past the cap. See `enforcedSecondsRemaining`
+        // for why this is not folded into "0s left".
+        let enforced = seconds < 0
+            ? "cap passed \(-seconds)s ago, revert pending"
+            : "\(seconds)s left"
+        return """
+            armed:     \(record.intent.rawValue)
+            since:     \(record.setAt)
+            enforced:  \(enforced)
+            projected: \(hold.projectedEndWallClock) \
+            (wall clock, projected from the line above; not the value enforced)
+            restore:   SleepDisabled=\(record.priorValue ? 1 : 0)
+            armedBy:   pid \(record.armedBy.pid), uid \(record.armedBy.uid), \
+            \(record.armedBy.binaryPath)
+            """
+    }
+
     private static func label(_ v: Verdict) -> String {
         switch v {
         case .pass:           return "pass"

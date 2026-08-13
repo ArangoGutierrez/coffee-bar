@@ -623,6 +623,129 @@ private func probeMainSource() throws -> String {
         """)
 }
 
+/// THE INVARIANT, for whoever edits `case .report:` next: **the deadline
+/// `report` prints is derived from `setAtMonotonic`, because that is the clock
+/// the cap is enforced against.**
+///
+/// `WatchdogDecision.decide` ends a hold when ELAPSED MONOTONIC time passes
+/// `ttlSeconds`. `JournalRecord.expiry` is the same TTL added to `setAt`, a
+/// wall-clock value, so the two disagree by the size of any step taken since
+/// the arm — and `report` printed the second one (#85). Nothing misbehaved: the
+/// user was simply told a time the machine would not honour, and `report` is
+/// the only way to learn it, because the journal belongs to root.
+///
+/// Read out of the source rather than pinned to names: the BINDING that
+/// receives the monotonic sample is discovered, so renaming it is not a
+/// failure. Changing the CLOCK is. The unit-level half of this contract lives
+/// in `OutputFormatter_test.swift`; only this half can see what the executable
+/// actually hands to `print`.
+///
+/// The rule is "must not DO", so whole-line `//` comments are dropped before
+/// anything is looked for: the report block explains in prose exactly which
+/// value it stopped printing, and a raw `contains` is satisfied by that
+/// sentence rather than by the code. `AppLayerBoundary_test.swift` strips
+/// comments for the same reason, with a real lexer — that one lives in another
+/// target, and this file needs a line rule, not a Swift grammar.
+///
+/// LIMIT, stated rather than hidden: this drops only lines that START with
+/// `//`. A trailing comment on a line of code is still read as code, and block
+/// comments are not handled; `main.swift` uses neither inside this block.
+@Test func theProbeReportsTheDeadlineTheCapIsEnforcedAgainstAndNotTheWallClockOne() throws {
+    /// Whole-line `//` comments removed, line structure kept.
+    func codeOnly(_ text: String) -> String {
+        text.split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+    }
+
+    // Proven live on a fixture carrying the very sentence a broken stripper
+    // would leave behind, rather than argued. If this ever stops stripping,
+    // every check below reads prose about the bug instead of code avoiding it.
+    #expect(codeOnly("let a = 1\n  // record.expiry\nprint(a)")
+            == "let a = 1\nprint(a)")
+
+    let source = try probeMainSource()
+
+    // ANTI-VACUITY, part one: a read that resolved the wrong path, or a file
+    // truncated to nothing, must fail here rather than sail through every
+    // absence assertion below.
+    #expect(source.count > 4000,
+            "probeMainSource() returned \(source.count) characters; that is not main.swift")
+
+    // The report block: from its `case` label to the next one. Both sit at
+    // column zero inside the top-level `switch invocation.verb`.
+    let opening = try #require(source.range(of: "\ncase .report:"),
+                               "main.swift has no `case .report:` at column zero")
+    let rest = source[opening.upperBound...]
+    let block = codeOnly(
+        String(rest[..<(rest.range(of: "\ncase ")?.lowerBound ?? rest.endIndex)]))
+
+    // ANTI-VACUITY, part two: prove the extracted region really is the report
+    // block and is not a sliver left by a stripper that ate too much.
+    // `wantsJSON` is the branch every version of this block has to make,
+    // whatever else changes around it.
+    #expect(block.count > 200,
+            "the extracted `case .report:` code is \(block.count) characters long:\n\(block)")
+    #expect(block.contains("wantsJSON"), """
+        the extracted block never branches on `wantsJSON`, so it is not the \
+        report block:
+        \(block)
+        """)
+
+    // `.expiry` on ANY binding, not `record.expiry`: the local is named
+    // `record` today, and a guard pinned to that name goes quiet the moment
+    // someone renames it — while the value it forbids walks straight back in.
+    #expect(!block.contains(".expiry"), """
+        `report` reaches for `.expiry`, which is `setAt` plus the TTL — both \
+        wall-clock. The cap is enforced on elapsed MONOTONIC time, so after any \
+        clock step that states a deadline the daemon will not act on, and \
+        `report` is the only place a user can read one (#85).
+        """)
+
+    // Which local carries the deadline: the last binding opened before the
+    // enforced clock is sampled, i.e. the one the sample is an argument to.
+    let sampled = try #require(block.range(of: "SystemMonotonicClock.now()"), """
+        `report` never samples `SystemMonotonicClock`, so nothing it prints can \
+        be measured against the clock the cap is enforced on:
+        \(block)
+        """)
+    let prefix = String(block[..<sampled.lowerBound])
+    let ns = prefix as NSString
+    let bindings = try NSRegularExpression(pattern: "let\\s+(\\w+)\\s*=")
+        .matches(in: prefix, range: NSRange(location: 0, length: ns.length))
+        .map { ns.substring(with: $0.range(at: 1)) }
+    let binding = try #require(bindings.last, """
+        the monotonic sample in `report` is bound to nothing, so it cannot \
+        reach anything printed:
+        \(block)
+        """)
+
+    // Every print AFTER that binding must carry it. The `nothing armed` print
+    // sits before it, on the path where there is no hold and no deadline.
+    let printed = String(block[sampled.upperBound...])
+        .split(separator: "\n", omittingEmptySubsequences: false)
+        .map { $0.trimmingCharacters(in: .whitespaces) }
+        .filter { $0.contains("print(") }
+
+    // ANTI-VACUITY, part three: a block that prints nothing after building the
+    // deadline reports nothing, and would pass the loop below by default.
+    #expect(!printed.isEmpty, """
+        `report` builds a deadline from the enforced clock and then prints \
+        nothing derived from it:
+        \(block)
+        """)
+    for statement in printed {
+        #expect(statement.contains(binding), """
+            `report` prints
+              \(statement)
+            which does not carry `\(binding)`, the value it built from \
+            `setAtMonotonic` and the enforced clock. A path that skips it — the \
+            `--json` one in particular — hands its reader the wall-clock answer \
+            the human path just stopped giving.
+            """)
+    }
+}
+
 // MARK: - Rollback
 
 @Test func armRestoresThePriorValueFromTheRecordAfterTheSettingAlreadyChanged() throws {
