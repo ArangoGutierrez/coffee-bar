@@ -546,3 +546,280 @@ private func withProducedImage(_ body: (URL, URL, String) throws -> Void) throws
     #expect(stripped.hasPrefix("#!/bin/bash"),
             "the stripped text lost the shebang")
 }
+
+// MARK: - Guard: the retracted offline-launch claim must not come back (#91)
+
+/// A claim pattern that will not compile.
+///
+/// Thrown rather than skipped. A pattern that never compiled matches nothing,
+/// and a scan that matches nothing is indistinguishable from a clean tree —
+/// which is precisely the failure this whole guard exists to prevent.
+private struct OfflineClaimPatternBroken: Error, CustomStringConvertible {
+    let pattern: String
+    var description: String {
+        "the offline-claim pattern \(pattern) does not compile, so this scan would read the tree and find nothing"
+    }
+}
+
+/// Text reduced so a claim that WRAPS can still be matched.
+///
+/// The sentence this guard exists to catch lived in a doc comment and broke
+/// across two lines, so a raw read of the file it sat in never contained it in
+/// one piece. Whitespace and the markers that lead a wrapped line — the slashes
+/// of a doc comment, a Markdown blockquote, a bullet — collapse to one space,
+/// which puts a Swift copy and a Markdown copy into the same shape. Lowercased
+/// last, so the patterns need no case alternation.
+private func offlineClaimNormalised(_ text: String) -> String {
+    text.replacingOccurrences(of: "[\\s/#*>]+", with: " ", options: .regularExpression)
+        .lowercased()
+}
+
+/// The sentence shapes that ASSERT an offline launch happened.
+///
+/// Each entry is keyed BY INDEX to the control at the same index in
+/// `offlineLaunchClaimControls`, and the test proves every pattern still fires
+/// on its own control before it scans anything.
+///
+/// They are deliberately narrow, and the narrowness is the design. "The v0.2.1
+/// acceptance should include an actual offline launch" is the design spec being
+/// honest about a gap; a guard that failed on true prose would be switched off
+/// within a week rather than fixed. What is refused is the indicative: that one
+/// HAS been executed, or that an acceptance DOES run one.
+private let offlineLaunchClaimPatterns = [
+    "acceptance[^.]{0,40}runs an (actual |real )?offline( first)? launch",
+    "offline( first)? launch (is|was|has been|has ever been|have been|had been) (executed|run|performed|verified|measured)",
+    "(executed|ran|performed|carried out|measured) an (actual |real )?offline( first)? launch",
+    "acceptance (includes|covers|contains|has) an (actual |real )?offline( first)? launch",
+]
+
+/// Words that turn a matched shape back into an honest sentence.
+///
+/// Without this, "no offline first launch has ever been executed here" — the
+/// retraction itself, and the truest sentence in this file — reads as the claim
+/// it denies. The window is 60 characters of NORMALISED text before the match,
+/// measured to be wider than any of the retractions this branch writes and
+/// narrower than the sentence before them.
+///
+/// **The cost, stated rather than hidden.** A real claim with an unrelated "not"
+/// within 60 characters is suppressed. That is the right way round: a false
+/// negative here loses one tripwire, a false positive teaches the reader that
+/// this guard cries wolf, and the second failure is the one that kills a guard.
+private let offlineLaunchClaimNegators = ["no ", "not ", "never", "cannot", "yet to", "n't", "nothing"]
+
+private let offlineLaunchNegationWindow = 60
+
+/// The indices of every pattern that fires on `text`, negations excluded.
+///
+/// Indices and not the matched text: a failure message must name the offending
+/// file without reprinting the claim, or the guard republishes the sentence it
+/// was written to remove — and swift-testing prints every subexpression of an
+/// `#expect`, so the obvious form would dump whole files into a public CI log.
+/// `FixtureRedaction_test.swift` records that measurement.
+private func offlineLaunchClaims(in text: String) throws -> [Int] {
+    let normalised = offlineClaimNormalised(text)
+    let ns = normalised as NSString
+    var found: [Int] = []
+
+    for (index, pattern) in offlineLaunchClaimPatterns.enumerated() {
+        guard let expression = try? NSRegularExpression(pattern: pattern) else {
+            throw OfflineClaimPatternBroken(pattern: pattern)
+        }
+        let whole = NSRange(location: 0, length: ns.length)
+        for match in expression.matches(in: normalised, range: whole) {
+            let start = match.range.location
+            let from = max(0, start - offlineLaunchNegationWindow)
+            let before = ns.substring(with: NSRange(location: from, length: start - from))
+            guard !offlineLaunchClaimNegators.contains(where: { before.contains($0) }) else { continue }
+            found.append(index)
+        }
+    }
+    return found
+}
+
+/// One claim per pattern, in the same order.
+///
+/// The first is the sentence this branch retracted, verbatim — it is what the
+/// tree carried, so it is what the matcher must catch. The other three are
+/// written, not quoted: no such sentence has ever been in this tree, and
+/// inventing a plausible one is the only way to prove the patterns that would
+/// catch it still work.
+///
+/// **Every one is split across literals, and every split is load bearing.** The
+/// acceptance for #91 is that no sentence like these exists anywhere git
+/// tracks, and this file is tracked. Each break falls inside the phrase that
+/// control's own pattern keys on, so the repository never holds any of them in
+/// one piece while the runtime strings stay exactly what the matcher must
+/// catch. Joining any pair of fragments back up turns the scan below red on
+/// this very file, which is the correct answer.
+///
+/// That is also what lets the scan read THIS file raw. The first version split
+/// only the control above and hid the other three by REMOVING their text from
+/// the file before matching it — and that removal was a hole: the retracted
+/// sentence pasted back as one line was removed by the very loop meant to hide
+/// the fragments, so the guard stayed green on the exact sentence #91 is about.
+/// Nothing is removed now, so nothing can be removed by mistake.
+private let offlineLaunchClaimControls = [
+    "Text-read, because notarising needs an Apple ID and the network. "
+        + "The executed proof is the release itself, whose acceptance runs an "
+        + "offline launch.",
+    "The offline first "
+        + "launch was executed on 2026-08-09.",
+    "The v0.2.2 cut ran an "
+        + "offline launch on a cold machine.",
+    "The release acceptance includes an "
+        + "offline launch.",
+]
+
+/// True sentences about the offline gap that must stay sayable.
+///
+/// The first is this branch's own retraction and the second is the shape a
+/// future #91 note would take; both MATCH a pattern and survive only because a
+/// negator precedes them, so they are what proves that half works. The third is
+/// the rationale the test above keeps, and matches nothing.
+///
+/// The design spec's wording is NOT copied in here — it is read from the spec
+/// itself, so this control cannot drift away from the document it stands for.
+private let honestOfflineSentences = [
+    "No offline first launch has ever been executed here, by an acceptance or by hand.",
+    "This project has never executed an offline launch, and #91 is open on it.",
+    "Stapling exists so Gatekeeper can verify without a network round trip.",
+]
+
+/// The design spec, which has been honest about this gap since the day it was
+/// written, and the plan whose Task 4 block seeded the false copy. Both are
+/// corpus controls below: a scan that reaches neither is reading the wrong tree.
+private let offlineDesignSpec = "docs/superpowers/specs/2026-08-09-v0.2.1-upgrade-trust-design.md"
+private let offlineSeedPlan = "docs/superpowers/plans/2026-08-09-v0.2.1-upgrade-trust.md"
+
+/// The design spec's own sentence about the gap, which must not read as a claim.
+private let offlineSpecSentence =
+    "The v0.2.1 acceptance should include an actual offline launch, because a "
+    + "diagnosis is a hypothesis until it is executed."
+
+/// No tracked file says an offline first launch has been executed.
+///
+/// **The invariant, stated so a future reader can attack it: while #91 is open,
+/// no file git tracks may claim that an offline first launch has been executed,
+/// or that a release acceptance runs one.** Saying it SHOULD happen is honest
+/// and the design spec does exactly that. Saying it HAS happened is false.
+///
+/// **Named bug this catches.** The doc comment above
+/// `theAppIsNotarisedAndStapledBeforeTheImageIsBuilt` justified a text-read
+/// guard by naming the release acceptance as the executed proof of the offline
+/// failure mode. No release has ever run one: the checklist stops at `stapler
+/// validate` on the mounted image, and nothing in the tree touches the network
+/// state. The claim was written into a plan, copied into a test file by a
+/// builder following that plan, and then read as settled fact for two releases —
+/// which is exactly how it would come back.
+///
+/// **Why a tracked-file scan and not a check on the one comment.** The claim has
+/// already demonstrated its ability to travel: one sentence, two files, two
+/// different languages. A guard pinned to the site it was found at would have
+/// been green on the copy in the plan.
+@Test func noTrackedFileClaimsAnOfflineLaunchWasExecuted() throws {
+    // THE MATCHER FIRST, pattern by pattern. A clean tree is the expected state,
+    // so scanning it establishes nothing about whether the scan can see. These
+    // four controls are the only place the matcher is proved to fire at all.
+    for (index, control) in offlineLaunchClaimControls.enumerated() {
+        let hits = try offlineLaunchClaims(in: control)
+        #expect(hits.contains(index), """
+            claim pattern #\(index) no longer fires on the claim it was written \
+            for, so every file the scan below reads is read blind
+            """)
+    }
+
+    // …and it must not fire on the truth. A guard that fails on the retraction
+    // forces the next reader to choose between an honest comment and a green
+    // suite, and the suite wins that argument every time.
+    for (index, sentence) in honestOfflineSentences.enumerated() {
+        let hits = try offlineLaunchClaims(in: sentence)
+        #expect(hits.isEmpty, """
+            honest sentence #\(index) reads as a claim (pattern(s) \(hits)); \
+            this guard would fail the tree for telling the truth
+            """)
+    }
+
+    let files = try trackedTextFiles()
+
+    // Two corpus controls, because a count alone cannot tell a full tree from a
+    // partial one. These are the two documents #91 is about.
+    for control in [offlineDesignSpec, offlineSeedPlan] {
+        #expect(files.contains(control),
+                "the tracked-file listing never reached \(control), one of the two documents #91 is about")
+    }
+
+    // The spec's honest wording is the hardest negative control there is,
+    // because it is real, it is about this exact gap, and it survives only if
+    // the patterns stay narrow. Read from the file so a paraphrase cannot stand
+    // in for it, and normalised because the sentence wraps in the document.
+    let specText = try String(contentsOf: repoRoot().appending(path: offlineDesignSpec), encoding: .utf8)
+    let specCarriesIt = offlineClaimNormalised(specText).contains(offlineClaimNormalised(offlineSpecSentence))
+    #expect(specCarriesIt, """
+        the design spec no longer carries the sentence this guard uses as its \
+        negative control; either the spec changed or the control has rotted, \
+        and until that is resolved nothing here proves the patterns are narrow
+        """)
+    let specClaims = try offlineLaunchClaims(in: specText)
+    #expect(specClaims.isEmpty, "the design spec reads as a claim (pattern(s) \(specClaims)); it is honest prose about a gap")
+
+    // THE SCAN. One exemption, this file, handled separately below.
+    let selfPath = String(#filePath.dropFirst(repoRoot().path.count + 1))
+    var scanned = 0
+    var unreadable: [String] = []
+    var offenders: [String] = []
+
+    for name in files where name != selfPath {
+        guard let text = try? String(contentsOf: repoRoot().appending(path: name), encoding: .utf8) else {
+            unreadable.append(name)
+            continue
+        }
+        scanned += 1
+        for index in try offlineLaunchClaims(in: text) {
+            offenders.append("\(name) (pattern #\(index))")
+        }
+    }
+
+    // ANTI-VACUITY. A listing that resolved the wrong root, or a filter that ate
+    // the corpus, finds nothing and reads as success. Measured on this commit:
+    // 270 files scanned, one short of the 271 the listing returns.
+    #expect(scanned >= 250, """
+        read \(scanned) tracked file(s) under \(repoRoot().path); the corpus \
+        collapsed and this scan is weaker than it looks
+        """)
+
+    // The message describes the offending shape rather than restating it. A
+    // guard that spelled its own subject out would report itself on the next
+    // run, and would put the retracted sentence back into the repository.
+    #expect(offenders.isEmpty, """
+        \(offenders.count) tracked file(s) read as claiming that an offline \
+        first launch happened, or that a release acceptance covers one. \
+        Neither is true, and #91 is open on exactly that: \(offenders.sorted())
+        """)
+
+    // A file the scan could not READ is a file it did not CHECK, and skipping
+    // it silently shrinks the corpus without moving the count above.
+    #expect(unreadable.isEmpty, """
+        \(unreadable.count) tracked file(s) could not be read as UTF-8, so this \
+        scan never checked them: \(unreadable.sorted())
+        """)
+
+    // THIS FILE, READ RAW — and it is the one read that cannot be filtered. It
+    // is left out of the loop above because that loop walks the git listing,
+    // and a filter change there would drop the one file the claim actually
+    // lived in without moving any count. `#filePath` is resolved by the
+    // compiler, so this read happens whatever the listing says.
+    //
+    // Nothing is removed before matching, and that is the whole point. Every
+    // control is split across literals, so the raw text of this file holds no
+    // claim, and what it gets here is the same scan every other tracked file
+    // gets. The first version stripped the joined control text out first, and
+    // that strip ate a real single-line copy of the retracted sentence along
+    // with the fragments it was aimed at.
+    let ownText = try String(contentsOf: URL(fileURLWithPath: #filePath), encoding: .utf8)
+    let ownClaims = try offlineLaunchClaims(in: ownText)
+    #expect(ownClaims.isEmpty, """
+        this file claims an offline launch outside its own controls (pattern(s) \
+        \(ownClaims)); the comment that started #91 lived here, and this is the \
+        assertion that refuses to let it come back
+        """)
+}
