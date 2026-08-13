@@ -64,6 +64,24 @@ struct HTTPRequestFramer {
     /// declared — and the caller refuses rather than guessing.
     private(set) var requestTarget: String?
 
+    /// The method the client used, once the header block has arrived.
+    ///
+    /// Reported with its case INTACT. RFC 9110 §9.1 makes methods
+    /// case-sensitive, so `post` is not `POST` and this type must not decide
+    /// otherwise on the caller's behalf. Contrast `contentLength(in:)` below,
+    /// which lowercases because §5.1 makes FIELD NAMES case-insensitive; the two
+    /// are correctly different.
+    ///
+    /// Surfaced because the hook command this project documents specifies
+    /// `-X POST` everywhere and nothing could enforce it: the method was parsed
+    /// and dropped on the floor. Framing does not depend on it — a request is
+    /// framed the same way whatever the verb — so what to do about a method is
+    /// the caller's decision, not this type's.
+    ///
+    /// `nil` under exactly the conditions `requestTarget` is `nil`, because both
+    /// come from the same parse of the same line.
+    private(set) var requestMethod: String?
+
     mutating func append(_ chunk: Data) -> Outcome {
         buffer.append(chunk)
         if buffer.count > Self.maximumBytes { return .tooLarge }
@@ -73,7 +91,11 @@ struct HTTPRequestFramer {
         }
 
         let headers = buffer[..<separator.lowerBound]
-        requestTarget = Self.target(in: headers)
+        // One parse, both fields. Two scans could disagree about which line they
+        // read, and the arity guard has to cover the pair atomically.
+        let line = Self.requestLine(in: headers)
+        requestMethod = line?.method
+        requestTarget = line?.target
 
         // The declared length is VALIDATED, not merely parsed. `Int` accepts a
         // negative, and a negative length walked straight through the
@@ -106,7 +128,7 @@ struct HTTPRequestFramer {
         return .body(Data(buffer[bodyStart..<bodyEnd]))
     }
 
-    /// The request target from the first line of `headers`, or `nil`.
+    /// The method and target from the first line of `headers`, or `nil`.
     ///
     /// RFC 9112 §3 fixes the request line as three space-separated fields:
     /// method, target, version. The arity is checked rather than assumed —
@@ -115,13 +137,17 @@ struct HTTPRequestFramer {
     /// to the origin lookup as if the client had declared it.
     ///
     /// Anything else is `nil`, which the caller treats as no declaration at all.
-    private static func target(in headers: Data) -> String? {
+    /// Both fields are returned together so that guard covers the PAIR: a method
+    /// surviving a line whose target did not would let the caller refuse a
+    /// malformed request on the grounds of its verb, which is a different
+    /// answer to a different question.
+    private static func requestLine(in headers: Data) -> (method: String, target: String)? {
         guard let text = String(data: headers, encoding: .utf8),
               let line = text.split(separator: "\r\n", maxSplits: 1).first
         else { return nil }
         let fields = line.split(separator: " ")
         guard fields.count == 3 else { return nil }
-        return String(fields[1])
+        return (String(fields[0]), String(fields[1]))
     }
 
     /// RFC 9110 makes field names case-insensitive, so the match is lowercased.
