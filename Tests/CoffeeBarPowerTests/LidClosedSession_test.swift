@@ -292,11 +292,15 @@ private func uptime(after seconds: TimeInterval) -> TimeInterval {
     fixedUptime + seconds
 }
 
-/// The machine booted an hour before the arm, which is the ordinary case.
+/// The boot this suite's ordinary journals were written in.
 ///
-/// A journal written AFTER this is not evidence of an unclean exit, so it must
-/// not trigger §8.2(4)'s unconditional revert.
-private let fixedBoot = Date(timeIntervalSince1970: 1_800_000_000 - 3600)
+/// A journal carrying THIS while the machine reports the same is not evidence
+/// of an unclean exit, so it must not trigger §8.2(4)'s unconditional revert.
+/// `kern.bootsessionuuid` answers in this shape.
+private let fixedBootSession = "5C0FFEE0-0000-4000-8000-00000000B007"
+
+/// A boot that is not `fixedBootSession`: the machine has restarted since.
+private let laterBootSession = "5C0FFEE0-0000-4000-8000-00000000B008"
 
 // MARK: - §8.2(1) — the journal lands before the mutation
 
@@ -976,7 +980,7 @@ private func probeMainSource() throws -> String {
         supervisor: supervisor,
         notifier: RecordingNotifier(),
         environment: FakeEnvironment(),
-        bootTime: { fixedBoot })
+        bootSession: { fixedBootSession })
 
     // Exactly what launchd runs at load: the `watchdog` verb, one tick.
     supervisor.runAtLoad = {
@@ -995,6 +999,11 @@ private func probeMainSource() throws -> String {
         // machine runs the suite is machine state, not a fixture, and the
         // record `arm` writes is read back by ticks that pass their own.
         monotonicClock: { fixedUptime },
+        // And the boot identity, for that same reason. The daemon above is told
+        // it is running in `fixedBootSession`; an arm that stamped the real
+        // machine's identity would be judged as a DIFFERENT boot and reverted,
+        // which would be this suite reading the host rather than the fixture.
+        bootSession: { fixedBootSession },
         displayVerifyDelay: 0)
 
     try service.arm(ttlSeconds: 3600)
@@ -1021,8 +1030,9 @@ private func probeMainSource() throws -> String {
     // THE INVARIANT, driven on its own: `arm` must never return success while
     // the system holds a setting the journal cannot explain.
     //
-    // Deriving the boot time removed the daemon's REASON to revert on the first
-    // tick. It did not remove its ABILITY. Anything that clears the journal
+    // Deciding §8.2(4) on the MACHINE's boot removed the daemon's REASON to
+    // revert on the first tick. It did not remove its ABILITY. Anything that
+    // clears the journal
     // between `install()` and the end of `arm` — a revert this code has not
     // thought of, a future policy, an operator running `revert` in another
     // terminal — leaves sleep held with nothing on disk to undo it, and `arm`
@@ -1103,7 +1113,7 @@ private func probeMainSource() throws -> String {
         reader: GuardedJournalReader(url: url, store: store, requiredOwner: getuid()),
         power: power, supervisor: supervisor, notifier: RecordingNotifier(),
         environment: FakeEnvironment(),
-        bootTime: { fixedBoot })
+        bootSession: { fixedBootSession })
     supervisor.runAtLoad = {
         _ = try? watchdog.evaluate(now: fixedNow, monotonicNow: fixedUptime)
     }
@@ -1140,19 +1150,27 @@ private func probeMainSource() throws -> String {
         """)
 }
 
-@Test func armFailsWhenItsOwnDaemonRevertsInsideTheBootSecond() throws {
-    // The second reachable case, and the one that survives fix (a).
+@Test func armFailsWhenItsOwnDaemonCannotReadTheBootItIsRunningIn() throws {
+    // The second reachable case, restated on the mechanism that replaced the
+    // boot-time comparison (#83).
     //
-    // `HostInfo.now()` truncates `setAt` DOWN to the whole second, so an `arm`
-    // landing inside the boot second records a `setAt` fractionally BELOW
-    // `kern.boottime`. The journal then reads as older than the boot, §8.2(4)
-    // reverts it unconditionally, and the daemon undoes the arm that installed
-    // it. Bounded under one second and vanishingly unlikely for a human's
-    // `sudo` — and the consequence is unbounded, so it gets a guard.
+    // It used to be the BOOT SECOND: `HostInfo.now()` truncates `setAt` DOWN to
+    // the whole second, so an `arm` landing inside that second recorded a
+    // `setAt` fractionally below `kern.boottime` and rung 2 read the journal as
+    // older than the boot. Comparing identities removes that case entirely —
+    // `arm` and the daemon it starts are in the same boot whatever the
+    // second-hand says — and `armSurvivesTheDaemonThatArmItselfInstalls` is
+    // where that now lives.
     //
-    // Reverting is the RIGHT call here: the boot comparison is deliberately
-    // biased toward reverting. What must not happen is `arm` reporting success
-    // afterwards.
+    // What remains reachable is an UNREADABLE identity. `kern.bootsessionuuid`
+    // is read through `sysctlbyname`, which can fail; a daemon that cannot name
+    // the boot it is running in cannot show the journal belongs to it, and
+    // §8.2(4) resolves the unknown toward reverting.
+    //
+    // Reverting is the RIGHT call here, exactly as it was for the boot second:
+    // rung 2 is deliberately biased that way. What must not happen is `arm`
+    // reporting success afterwards, leaving sleep held with no journal to
+    // explain it.
     let root = try makeScratchRoot()
     defer { try? FileManager.default.removeItem(at: root) }
 
@@ -1165,8 +1183,8 @@ private func probeMainSource() throws -> String {
         reader: GuardedJournalReader(url: url, store: store, requiredOwner: getuid()),
         power: power, supervisor: supervisor, notifier: RecordingNotifier(),
         environment: FakeEnvironment(),
-        // The machine booted a second AFTER this arm's truncated `setAt`.
-        bootTime: { fixedNow.addingTimeInterval(1) })
+        // The daemon's own `sysctlbyname` came back empty-handed.
+        bootSession: { nil })
     supervisor.runAtLoad = {
         _ = try? watchdog.evaluate(now: fixedNow, monotonicNow: fixedUptime)
     }
@@ -1183,13 +1201,18 @@ private func probeMainSource() throws -> String {
         // machine runs the suite is machine state, not a fixture, and the
         // record `arm` writes is read back by ticks that pass their own.
         monotonicClock: { fixedUptime },
+        // The ARM side read the identity perfectly well. Only the daemon's read
+        // fails here, so the revert below is the unknown resolving toward
+        // safety and not two blank strings failing to match.
+        bootSession: { fixedBootSession },
         displayVerifyDelay: 0)
 
     #expect(throws: ArmError.journalVanished) { try service.arm(ttlSeconds: 3600) }
 
     #expect(power.state.current == false, """
-        the daemon reverted inside the boot second and arm still reported \
-        success, so the machine holds sleep with no journal. order: \(log.calls)
+        the daemon could not name its own boot, reverted, and arm still \
+        reported success — so the machine holds sleep with no journal. \
+        order: \(log.calls)
         """)
     #expect(supervisor.isLoaded == false)
 }
@@ -1199,7 +1222,7 @@ private func probeMainSource() throws -> String {
 /// Builds a watchdog over a scratch journal that already holds `record`.
 private func makeArmedWatchdog(root: URL, record: JournalRecord,
                                initiallyEnabled: Bool = true,
-                               bootTime: Date = fixedBoot,
+                               bootSession: String? = fixedBootSession,
                                environment: FakeEnvironment = FakeEnvironment(),
                                policy: WatchdogPolicy = .default,
                                supervisor: (any WatchdogSupervising)? = nil)
@@ -1219,14 +1242,17 @@ private func makeArmedWatchdog(root: URL, record: JournalRecord,
         notifier: notifier,
         environment: environment,
         policy: policy,
-        bootTime: { bootTime })
+        bootSession: { bootSession })
     return (service, power, store, log, notifier)
 }
 
-private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
+private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600,
+                         setAtMonotonic: TimeInterval = fixedUptime,
+                         bootSessionID: String = fixedBootSession)
     -> JournalRecord {
     JournalRecord(intent: .sleepDisabled, priorValue: priorValue, setAt: fixedNow,
-                  setAtMonotonic: fixedUptime, ttlSeconds: ttlSeconds,
+                  setAtMonotonic: setAtMonotonic,
+                  bootSessionID: bootSessionID, ttlSeconds: ttlSeconds,
                   armedBy: ArmProvenance(pid: 4242, binaryPath: "/usr/local/bin/probe",
                                          uid: 501))
 }
@@ -1432,20 +1458,20 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
 }
 
 @Test func theWatchdogRevertsUnconditionallyWhenTheJournalPredatesTheLastBoot() throws {
-    // §8.2(4). A journal written BEFORE the machine last booted means the armer
-    // never got to clean up, so the machine came back holding a setting nobody
-    // is supervising. The TTL is irrelevant here — this reverts with hours
-    // left.
+    // §8.2(4). A journal written in a boot the machine is no longer running
+    // means the armer never got to clean up, so the machine came back holding a
+    // setting nobody is supervising. The TTL is irrelevant here — this reverts
+    // with hours left.
     //
-    // The boot time is what makes the claim true. "A journal exists" alone
+    // The boot IDENTITY is what makes the claim true. "A journal exists" alone
     // proves nothing about an unclean exit.
     let root = try makeScratchRoot()
     defer { try? FileManager.default.removeItem(at: root) }
 
     let armed = try makeArmedWatchdog(
         root: root, record: armedRecord(ttlSeconds: 28_800),
-        // The machine booted AFTER the journal was written.
-        bootTime: fixedNow.addingTimeInterval(1))
+        // The machine has restarted since the journal was written.
+        bootSession: laterBootSession)
 
     let decision = try armed.service.evaluate(
         now: fixedNow.addingTimeInterval(5),
@@ -1462,17 +1488,17 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
     // `isBootEvaluation` used to mean "this process just started", and the
     // daemon starts every time `arm` installs it — so `arm` armed the machine
     // and immediately reverted itself. It has to mean "the MACHINE booted since
-    // this journal was written", which is a question only the boot time can
+    // this journal was written", which is a question only the boot itself can
     // answer.
     //
-    // Here the journal is written an hour after boot, with its TTL live. The
-    // correct answer is to hold.
+    // Here the journal names the boot the machine is still running, with its
+    // TTL live. The correct answer is to hold.
     let root = try makeScratchRoot()
     defer { try? FileManager.default.removeItem(at: root) }
 
     let armed = try makeArmedWatchdog(root: root,
                                       record: armedRecord(ttlSeconds: 3600),
-                                      bootTime: fixedBoot)
+                                      bootSession: fixedBootSession)
 
     let decision = try armed.service.evaluate(
         now: fixedNow.addingTimeInterval(1),
@@ -1484,6 +1510,297 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600)
         """)
     #expect(armed.power.state.current == true)
     #expect(try armed.store.load() != nil)
+}
+
+// MARK: - #83: rung 2 compares boot identities, not two wall-clock values
+
+/// A journal from the previous boot, armed 60 s into it.
+///
+/// `setAtMonotonic: 60` rather than `fixedUptime` is load-bearing arithmetic,
+/// not decoration: it is what lets the tick below present two AGREEING clocks
+/// (see the numbers in the test), so rungs 3 and 4 stay quiet and rung 2 is the
+/// only thing that can answer.
+private func recordFromTheEarlierBoot() -> JournalRecord {
+    armedRecord(ttlSeconds: 28_800, setAtMonotonic: 60,
+                bootSessionID: fixedBootSession)
+}
+
+@Test func aJournalFromAnEarlierBootStillRevertsAfterTheClockIsSteppedBack() throws {
+    // THE test issue #83 exists for, and the one direction of the old rung that
+    // was UNSAFE rather than merely noisy.
+    //
+    // Rung 2 asked `record.setAt < bootTime()`. `setAt` is frozen on disk;
+    // `kern.boottime` is stored as a realtime `timeval`, so it is a value that
+    // MOVES with the wall clock. Whatever else is true of XNU — and the
+    // premise below is asserted as arithmetic on this test's own fixture, not
+    // as a claim about a machine nobody here has stepped — a comparison whose
+    // two sides answer differently to a clock step has an answer that the step
+    // can change. Backward, it gets HARDER to satisfy, and the miss suppresses
+    // §8.2(4)'s revert: a machine that crashed holding `SleepDisabled` comes
+    // back, is told its dirty journal is post-boot, and keeps holding it.
+    //
+    // The scenario, in whole seconds:
+    //   - armed at `setAt`, 60 s into the PREVIOUS boot
+    //   - the machine crashes and reboots 300 s after the arm
+    //   - the wall clock is put back 360 s at boot, so `kern.boottime` reads
+    //     `setAt - 60` while `setAt` has not moved
+    //   - the daemon ticks an hour into the new boot
+    let root = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let record = recordFromTheEarlierBoot()
+
+    // THE PREMISE, as arithmetic rather than as an assertion about XNU: with
+    // the boot time moved 360 s back, the comparison rung 2 used to make is
+    // FALSE, so the old rung answered "not a boot evaluation" for a journal
+    // that genuinely predates the boot. Without this the test below could pass
+    // against the old code too.
+    let steppedBootTime = fixedNow.addingTimeInterval(300 - 360)
+    #expect(!(record.setAt < steppedBootTime), """
+        this fixture no longer hides the boot from a `setAt < bootTime` \
+        comparison, so it no longer drives the defect #83 is about
+        """)
+
+    // The CONTROL, and it is what makes the revert below mean something. Same
+    // record, same clocks, same tick — only the machine is still running the
+    // boot the journal names. Every other rung answers hold, so a revert below
+    // can only have come from rung 2.
+    let sameBoot = try makeArmedWatchdog(root: root, record: record,
+                                         bootSession: fixedBootSession)
+    #expect(try sameBoot.service.evaluate(now: fixedNow.addingTimeInterval(3540),
+                                          monotonicNow: 3600,
+                                          lastHeartbeat: nil) == .hold, """
+        another rung ended this hold, so the revert below would prove nothing \
+        about rung 2
+        """)
+
+    let other = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: other) }
+
+    // The same tick against a machine that has REBOOTED since. The wall clock
+    // it reads has been stepped back — `now` is 3540 s after `setAt` while
+    // 3540 s of monotonic time have elapsed, which is what keeps rungs 3 and 4
+    // quiet — and the journal is from a boot that is over.
+    let armed = try makeArmedWatchdog(root: other, record: record,
+                                      bootSession: laterBootSession)
+    let decision = try armed.service.evaluate(
+        now: fixedNow.addingTimeInterval(3540),
+        monotonicNow: 3600, lastHeartbeat: nil)
+
+    #expect(decision == .revert(.dirtyJournalAtBoot), """
+        a journal written in a boot that is over survived §8.2(4) because the \
+        wall clock moved. The machine crashed holding a root-set \
+        SleepDisabled, came back, and is still holding it. got: \(decision)
+        """)
+    #expect(armed.power.state.current == false,
+            "the dirty journal was reverted without restoring sleep")
+    #expect(try armed.store.load() == nil, "the journal survived the revert")
+    #expect(armed.notifier.posted
+            == ["reverted SleepDisabled to false: dirtyJournalAtBoot"],
+            "posted: \(armed.notifier.posted)")
+}
+
+@Test func aBootIdentityNeitherSideCouldReadIsNotTreatedAsTheSameBoot() throws {
+    // The trap in spelling this rung as `record.bootSessionID != current ?? ""`.
+    //
+    // `sysctlbyname` can fail. An arm that could not read the identity stamps
+    // the empty string, and a daemon that cannot read it either has nothing to
+    // compare — but `"" == ""` is TRUE, so the naive comparison concludes "same
+    // boot" exactly when nothing at all is known, and goes on holding a
+    // root-set `SleepDisabled` for an armer that may have died two boots ago.
+    // Unknown has to resolve toward reverting, like every other uncertain path
+    // in this component.
+    let root = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let blind = try makeArmedWatchdog(root: root,
+                                      record: armedRecord(bootSessionID: ""),
+                                      bootSession: nil)
+    #expect(try blind.service.evaluate(now: fixedNow.addingTimeInterval(5),
+                                       monotonicNow: uptime(after: 5),
+                                       lastHeartbeat: fixedNow)
+            == .revert(.dirtyJournalAtBoot), """
+        two identities nobody could read were taken for one boot, so a journal \
+        that may predate the last reboot keeps sleep disabled
+        """)
+    #expect(blind.power.state.current == false)
+
+    // And the half where only the JOURNAL is blank — a hand-edited file, or an
+    // arm whose sysctl failed on a machine whose daemon's does not. A record
+    // that names no boot cannot show it belongs to this one.
+    let other = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: other) }
+
+    let unstamped = try makeArmedWatchdog(root: other,
+                                          record: armedRecord(bootSessionID: ""),
+                                          bootSession: fixedBootSession)
+    #expect(try unstamped.service.evaluate(now: fixedNow.addingTimeInterval(5),
+                                           monotonicNow: uptime(after: 5),
+                                           lastHeartbeat: fixedNow)
+            == .revert(.dirtyJournalAtBoot),
+            "a journal naming no boot at all was accepted as belonging to this one")
+}
+
+@Test func aJournalWrittenBeforeBootIdentitiesExistedRevertsAsAnUnknownSchema()
+    throws {
+    // The schema bump, driven from the direction that matters and end to end
+    // through the file: the shape an installed v2 build leaves on disk, read by
+    // a v3 daemon.
+    //
+    // No migration code exists on purpose. Rung 1 reverts ANY schema it does
+    // not know, and reverting is the fail-safe direction, so a v2 record is
+    // handled by the ladder rather than by a converter nobody would exercise.
+    //
+    // Three things have to hold at once, and the third is why this feeds real
+    // bytes rather than a `JournalRecord` built in memory:
+    //   - the record still DECODES (a throw would take the refusal path, which
+    //     discards `priorValue` and forces sleep back on)
+    //   - rung 1 catches it FIRST — `.unknownSchema`, not `.dirtyJournalAtBoot`,
+    //     even though its absent identity would also fail rung 2
+    //   - the restore uses the recorded `priorValue`, which is `true` here
+    let root = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let stateDir = root.appending(path: "state")
+    try FileManager.default.createDirectory(
+        at: stateDir, withIntermediateDirectories: true,
+        attributes: [.posixPermissions: 0o700])
+    let url = stateDir.appending(path: "probe-journal.json")
+
+    // Exactly what a v2 build wrote: `setAtMonotonic`, no `bootSessionID`, and
+    // ISO-8601 dates, which is what `FileJournalStore` pins on both sides.
+    let v2 = """
+    {"schemaVersion":2,"intent":"sleepDisabled","priorValue":true,
+     "setAt":"2027-01-15T08:00:00Z","setAtMonotonic":60,"ttlSeconds":28800,
+     "armedBy":{"pid":4242,"binaryPath":"/usr/local/bin/probe","uid":501}}
+    """
+    #expect(FileManager.default.createFile(
+        atPath: url.path, contents: Data(v2.utf8),
+        attributes: [.posixPermissions: 0o600]),
+            "could not stage the v2 journal at \(url.path)")
+
+    // Pins the premise: 2 has to be a schema this build no longer knows, or
+    // rung 1 is not what answers below and this test is about nothing.
+    #expect(JournalRecord.currentSchemaVersion != 2, """
+        the record gained `bootSessionID` and `currentSchemaVersion` is still \
+        2, so a journal written before the field existed is judged as though it \
+        had recorded one
+        """)
+
+    let log = CallLog()
+    let store = FileJournalStore(url: url)
+    let power = RecordingPower(log: log, state: .init(true))
+    let notifier = RecordingNotifier()
+    let service = WatchdogService(
+        reader: GuardedJournalReader(url: url, store: store,
+                                     requiredOwner: getuid()),
+        power: power,
+        supervisor: RecordingSupervisor(log: log),
+        notifier: notifier,
+        environment: FakeEnvironment(),
+        bootSession: { fixedBootSession })
+
+    let decision = try service.evaluate(now: fixedNow.addingTimeInterval(5),
+                                        monotonicNow: uptime(after: 5),
+                                        lastHeartbeat: fixedNow)
+
+    #expect(decision == .revert(.unknownSchema), """
+        a v2 journal was not routed to rung 1. `.dirtyJournalAtBoot` here means \
+        the record decoded but rung 2 got to it first; anything else means it \
+        did not decode at all. got: \(decision)
+        """)
+    // `true`, from the FILE. The refusal path — the one a decode throw takes —
+    // discards the recorded value and sets `false`, so this distinguishes "read
+    // the v2 record and reverted it" from "could not read it at all".
+    #expect(power.state.current == true, """
+        the v2 journal's recorded priorValue was discarded, so a user who had \
+        disablesleep set on purpose lost it. order: \(log.calls)
+        """)
+    #expect(notifier.posted == ["reverted SleepDisabled to true: unknownSchema"],
+            "posted: \(notifier.posted)")
+    #expect(try store.load() == nil, "the v2 journal survived the revert")
+}
+
+@Test func armStampsTheJournalWithTheBootItWasArmedIn() throws {
+    // The write half. Rung 2 can be perfect and change nothing if `arm` never
+    // records which boot the hold belongs to: a journal with no identity fails
+    // the comparison, so EVERY arm would be reverted on the daemon's next tick
+    // and the feature would be dead in a way only this assertion names.
+    //
+    // Read back off the DISK, because that is where the daemon reads it from —
+    // an identity the encoder or decoder drops is the same defect as one `arm`
+    // never sampled.
+    let root = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let log = CallLog()
+    let url = root.appending(path: "state/probe-journal.json")
+    let store = FileJournalStore(url: url)
+
+    let service = ArmService(
+        journal: RecordingJournal(log: log, inner: store),
+        reader: GuardedJournalReader(url: url, requiredOwner: getuid(),
+                                     quarantineOnRefusal: false),
+        power: RecordingPower(log: log, state: .init(false)),
+        supervisor: RecordingSupervisor(log: log),
+        display: RecordingDisplay(log: log, awakeAfterForcing: false),
+        clock: { fixedNow },
+        monotonicClock: { fixedUptime },
+        bootSession: { laterBootSession },
+        displayVerifyDelay: 0)
+
+    try service.arm(ttlSeconds: 3600)
+
+    #expect(try #require(try store.load()).bootSessionID == laterBootSession, """
+        arm did not record the boot it happened in, so the daemon cannot tell \
+        this hold from one left behind by a machine that has since rebooted
+        """)
+
+    // The unreadable case, which must reach disk as the empty string rather
+    // than as anything a later read could mistake for a boot.
+    let other = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: other) }
+
+    let blindURL = other.appending(path: "state/probe-journal.json")
+    let blindStore = FileJournalStore(url: blindURL)
+    let blind = ArmService(
+        journal: RecordingJournal(log: log, inner: blindStore),
+        reader: GuardedJournalReader(url: blindURL, requiredOwner: getuid(),
+                                     quarantineOnRefusal: false),
+        power: RecordingPower(log: log, state: .init(false)),
+        supervisor: RecordingSupervisor(log: log),
+        display: RecordingDisplay(log: log, awakeAfterForcing: false),
+        clock: { fixedNow },
+        monotonicClock: { fixedUptime },
+        bootSession: { nil },
+        displayVerifyDelay: 0)
+
+    try blind.arm(ttlSeconds: 3600)
+    #expect(try #require(try blindStore.load()).bootSessionID == "", """
+        an arm that could not read the boot identity wrote something else into \
+        the journal, and whatever it wrote is a value some later read may match
+        """)
+}
+
+@Test func theBootIdentityThisMachineReportsIsAReadableUUID() throws {
+    // The one check here that runs the PRODUCTION reader against the real
+    // kernel. Everything else on this rung drives an injected seam, so a
+    // mistyped sysctl name, a buffer sized from the wrong call, or a `String`
+    // built past its terminator would leave the whole suite green and the
+    // shipped daemon reverting every arm on its first tick.
+    //
+    // `kern.bootsessionuuid` is documented as a UUID string, so parsing it as
+    // one is a check with a shape to fail against rather than "not empty":
+    // a truncated or over-long buffer does not parse.
+    let identity = try #require(SystemBootTime.currentSessionID(),
+                                "this machine reports no kern.bootsessionuuid")
+    #expect(UUID(uuidString: identity) != nil,
+            "kern.bootsessionuuid did not read back as a UUID: \(identity)")
+
+    // A boot identity that changed between two reads inside one boot would be
+    // useless for the comparison rung 2 makes.
+    #expect(SystemBootTime.currentSessionID() == identity,
+            "two reads in the same boot disagreed about which boot this is")
 }
 
 @Test func theWatchdogRestoresAPriorValueOfTrueRatherThanForcingSleepOn() throws {
@@ -2011,7 +2328,13 @@ private func buildArmer() throws -> String {
         power: power,
         supervisor: RecordingSupervisor(log: log),
         notifier: notifier,
-        environment: FakeEnvironment())
+        environment: FakeEnvironment(),
+        // The staged record names `fixedBootSession`, so the daemon has to be
+        // running in it. Left at the production default this would read the
+        // host's real `kern.bootsessionuuid`, judge the staged journal a
+        // different boot, and revert for §8.2(4) instead of the TTL — a green
+        // revert for the wrong reason, which is what the assertion below pins.
+        bootSession: { fixedBootSession })
 
     let decision = try watchdog.evaluate(
         now: fixedNow.addingTimeInterval(61),

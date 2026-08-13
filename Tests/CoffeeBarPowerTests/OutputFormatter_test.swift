@@ -92,6 +92,7 @@ private let heldRecord = JournalRecord(
     priorValue: false,
     setAt: Date(timeIntervalSince1970: 1_786_000_000),
     setAtMonotonic: 1000,
+    bootSessionID: "1BE0B007-0000-4000-8000-000000000085",
     ttlSeconds: 900,
     armedBy: ArmProvenance(pid: 42,
                            binaryPath: "/usr/local/bin/coffee-bar-probe",
@@ -195,10 +196,10 @@ private let heldRecord = JournalRecord(
 
     // ANTI-VACUITY: a record that encoded nothing would satisfy the loop below
     // without comparing a single value.
-    #expect(bare.count >= 7,
+    #expect(bare.count >= 8,
             "the journal record encodes \(bare.count) keys: \(bare.keys.sorted())")
     for named in ["schemaVersion", "intent", "priorValue", "setAt",
-                  "setAtMonotonic", "ttlSeconds", "armedBy"] {
+                  "setAtMonotonic", "bootSessionID", "ttlSeconds", "armedBy"] {
         #expect(bare[named] != nil,
                 "the journal record no longer encodes `\(named)`: \(bare.keys.sorted())")
     }

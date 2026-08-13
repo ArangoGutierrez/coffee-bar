@@ -171,6 +171,7 @@ func advertisedVerbs(in usage: String) -> [String] {
     let record = JournalRecord(
         intent: .sleepDisabled, priorValue: false, setAt: Date(),
         setAtMonotonic: SystemMonotonicClock.now(),
+        bootSessionID: SystemBootTime.currentSessionID() ?? "",
         ttlSeconds: ProbeVerb.defaultTTLSeconds,
         armedBy: ArmProvenance(pid: 1, binaryPath: "/x", uid: 501))
     #expect(record.ttlSeconds == ProbeVerb.defaultTTLSeconds)

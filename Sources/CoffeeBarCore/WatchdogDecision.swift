@@ -108,6 +108,14 @@ public struct WatchdogInputs: Sendable {
     /// on this ladder that a `date -u 010203042026` cannot move.
     public let monotonicNow: TimeInterval
     public let lastHeartbeat: Date?
+    /// Whether the MACHINE rebooted while this journal was live — §8.2(4)'s
+    /// unclean exit, and never "this process just started".
+    ///
+    /// A Bool rather than the evidence, because the evidence is a `sysctl` and
+    /// this module stays Foundation-only. What changed underneath it (#83) is
+    /// how `WatchdogService` answers: it used to compare `journal.setAt`
+    /// against `kern.boottime` — two wall-clock values, one of them frozen on
+    /// disk — and it now compares boot identities, which no clock step moves.
     public let isBootEvaluation: Bool
     public let thermal: ThermalLevel
     public let batteryPercent: Int?

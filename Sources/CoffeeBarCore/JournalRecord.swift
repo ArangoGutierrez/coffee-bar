@@ -23,11 +23,13 @@ public struct ArmProvenance: Codable, Equatable, Sendable {
 /// mutation it describes, so a crash in between leaves evidence rather than
 /// a silent change. Handoff §8.2(1).
 public struct JournalRecord: Codable, Equatable, Sendable {
-    // 2 since the record gained `setAtMonotonic` (#77). A v1 journal records
-    // no elapsed-time reference at all, so its TTL cannot be judged — and
-    // `decide()`'s first rung reverts an unknown schema, which is the safe
-    // answer and needs no migration code to reach it.
-    public static let currentSchemaVersion = 2
+    // 3 since the record gained `bootSessionID` (#83); 2 was `setAtMonotonic`
+    // (#77). An older journal records no boot identity at all, so §8.2(4)'s
+    // question — did the MACHINE reboot while this was live — has no answer in
+    // it, exactly as a v1 journal has no answer for the TTL. `decide()`'s first
+    // rung reverts an unknown schema, which is the safe answer and needs no
+    // migration code to reach it.
+    public static let currentSchemaVersion = 3
     /// Handoff §8.2(5): hard cap regardless of settings.
     public static let maxTTLSeconds = 8 * 60 * 60
 
@@ -48,14 +50,27 @@ public struct JournalRecord: Codable, Equatable, Sendable {
     /// boot, whatever else goes wrong.
     ///
     /// It does NOT make the reboot check itself honest, and an earlier draft of
-    /// this comment implied that it did. That check compares `setAt` against
-    /// `kern.boottime`, two WALL-clock values, and `kern.boottime` is stored as
-    /// realtime — so a backward step moves it while `setAt` stays put, which
-    /// makes the comparison HARDER to satisfy and can suppress a revert that
-    /// should have fired. This field bounds how long a hold lasts; closing that
-    /// other gap needs the stamp to carry a boot identity, and is tracked on
-    /// its own.
+    /// this comment implied that it did. That check compared `setAt` against
+    /// `kern.boottime`, two WALL-clock values. This field bounds how long a
+    /// hold lasts; the reboot question is answered by `bootSessionID` below,
+    /// which is an identity rather than a reading and so has no clock in it at
+    /// all.
     public let setAtMonotonic: TimeInterval
+
+    /// The boot this record was written in, from `kern.bootsessionuuid`.
+    ///
+    /// §8.2(4) asks whether the MACHINE rebooted while this journal was live —
+    /// an unclean exit. That is a question about IDENTITY, and it used to be
+    /// answered by comparing `setAt` against `kern.boottime`: two wall-clock
+    /// readings, one frozen on disk and the other not. A UUID cannot be
+    /// stepped, so the comparison this feeds is immune to a clock moving in
+    /// either direction (#83).
+    ///
+    /// EMPTY means the identity could not be read when the record was written.
+    /// It is not a boot anybody is running, and the comparison treats an empty
+    /// value on either side as a DIFFERENT boot, which reverts — the safe
+    /// direction, and the same one an unreadable `kern.boottime` took.
+    public let bootSessionID: String
     public let ttlSeconds: Int
     public let armedBy: ArmProvenance
 
@@ -71,15 +86,25 @@ public struct JournalRecord: Codable, Equatable, Sendable {
     // it is a cap that silently goes back to trusting the wall clock. The
     // `environment` parameter on `WatchdogService` is required for the same
     // reason and records what the omission cost.
+    //
+    // `bootSessionID` follows it, and the argument is stronger here because
+    // the only value this module could default to is the empty string. Empty
+    // matches no boot, so a caller who forgot would arm a hold the daemon
+    // reverts on its next tick: the feature silently stops working, safely and
+    // invisibly, which is the failure mode #77's stamp was given no default to
+    // avoid. Reading the identity needs a `sysctl` this Foundation-only module
+    // does not make, so the decision belongs to the caller in any case.
     public init(schemaVersion: Int = JournalRecord.currentSchemaVersion,
                 intent: Intent, priorValue: Bool, setAt: Date,
                 setAtMonotonic: TimeInterval,
+                bootSessionID: String,
                 ttlSeconds: Int, armedBy: ArmProvenance) {
         self.schemaVersion = schemaVersion
         self.intent = intent
         self.priorValue = priorValue
         self.setAt = setAt
         self.setAtMonotonic = setAtMonotonic
+        self.bootSessionID = bootSessionID
         self.ttlSeconds = Self.clamp(ttlSeconds)
         self.armedBy = armedBy
     }
@@ -105,6 +130,15 @@ public struct JournalRecord: Codable, Equatable, Sendable {
         // direction.
         self.setAtMonotonic =
             try c.decodeIfPresent(TimeInterval.self, forKey: .setAtMonotonic) ?? 0
+        // ABSENT rather than required, for the reason above and no other: a v2
+        // journal names no boot, and it must still DECODE so rung 1 can revert
+        // it as `.unknownSchema` with its recorded `priorValue` intact.
+        //
+        // Empty for a record that claims the CURRENT schema and still omits the
+        // field — a hand-edited file. Empty is not a boot anybody is running,
+        // so the hold ends at the next tick, which is the safe direction.
+        self.bootSessionID =
+            try c.decodeIfPresent(String.self, forKey: .bootSessionID) ?? ""
         self.ttlSeconds = Self.clamp(try c.decode(Int.self, forKey: .ttlSeconds))
         self.armedBy = try c.decode(ArmProvenance.self, forKey: .armedBy)
     }

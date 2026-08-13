@@ -12,6 +12,7 @@ private let provenance = ArmProvenance(
     let r = JournalRecord(intent: .sleepDisabled, priorValue: false,
                           setAt: Date(timeIntervalSince1970: 0),
                           setAtMonotonic: 10_000,
+                          bootSessionID: "1BE0B007-0000-4000-8000-000000000077",
                           ttlSeconds: 999_999_999, armedBy: provenance)
     #expect(r.ttlSeconds == 28_800)
 }
@@ -32,6 +33,7 @@ private let provenance = ArmProvenance(
     let r = JournalRecord(intent: .sleepDisabled, priorValue: false,
                           setAt: Date(timeIntervalSince1970: 0),
                           setAtMonotonic: 10_000,
+                          bootSessionID: "1BE0B007-0000-4000-8000-000000000077",
                           ttlSeconds: -5, armedBy: provenance)
     #expect(r.ttlSeconds == 1)
 }
@@ -40,6 +42,7 @@ private let provenance = ArmProvenance(
     let base = Date(timeIntervalSince1970: 1_000_000)
     let r = JournalRecord(intent: .sleepDisabled, priorValue: false,
                           setAt: base, setAtMonotonic: 10_000,
+                          bootSessionID: "1BE0B007-0000-4000-8000-000000000077",
                           ttlSeconds: 900, armedBy: provenance)
     #expect(r.expiry == base.addingTimeInterval(900))
 }
@@ -50,6 +53,7 @@ private let provenance = ArmProvenance(
     let base = Date(timeIntervalSince1970: 1_000_000)
     let r = JournalRecord(intent: .sleepDisabled, priorValue: false,
                           setAt: base, setAtMonotonic: 10_000,
+                          bootSessionID: "1BE0B007-0000-4000-8000-000000000077",
                           ttlSeconds: 999_999_999, armedBy: provenance)
     #expect(r.expiry == base.addingTimeInterval(28_800))
 }
@@ -95,6 +99,7 @@ private let provenance = ArmProvenance(
     let r = JournalRecord(intent: .sleepDisabled, priorValue: true,
                           setAt: Date(timeIntervalSince1970: 5),
                           setAtMonotonic: 10_000,
+                          bootSessionID: "1BE0B007-0000-4000-8000-000000000077",
                           ttlSeconds: 60, armedBy: provenance)
     let decoded = try JSONDecoder().decode(
         JournalRecord.self, from: JSONEncoder().encode(r))
@@ -119,6 +124,7 @@ private let provenance = ArmProvenance(
     let r = JournalRecord(intent: .sleepDisabled, priorValue: false,
                           setAt: Date(timeIntervalSince1970: 5),
                           setAtMonotonic: 12_345.75,
+                          bootSessionID: "1BE0B007-0000-4000-8000-000000000077",
                           ttlSeconds: 60, armedBy: provenance)
     let decoded = try JSONDecoder().decode(
         JournalRecord.self, from: JSONEncoder().encode(r))

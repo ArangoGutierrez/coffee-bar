@@ -23,6 +23,11 @@ private func journal(ttl: Int = 900,
                      prior: Bool = false) -> JournalRecord {
     JournalRecord(schemaVersion: schema, intent: .sleepDisabled,
                   priorValue: prior, setAt: t0, setAtMonotonic: m0,
+                  // Arbitrary but non-empty. `decide()` never reads it — the
+                  // boot question reaches here already answered, as
+                  // `isBootEvaluation` — and an empty value would suggest it
+                  // did.
+                  bootSessionID: "1BE0B007-0000-4000-8000-000000000001",
                   ttlSeconds: ttl, armedBy: prov)
 }
 
