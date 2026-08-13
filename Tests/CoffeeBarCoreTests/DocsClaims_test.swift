@@ -414,7 +414,15 @@ func everyDocumentedSurfaceIsReadableAndSubstantial(_ name: String) throws {
 }
 
 private let hookCountPattern = "\\b(three|four|five|six|seven)\\b[\\s\\S]{0,25}?hooks?"
-private let durationPattern = "(\\d[\\d,_]*)[\\s-]*(second|minute|hour)s?"
+/// A whole number, decimal point included — never a fragment of one.
+///
+/// `(?<![\d.])` is the half that refuses. Without it the engine simply starts
+/// one character later when the leading digits will not do, so `.5 seconds`
+/// still yields `5`, which is the bug this pattern was fixed for. With it, a
+/// number the pattern cannot read in full (`.5`, `1.`) matches nothing at all
+/// and reaches no comparison. See `theDurationPatternReadsAWholeDecimalNumber`
+/// for the reasoning and the cases.
+private let durationPattern = "(?<![\\d.])(\\d[\\d,_]*(?:\\.\\d+)?)[\\s-]*(second|minute|hour)s?"
 private let percentPattern = "(\\d+)\\s*%"
 private let numberWords = ["three": 3, "four": 4, "five": 5, "six": 6, "seven": 7]
 
