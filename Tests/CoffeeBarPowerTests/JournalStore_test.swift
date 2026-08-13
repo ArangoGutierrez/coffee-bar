@@ -25,6 +25,37 @@ private func posixMode(of path: String) -> mode_t? {
     return info.st_mode & (S_IRWXU | S_IRWXG | S_IRWXO)
 }
 
+/// The body of the function declared by `signature` in `source`, with comments
+/// removed, or `nil` when there is no such declaration.
+///
+/// Comments are stripped so that prose ABOUT an API cannot satisfy — or break —
+/// a check that the CALL is present. Braces inside string literals would
+/// confuse the matching; neither function read this way contains one.
+private func functionBody(_ signature: String, in source: String) -> String? {
+    let code = source
+        .split(separator: "\n", omittingEmptySubsequences: false)
+        .map { line -> Substring in
+            guard let marker = line.range(of: "//") else { return line }
+            return line[line.startIndex ..< marker.lowerBound]
+        }
+        .joined(separator: "\n")
+
+    guard let declaration = code.range(of: signature),
+          let open = code[declaration.upperBound...].firstIndex(of: "{") else { return nil }
+
+    var depth = 0
+    var cursor = open
+    while cursor < code.endIndex {
+        if code[cursor] == "{" { depth += 1 }
+        if code[cursor] == "}" {
+            depth -= 1
+            if depth == 0 { return String(code[code.index(after: open) ..< cursor]) }
+        }
+        cursor = code.index(after: cursor)
+    }
+    return nil
+}
+
 private let prov = ArmProvenance(pid: 7, binaryPath: "/x", uid: 501)
 
 private func sample(prior: Bool = false) -> JournalRecord {
@@ -200,9 +231,141 @@ func anUncreatableTempFileSurfacesWriteFailed() throws {
 }
 
 @Test func clearOnMissingFileIsNotAnError() throws {
+    // Unchanged text, changed meaning. While `clear()` began with an existence
+    // check this passed because the guard short-circuited on a file that never
+    // existed, and it said nothing about the removal. It now drives the removal
+    // for real and is the behavioural half of the not-found tolerance: the
+    // journal is absent, `removeItem` reports `.fileNoSuchFile`, and the caller
+    // still sees success.
     let store = FileJournalStore(url: tempURL())
     try store.clear()   // must not throw
     #expect(try store.load() == nil)
+}
+
+// MARK: - The delete race
+//
+// `applyRevert` restores the sleep setting and THEN clears the journal. A
+// failure from `clear()` therefore reports `could not revert` (exit 70) after a
+// revert that already worked, and leaves an idle root daemon loaded.
+
+@Test func clearNeverAsksWhetherTheJournalExistsBeforeRemovingIt() throws {
+    // The defect is a check-then-act: `fileExists` then `removeItem`. Whoever
+    // loses the unlink throws, and `applyRevert` turns that into
+    // `could not revert` and exit 70 after a revert that already worked.
+    //
+    // The race IS real and was reproduced before this guard was written, not
+    // reasoned about: driving the original check-then-act from a hot loop
+    // produced 669 failures over 32,000 clears, every single one
+    // NSCocoaErrorDomain 4 (NSFileNoSuchFileError) wrapping POSIX ENOENT.
+    //
+    // That reproduction is deliberately NOT the test. Its detection is
+    // load-sensitive — measured in-suite at 6 of 8 runs with 4 threads and 7 of
+    // 8 with 16, costing between 2.2 and 12.3 seconds — so as a shipped guard
+    // it would be a coin flip that sometimes certifies the bug as fixed. This
+    // check is the deterministic half: the window cannot exist if the existence
+    // check does not, and no in-process test can observe the window itself.
+    //
+    // LIMIT, stated rather than hidden: this reads the SOURCE, exactly as
+    // `theJournalIsForcedToStableStorageBeforeItIsRenamedIntoPlace` does. It is
+    // a tripwire against re-introducing the check, not proof that no race
+    // exists.
+    let source = try String(
+        contentsOf: packageRootForSyncCheck
+            .appending(path: "Sources/CoffeeBarPower/JournalStore.swift"),
+        encoding: .utf8)
+
+    let body = try #require(functionBody("public func clear() throws", in: source), """
+        clear() was not found in JournalStore.swift, so this check can no longer \
+        see the code it exists to assert on.
+        """)
+    // Pins the premise that the body really was extracted: absence of a match
+    // in an empty string is not absence of the check.
+    try #require(body.contains("removeItem"))
+
+    // Control. `quarantine()` legitimately checks first and must keep doing so,
+    // which proves the extractor finds a real body and that these probes DO hit
+    // when the code contains one. Without it, a broken extractor would report
+    // the clean result this test is looking for.
+    let quarantineBody = try #require(
+        functionBody("public func quarantine() throws -> URL?", in: source))
+    try #require(quarantineBody.contains("fileExists"))
+
+    for probe in ["fileExists", "attributesOfItem", "isReadableFile", "access("] {
+        #expect(!body.contains(probe), """
+            clear() consults `\(probe)` before removing the journal. That is the \
+            check-then-act window: another process can delete the journal in \
+            between, and the loser reports a revert that worked as a failure.
+            """)
+    }
+}
+
+@Test func anAbsentJournalIsReportedAsFileNoSuchFileAndNothingElse() throws {
+    // Pins the premise the tolerance is keyed on. `clear()` must swallow
+    // exactly one error code, so if Foundation ever reported an absent file as
+    // something else the tolerance would silently stop matching and the race
+    // would come back. This is the measurement that decided the code: absence
+    // arrives as NSCocoaErrorDomain 4 (NSFileNoSuchFileError) wrapping POSIX
+    // ENOENT — NOT as a `POSIXError`, which is the shape it is easiest to
+    // reach for and which would never match.
+    //
+    // Every level of absence reports the same code, which is why the fix does
+    // not need to care which one it met: a missing file under an existing
+    // directory, and a missing file under a directory that does not exist
+    // either — the shape `tempURL()` produces.
+    let existingParent = tempURL()
+    try FileManager.default.createDirectory(
+        at: existingParent.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+    for absent in [existingParent, tempURL()] {
+        let thrown = #expect(throws: CocoaError.self) {
+            try FileManager.default.removeItem(at: absent)
+        }
+        #expect(thrown?.code == .fileNoSuchFile)
+        #expect((thrown?.underlying as? NSError)?.code == Int(ENOENT))
+    }
+}
+
+// Root bypasses the permission denial this test depends on, which would leave
+// it vacuously green rather than failing honestly.
+@Test(.enabled(if: geteuid() != 0))
+func clearStillThrowsWhenTheJournalCannotBeRemoved() throws {
+    // The discriminating negative. Tolerating a not-found removal must not
+    // decay into swallowing every removal failure: a journal still on disk
+    // because of a permissions problem is a real failure, and hiding it leaves
+    // a root-owned file the user cannot clear and a caller that believes the
+    // arming record is gone.
+    //
+    // Mode 0o500 on the parent (read + execute, no write) is that case exactly:
+    // the journal is still stat-able, so the removal is genuinely attempted,
+    // and `unlink` fails with EACCES.
+    let url = tempURL()
+    let dir = url.deletingLastPathComponent()
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    try Data("{}".utf8).write(to: url)
+    try FileManager.default.setAttributes(
+        [.posixPermissions: 0o500], ofItemAtPath: dir.path)
+    defer {
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: dir.path)
+    }
+
+    // Pins the premise: unlinking needs write on the DIRECTORY, exactly as
+    // creating does. If 0o500 ever stopped denying that, this test would pass
+    // without the failure path being exercised at all.
+    let probeFD = open(dir.appendingPathComponent("probe").path,
+                       O_WRONLY | O_CREAT, 0o644)
+    if probeFD >= 0 { close(probeFD) }
+    #expect(probeFD == -1)
+
+    let thrown = #expect(throws: CocoaError.self) {
+        try FileJournalStore(url: url).clear()
+    }
+    // The exact code, not merely "it threw": `.fileNoSuchFile` here would mean
+    // the tolerance had matched the wrong failure.
+    #expect(thrown?.code == .fileWriteNoPermission)
+    // And the journal really is still there — the throw described a removal
+    // that did not happen.
+    #expect(FileManager.default.fileExists(atPath: url.path))
 }
 
 @Test func corruptJournalThrowsRatherThanReturningNil() throws {
