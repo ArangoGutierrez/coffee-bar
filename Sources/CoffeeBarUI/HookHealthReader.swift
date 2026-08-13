@@ -25,8 +25,31 @@ public protocol HookHealthProviding: Sendable {
     /// Code file. No existence gate: an absent file still reaches `.unreadable`,
     /// because that user is the first-run user the advisory exists for.
     func status() -> HookHealthStatus
-    /// Every tool this source has something to say about.
-    func statuses() -> [AgentTool: HookHealthStatus]
+    /// Every tool this source has something to say about, given the tools the
+    /// user says they run.
+    ///
+    /// **`selected` widens what is read; it never narrows it.** A tool the user
+    /// named is reported on whether or not its file is there — that user is
+    /// mid-setup and the advisory is for them — and a tool they did not name is
+    /// still reported on when its file IS there, because the file is evidence
+    /// and throwing it away would silence every user who has never opened
+    /// Preferences. Deciding what to SAY out of what is reported is
+    /// `ServingModel.hookAdvisory`'s job, one layer up, where the user's choice
+    /// lives.
+    func statuses(advising selected: Set<AgentTool>) -> [AgentTool: HookHealthStatus]
+}
+
+extension HookHealthProviding {
+    /// Every tool this source has something to say about when nobody has named
+    /// any: the tools whose hook file is on disk, and nothing else.
+    ///
+    /// A convenience over the requirement above rather than a second
+    /// requirement, deliberately. Written the other way about — a defaulted
+    /// `statuses(advising:)` forwarding to a required `statuses()` — a
+    /// conformer that implemented only the second would ignore the user's
+    /// selection silently, which is the trap this file's own history is full
+    /// of.
+    public func statuses() -> [AgentTool: HookHealthStatus] { statuses(advising: []) }
 }
 
 /// Reads each agent tool's hook file and reports whether our hooks are
@@ -153,11 +176,16 @@ public struct HookHealthReader: HookHealthProviding {
     /// wrong; it was a trap laid for the next caller.
     /// `statusReadsThisReadersOwnFileAndNeverTheRealHomeOne` holds the line.
     ///
-    /// Like `status(for: .claudeCode)`, this applies NO existence gate — an
-    /// absent Claude Code file still reaches `.unreadable` rather than nothing,
-    /// because that user is the first-run user the advisory exists for. The two
-    /// therefore agree about Claude Code, and an earlier version of this comment
-    /// wrongly drew a contrast between them that the fix round had removed.
+    /// **It applies NO existence gate, and since issue #51 that is a real
+    /// difference from `status(for:advising:)` rather than the agreement an
+    /// earlier version of this comment recorded.** That one now asks whether the
+    /// user named the tool; this one has nowhere to be told, so it answers about
+    /// the file it holds whether or not the file is there.
+    ///
+    /// Nothing in the product reads this property — `ServingModel.hookHealth` is
+    /// derived from the collection — so the difference costs no user anything.
+    /// It is stated because a caller who reached for this one expecting the
+    /// gated answer would get a verdict about a tool the user does not run.
     public func status() -> HookHealthStatus {
         guard let url = hookFiles[.claudeCode] else { return .unreadable }
         return HookHealth.status(ofSettings: try? Data(contentsOf: url))
@@ -165,52 +193,68 @@ public struct HookHealthReader: HookHealthProviding {
 
     /// What `tool`'s hook file says, or `nil` when there is nothing to say.
     ///
-    /// `nil` means this reader does not cover the tool, or the tool's file is
-    /// not on disk. **An absent file means the user does not run that tool**, so
-    /// a Claude-Code-only user is never told to wire Cursor.
+    /// `nil` means this reader does not cover the tool, or nothing says the user
+    /// runs it: **the user did not name it and its file is not on disk**. So a
+    /// Claude-Code-only user is never told to wire Cursor.
     ///
-    /// The gate is FILE EXISTENCE and never "has this tool ever posted an
-    /// event". That second rule is circular: a tool with no hooks wired never
-    /// posts, so it would never be advised, and the advisory exists for exactly
-    /// that user.
+    /// **TWO signals, and the user's own is the strong one.** An absent file
+    /// carries a different meaning depending on what the user has said:
     ///
-    /// **`.claudeCode` is EXEMPT from the gate, and the exemption is narrow on
-    /// purpose.** An absent file carries a DIFFERENT meaning for each cohort:
+    /// - They NAMED the tool. No file means "not set up yet", which is the
+    ///   first-run state and the one the advisory was written for. The README
+    ///   tells the reader coffee-bar does nothing until those hooks exist, so
+    ///   this user needs the advice most — and the first round of issue #10c
+    ///   gated them into silence.
+    /// - They did NOT name it. No file means "does not run this tool", and
+    ///   advising that user is the noise issue #10c set out to remove.
     ///
-    /// - Claude Code is the primary integration and the first-run path. No file
-    ///   there means "not set up yet". The README tells the reader coffee-bar
-    ///   does nothing until those hooks exist, so this is the user who most
-    ///   needs the advisory — and the first round of issue #10c gated them into
-    ///   silence.
-    /// - Codex and Cursor are opt-in. No file there means "does not run this
-    ///   tool", and advising that user is the noise this task exists to remove.
+    /// The file being there is still evidence in its own right, which is why
+    /// this is an `||` and not a replacement. A user who has never opened
+    /// Preferences has named nothing, and coffee-bar has to keep working for
+    /// them: `ServingModel` decides what an empty answer means, and this reader
+    /// only ever reports what it can see.
     ///
-    /// What the exemption COSTS, stated rather than hidden: a Codex-only user
-    /// who has never run Claude Code still reads one line about
-    /// `~/.claude/settings.json`. That line is true — coffee-bar genuinely
-    /// cannot confirm those hooks — but it is not the most useful thing to tell
-    /// them. Silence for a first-run user is the worse failure of the two,
-    /// because it hides the one action that makes the product work at all.
+    /// **`.claudeCode` gets NO special treatment here, and issue #51 is why.**
+    /// This branch used to read `tool == .claudeCode || fileExists`, standing in
+    /// for a question nobody had asked the user: which tools do you run. The
+    /// exemption bought the first-run user their advisory and charged a
+    /// Codex-only user a line about `~/.claude/settings.json` they could do
+    /// nothing with. Now that the user can answer, the answer is the signal, and
+    /// the same protection reaches a first-run CODEX user the exemption never
+    /// covered.
+    ///
+    /// The gate is never "has this tool ever posted an event". That rule is
+    /// circular: a tool with no hooks wired never posts, so it would never be
+    /// advised, and the advisory exists for exactly that user.
     ///
     /// `.unreadable` stays reserved for a file this app could not parse, whether
     /// it is absent or malformed. It never tells the user to paste entries that
     /// may already be there, which is how a shared settings file gets clobbered.
-    public func status(for tool: AgentTool) -> HookHealthStatus? {
+    ///
+    /// The default is NOBODY named, which is the pure existence gate. It is the
+    /// honest default for a lookup with no context — every caller that HAS the
+    /// user's answer passes it.
+    public func status(for tool: AgentTool,
+                       advising selected: Set<AgentTool> = []) -> HookHealthStatus? {
         guard let url = hookFiles[tool] else { return nil }
-        guard tool == .claudeCode
+        guard selected.contains(tool)
                 || FileManager.default.fileExists(atPath: url.path)
         else { return nil }
         return HookHealth.status(of: try? Data(contentsOf: url), for: tool)
     }
 
-    /// Every tool whose hook file is on disk, with what that file says.
+    /// Every tool the user named or has a hook file for, with what that file
+    /// says.
     ///
     /// This is what the panel reads. Assigning a `nil` through a dictionary
-    /// subscript REMOVES the key, so the tools `status(for:)` had nothing to say
-    /// about are simply absent — which is the claim the panel needs.
-    public func statuses() -> [AgentTool: HookHealthStatus] {
+    /// subscript REMOVES the key, so the tools `status(for:advising:)` had
+    /// nothing to say about are simply absent — which is the claim the panel
+    /// needs.
+    public func statuses(advising selected: Set<AgentTool>) -> [AgentTool: HookHealthStatus] {
         var found: [AgentTool: HookHealthStatus] = [:]
-        for tool in AgentTool.allCases { found[tool] = status(for: tool) }
+        for tool in AgentTool.allCases {
+            found[tool] = status(for: tool, advising: selected)
+        }
         return found
     }
 }

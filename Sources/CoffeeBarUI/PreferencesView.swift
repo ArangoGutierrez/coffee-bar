@@ -204,6 +204,21 @@ public struct PreferencesView: View {
                 // holds that line by reading this file.
                 Text("Agent tools").font(.headline)
 
+                // What the checkboxes below are for, rendered verbatim from the
+                // model with no text built here — M1 design §5.4 forbids
+                // asserting on rendered AppKit text, so a sentence composed in
+                // this file is a sentence no check reads.
+                //
+                // A row of ticks against three file paths says nothing on its
+                // own about what ticking one does, and the answer is not
+                // guessable: the selection decides which advisories appear, and
+                // it does nothing else whatever. Nothing is installed, moved or
+                // written by it.
+                Text(ServingModel.agentToolsLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
                 // The same sentence the panel carries, rendered verbatim from
                 // the model with no text built here — M1 design §5.4 forbids
                 // asserting on rendered AppKit text, so a sentence composed in
@@ -229,14 +244,33 @@ public struct PreferencesView: View {
                 // this loop out of `body`.
                 ForEach(AgentTool.allCases, id: \.self) { tool in
                     HStack {
+                        // THE ANSWER TO THE QUESTION coffee-bar used to guess at
+                        // (issue #51). Before this, the product decided which
+                        // tools to advise about by looking for their files, so a
+                        // user was told about tools they do not run and cannot
+                        // act on, and `HookHealthReader` carried a hard-coded
+                        // Claude Code exemption standing in for a question
+                        // nobody had asked.
+                        //
+                        // BOTH DIRECTIONS through the model, never a `@State`
+                        // mirror of it: the panel narrows its advisory on the
+                        // same answer, and a copy held here would disagree with
+                        // it the moment either changed.
+                        //
+                        // The label is the tool's own file path, which is what
+                        // this row already showed and what identifies the tool
+                        // without a second name for it to drift from.
                         // `settingsPath(for:)` is the one place that says where
                         // each tool keeps its file, and the checker, the
                         // advisory and this label all read it. A path spelled
                         // out here is a fourth spelling that can disagree with
                         // the three.
-                        Text("~/" + HookHealth.settingsPath(for: tool))
-                            .font(.caption)
-                            .monospaced()
+                        Toggle(isOn: Binding(get: { model.advises(tool) },
+                                             set: { model.setAdvises($0, for: tool) })) {
+                            Text("~/" + HookHealth.settingsPath(for: tool))
+                                .font(.caption)
+                                .monospaced()
+                        }
 
                         Spacer()
 

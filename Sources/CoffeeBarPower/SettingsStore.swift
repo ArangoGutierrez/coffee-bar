@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import Foundation
+import CoffeeBarCore
 
 /// Every preference key, spelled once.
 ///
@@ -56,6 +57,33 @@ public enum SettingsKey {
     /// and none is planned — handoff §2.2 ships "Quiet everything else" as one
     /// switch. `theQuietOthersKeyStringNeverChanges` holds the string itself.
     public static let quietEverythingElse = "quietEverythingElse"
+
+    /// Which agent tools the user says they run (issue #51).
+    ///
+    /// **Absent by default, and absent is NEITHER empty NOR everything.** It is
+    /// a THIRD state — the question has not been asked — and the whole of issue
+    /// #51 rests on keeping it tellable apart from an answer:
+    ///
+    /// - `nil`, never chosen. The app assumes, exactly as it did before this key
+    ///   existed, so a user who has never opened Preferences sees no change.
+    /// - `[]`, chose nothing. The user asked for silence and gets it.
+    /// - a list, chose those.
+    ///
+    /// Folding the first two together is the mistake this comment exists to
+    /// refuse: a `?? []` on the read turns every existing user into one who has
+    /// switched every tool off, and the panel then says nothing to the first-run
+    /// user the advisory was written for. Issue #52's wizard has to draw the
+    /// same distinction to know whom it is for.
+    ///
+    /// **Nothing may write this key as a side effect of reading it.** A default
+    /// seeded on first read is indistinguishable from a choice a second later,
+    /// and the difference is not recoverable afterwards.
+    ///
+    /// A list of `AgentTool.rawValue`s, because that is what this store holds and
+    /// because it is what a user reads in `defaults read`.
+    /// `theAgentToolsKeyStringNeverChangesAndCollidesWithNothing` holds the
+    /// string itself.
+    public static let agentTools = "agentTools"
 }
 
 /// Where a user preference is kept.
@@ -109,6 +137,44 @@ extension SettingsStoring {
     /// `DemotionPolicy` needs and a user's list may repeat an entry.
     public func demotableProcessNames() -> Set<String> {
         Set(stringArray(forKey: SettingsKey.demotableProcessNames) ?? [])
+    }
+
+    /// The agent tools the user chose, or `nil` when they have never chosen
+    /// (issue #51).
+    ///
+    /// **The `Optional` is the whole accessor**, and it is the one place the
+    /// difference is decided. `demotableProcessNames()` above answers a set and
+    /// reads an absent key as empty; this one must not, for the reason
+    /// `SettingsKey.agentTools` gives — empty is a user asking for silence, and
+    /// absent is a user who has not been asked. The two look identical
+    /// afterwards and lead to opposite behaviour.
+    ///
+    /// A name this build does not know is DROPPED and the rest survive. This key
+    /// can be written by a newer build that knows a fourth tool, and by a hand
+    /// edit; a force-unwrapped `AgentTool(rawValue:)` would trap at launch on a
+    /// file this app does not own, and discarding the whole list would silently
+    /// put a user who HAD chosen back on the assumed default.
+    ///
+    /// A value that is not a list of strings reads as `nil` — never chosen —
+    /// rather than as an empty choice, for the reason above: nothing about a
+    /// malformed value says the user asked for silence.
+    ///
+    /// A set rather than the stored array, because the callers ask "is this tool
+    /// in it" and a hand-edited list may repeat an entry.
+    public func selectedAgentTools() -> Set<AgentTool>? {
+        guard let stored = stringArray(forKey: SettingsKey.agentTools) else { return nil }
+        return Set(stored.compactMap(AgentTool.init(rawValue:)))
+    }
+
+    /// Records the tools the user chose. An EMPTY set is a choice and is stored
+    /// as one.
+    ///
+    /// SORTED, because a `Set` has no order and a stored list does. Without it
+    /// the same selection is written in a different order each time, and a user
+    /// watching their preferences file — or reading one out of a bug report —
+    /// sees a change where nothing changed.
+    public func setSelectedAgentTools(_ tools: Set<AgentTool>) {
+        setStringArray(tools.map(\.rawValue).sorted(), forKey: SettingsKey.agentTools)
     }
 }
 
