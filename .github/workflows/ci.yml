@@ -62,6 +62,39 @@ jobs:
       - name: Test
         run: swift test
 
+      # Nothing ran `scripts/build-app.sh` outside a release until now, so the
+      # bundle-assembly path could break on `main` and stay broken until someone
+      # cut a DMG. It needs `swift build -c release` (the step above) and
+      # `iconutil`, which ships with the Command Line Tools — the script uses it
+      # rather than `actool` precisely so no full Xcode is required. One step in
+      # a job that already pays for this runner: a second `macos-15` job would
+      # double the 10x bill for one script invocation.
+      #
+      # COFFEE_BAR_VERSION is pinned rather than left to the script's own
+      # `git describe` fallback. A tag-fetch regression then fails at "Confirm
+      # the tags arrived" above, which names the checkout, instead of surfacing
+      # here as a confusing version string. Note the asymmetry: `build-app.sh`
+      # reads COFFEE_BAR_VERSION, `release-dmg.sh` reads VERSION.
+      #
+      # The assertions are the point of the step. `cp`, `install` and `iconutil`
+      # all return 0 while producing nothing useful, and this repository has
+      # been bitten by that more than once, so this asks what the directory
+      # HOLDS rather than whether the script exited 0. No pipe carries a status
+      # here: `script | tail && next` would swallow the failure.
+      - name: Build the app bundle
+        env:
+          COFFEE_BAR_VERSION: 0.0.0-ci
+        run: |
+          scripts/build-app.sh
+          app="build/CoffeeBar.app"
+          test -d "${app}" || { echo "no bundle at ${app}"; exit 1; }
+          test -x "${app}/Contents/MacOS/coffee-bar" \
+            || { echo "${app}/Contents/MacOS/coffee-bar is missing or not executable"; exit 1; }
+          got="$(plutil -extract CFBundleShortVersionString raw -o - "${app}/Contents/Info.plist")"
+          [ "${got}" = "${COFFEE_BAR_VERSION}" ] \
+            || { echo "CFBundleShortVersionString is '${got}', expected '${COFFEE_BAR_VERSION}'"; exit 1; }
+          echo "bundle ok: ${app} reports ${got}"
+
   # A SEPARATE job, on ubuntu, deliberately. The policy bench and the art guards
   # are pure logic with no macOS dependency, and the comment above records that
   # macOS runners bill at 10x. This runs at 1x and in parallel with the Swift
