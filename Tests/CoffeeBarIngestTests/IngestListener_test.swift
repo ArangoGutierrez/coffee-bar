@@ -305,7 +305,13 @@ private final class Collected: @unchecked Sendable {
 /// pays, and it pays in exchange for naming its real cause. The one wait for a
 /// condition that must NEVER hold states its own short budget, and must keep
 /// doing so.
-private let pumpBudget: TimeInterval = 30
+///
+/// Module-visible rather than file-private, with `pump` and `requireReady`
+/// below and `CollectedOrigins` further down. `HookSnippetDelivery_test.swift`
+/// drives the same listener and needs the same waits, and a second copy of a
+/// budget measured under load is a copy that drifts back to the five seconds
+/// this replaced. Nothing outside these two files uses them.
+let pumpBudget: TimeInterval = 30
 
 /// Waits until `condition` holds or the deadline passes.
 ///
@@ -332,7 +338,7 @@ private let pumpBudget: TimeInterval = 30
 /// the main queue correctly. That is the point. Its correctness depends on who
 /// owns the main thread, which a test cannot know, so the branch is gone and a
 /// trap that names the cause stands in its place.
-private func pump(until condition: () -> Bool, seconds: TimeInterval = pumpBudget) {
+func pump(until condition: () -> Bool, seconds: TimeInterval = pumpBudget) {
     precondition(!Thread.isMainThread, """
         pump() ran on the main thread. Every listener in this file serves on \
         DispatchQueue.main, and waiting here never lets that queue run, so this \
@@ -364,9 +370,9 @@ private func pump(until condition: () -> Bool, seconds: TimeInterval = pumpBudge
 /// maintainer triaging `socket mode is absent` hunts a permissions defect that
 /// does not exist. A test with no socket has nothing left to say, so it stops
 /// here and names the one thing that did go wrong.
-private func requireReady(_ listener: UnixSocketIngestListener,
-                          within seconds: TimeInterval = pumpBudget,
-                          sourceLocation: SourceLocation = #_sourceLocation) throws {
+func requireReady(_ listener: UnixSocketIngestListener,
+                  within seconds: TimeInterval = pumpBudget,
+                  sourceLocation: SourceLocation = #_sourceLocation) throws {
     pump(until: { listener.isReady }, seconds: seconds)
     try #require(listener.isReady,
                  """
@@ -1355,7 +1361,10 @@ private func waitUntilNothingAnswers(at path: String) {
 // origin lives in the request line and no unit test of `SessionHub` can see it.
 
 /// Records the origin alongside the event, which `Collected` does not.
-private final class CollectedOrigins: @unchecked Sendable {
+///
+/// Module-visible for `HookSnippetDelivery_test.swift`, which asserts the
+/// origin of every event the pasted snippet delivers.
+final class CollectedOrigins: @unchecked Sendable {
     private let lock = NSLock()
     private var pairs: [(AgentTool, HookEvent)] = []
 
