@@ -36,13 +36,21 @@ import Foundation
 /// lines duplicated is better than widening a neighbour's internals, which is
 /// the trade `everySwiftFileInSourcesAndTests` in `DocsClaims_test.swift`
 /// records for its own walk.
+///
+/// `unset` removes a variable the test process happens to carry. The default
+/// case below is defined by `SIGN_IDENTITY` being ABSENT, and a maintainer who
+/// exported it in the shell that ran `swift test` would otherwise hand it
+/// straight to the script and test the opt-IN path under the opt-out name.
 @discardableResult
-private func runTool(_ args: [String], env extra: [String: String] = [:]) throws -> (rc: Int32, out: String) {
+private func runTool(_ args: [String],
+                     env extra: [String: String] = [:],
+                     unset: [String] = []) throws -> (rc: Int32, out: String) {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
     p.arguments = args
     var env = ProcessInfo.processInfo.environment
     for (k, v) in extra { env[k] = v }
+    for k in unset { env.removeValue(forKey: k) }
     p.environment = env
 
     let pipe = Pipe()
@@ -147,6 +155,22 @@ private func carriesHardenedRuntime(in report: String) -> Bool {
     report.split(separator: "\n")
         .first { $0.contains("flags=") }
         .map { $0.contains("runtime") } ?? false
+}
+
+/// The first `Developer ID Application` identity `security` reports, or nil.
+///
+/// Parsed HERE rather than asked of `sign-bundle.sh`, because the script's own
+/// answer is part of what is under test. `find-identity` prints
+/// `  1) <hex> "Developer ID Application: Name (TEAM)"`, so the value runs from
+/// the prefix to the closing quote.
+private func firstDeveloperIDIdentity(in report: String) -> String? {
+    for line in report.split(separator: "\n") {
+        guard let prefix = line.range(of: "Developer ID Application:") else { continue }
+        let rest = line[prefix.lowerBound...]
+        guard let closingQuote = rest.firstIndex(of: "\"") else { continue }
+        return String(rest[rest.startIndex..<closingQuote])
+    }
+    return nil
 }
 
 /// The bundle's own executables, sorted. Fails loudly rather than returning [].
@@ -296,7 +320,118 @@ private func nestedBinaries(of app: URL) throws -> [URL] {
     }
 }
 
-/// The identity the script reaches for is the real keychain's Developer ID.
+/// Signing is OPT-IN: an unasked run does not reach for anybody's signing key.
+///
+/// **Named bug, and it is the one this test exists for: `build-app.sh` signs
+/// with whatever Developer ID it finds lying in the keychain.** That script is
+/// also the Homebrew formula's build path, so auto-detection means
+/// `brew install coffee-bar` runs `codesign --sign <a stranger's private key>`
+/// on a bundle they are merely installing — a third party's signing identity
+/// used without their consent, on the distribution path most likely to reach
+/// people who never read this repository. It also falsifies `SECURITY.md`,
+/// which promises under "Things that are not vulnerabilities" that a
+/// Homebrew-installed bundle names no team.
+///
+/// **The discrimination does not depend on this machine's keychain**, which is
+/// the flaw in asserting the default only against the real one: on a runner with
+/// no identity, auto-detection and opt-in produce the same unsigned bundle and
+/// the test is green either way. So the first half OFFERS an identity through a
+/// PATH shim — a `Developer ID Application` line naming a certificate no
+/// keychain holds — and requires the script to walk past it. Restore
+/// `IDENTITY="${SIGN_IDENTITY:-$(detect_identity)}"` and the script takes the
+/// bait: `codesign --sign` fails on the missing certificate, `die` runs, and the
+/// rc assertion goes red on any machine.
+///
+/// The second half then pins the same rule against the REAL keychain, which is
+/// the sharpest form of it where an identity exists: a machine that CAN produce
+/// a Developer ID signature must not produce one unasked.
+///
+/// The shim is read-only and the keychain is never written. `security` is still
+/// consulted on this path — `detect_identity` reports what is AVAILABLE so the
+/// message can name it — and that is the distinction under test: reading which
+/// certificates exist is not the same as signing with one.
+@Test func signingIsOptInSoAnUnaskedRunLeavesTheBundleUnsigned() throws {
+    // --- offered an identity, and must decline it ---------------------------
+    try withFixtureApp { tmp, app in
+        let shimDir = tmp.appending(path: "shim")
+        try FileManager.default.createDirectory(at: shimDir, withIntermediateDirectories: true)
+        let marker = tmp.appending(path: "security-was-called.txt")
+        let shim = shimDir.appending(path: "security")
+        try """
+        #!/bin/bash
+        printf '%s\\n' "$*" >> "${CB_SHIM_MARKER}"
+        echo '  1) DEADBEEF "Developer ID Application: Nobody At All (ZZZZZZZZZZ)"'
+        echo "     1 valid identities found"
+        exit 0
+        """.write(to: shim, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                              ofItemAtPath: shim.path)
+
+        let path = shimDir.path + ":" + (ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")
+        let r = try runTool([signBundleScript().path, app.path],
+                            env: ["PATH": path, "CB_SHIM_MARKER": marker.path],
+                            unset: ["SIGN_IDENTITY"])
+
+        #expect(r.rc == 0, """
+            sign-bundle.sh exited \(r.rc) when it was offered an identity it was \
+            never asked to use. Signing is opt-in; an unasked run assembles an \
+            unsigned bundle and exits 0:
+            \(r.out)
+            """)
+
+        // ANTI-VACUITY. Without this the run above proves nothing: a PATH that
+        // never reached the shim would leave the bundle unsigned for the
+        // uninteresting reason that nothing was offered.
+        let called = (try? String(contentsOf: marker, encoding: .utf8)) ?? ""
+        #expect(called.contains("find-identity"), """
+            the script never ran `security find-identity` through PATH, so the \
+            shim offered nothing and this half tested nothing. It recorded: \
+            \(called.debugDescription)
+            """)
+
+        // The bundle is what it is, read off the artifact.
+        let bundleReport = try codesignReport(app.path)
+        #expect(teamIdentifier(in: bundleReport) == nil, """
+            the bundle names a team after a run that was never asked to sign it:
+            \(bundleReport)
+            """)
+        for binary in try nestedBinaries(of: app) {
+            let report = try codesignReport(binary.path)
+            #expect(!carriesHardenedRuntime(in: report), """
+                \(binary.lastPathComponent) carries a hardened-runtime flag, so \
+                this script signed it without being asked to:
+                \(report)
+                """)
+        }
+
+        // Opt-in is worth nothing if the way in is undiscoverable.
+        #expect(r.out.contains("SIGN_IDENTITY"), """
+            the run declines to sign and never says how to ask for a signature, \
+            so the maintainer's own build has no way in:
+            \(r.out)
+            """)
+    }
+
+    // --- and the same rule against the real keychain -------------------------
+    let identities = try runTool(["security", "find-identity", "-v", "-p", "codesigning"])
+    try withFixtureApp { _, app in
+        let r = try runTool([signBundleScript().path, app.path], unset: ["SIGN_IDENTITY"])
+        #expect(r.rc == 0, "sign-bundle.sh exited \(r.rc):\n\(r.out)")
+
+        let bundleReport = try codesignReport(app.path)
+        #expect(teamIdentifier(in: bundleReport) == nil, """
+            this machine holds \(firstDeveloperIDIdentity(in: identities.out) ?? "no Developer ID") \
+            and the bundle came back naming a team, so the script signed with a \
+            key nobody asked it to use:
+            \(bundleReport)
+            """)
+        #expect(r.out.lowercased().contains("unsigned"),
+                "the run leaves the bundle unsigned and never says so:\n\(r.out)")
+    }
+}
+
+/// Asked for the real keychain's Developer ID, the script produces a bundle a
+/// peer pin can check.
 ///
 /// **This is the assertion issue #71 says is impossible.** The refusal recorded
 /// in `Sources/CoffeeBarProbe/main.swift` and `LaunchDaemonInstaller.swift` is
@@ -304,33 +439,44 @@ private func nestedBinaries(of app: URL) throws -> [URL] {
 /// test is what makes that true of a bundle rather than of a certificate sitting
 /// unused in a keychain.
 ///
+/// The identity is passed EXPLICITLY, which is the whole change
+/// `signingIsOptInSoAnUnaskedRunLeavesTheBundleUnsigned` guards: the script no
+/// longer goes looking for a key, so a test of the signing path has to ask for
+/// one. It is read out of `security` here rather than hard-coded, so this holds
+/// for any maintainer's certificate and not only for the one team ID.
+///
 /// **Both branches assert, and neither is a skip.** The machine's state is read
-/// HERE, from `security`, independently of anything the script reports, and each
-/// state has a contract the script must meet:
+/// HERE, independently of anything the script reports:
 ///
 /// - an identity is present — the bundle and every nested binary must name a
 ///   team, which is what a peer pin needs and what notarisation checks;
-/// - no identity — the script must exit 0 and say so.
+/// - none is present — asking for one is a build failure with a reason, not a
+///   silent unsigned bundle. Opt-in makes that case reachable for the first
+///   time: the user named an identity, so falling back to unsigned would be
+///   answering a different question than the one they asked.
 ///
 /// A test that returned early on the second branch would be green on a CI
 /// runner for a script that had stopped signing altogether.
-@Test func theRealKeychainIdentityIsWhatTheScriptReachesFor() throws {
+@Test func theRealKeychainIdentityProducesATeamPinnedBundle() throws {
     let identities = try runTool(["security", "find-identity", "-v", "-p", "codesigning"])
-    let machineHasDeveloperID = identities.out.contains("Developer ID Application")
 
-    try withFixtureApp { _, app in
-        // No SIGN_IDENTITY: the script must find its own identity, or find none.
-        let r = try runTool([signBundleScript().path, app.path])
-        #expect(r.rc == 0, "sign-bundle.sh exited \(r.rc):\n\(r.out)")
-
-        guard machineHasDeveloperID else {
-            #expect(r.out.lowercased().contains("unsigned"), """
-                this machine has no Developer ID Application identity and the \
-                script neither signed nor said so:
+    guard let identity = firstDeveloperIDIdentity(in: identities.out) else {
+        try withFixtureApp { _, app in
+            let r = try runTool([signBundleScript().path, app.path],
+                                env: ["SIGN_IDENTITY": "Developer ID Application: Nobody At All (ZZZZZZZZZZ)"])
+            #expect(r.rc != 0, """
+                this machine holds no Developer ID Application identity, the run \
+                asked for one by name, and the script reported success anyway:
                 \(r.out)
                 """)
-            return
         }
+        return
+    }
+
+    try withFixtureApp { _, app in
+        let r = try runTool([signBundleScript().path, app.path],
+                            env: ["SIGN_IDENTITY": identity])
+        #expect(r.rc == 0, "sign-bundle.sh exited \(r.rc):\n\(r.out)")
 
         let bundleReport = try codesignReport(app.path)
         let bundleTeam = teamIdentifier(in: bundleReport)
