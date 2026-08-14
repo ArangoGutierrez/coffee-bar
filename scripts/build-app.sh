@@ -6,8 +6,11 @@
 # .xcodeproj is involved and none is needed — SwiftPM builds the SwiftUI
 # MenuBarExtra fine and the bundle is assembled by hand.
 #
-# The bundle this produces is unsigned. Signing, notarisation and Sparkle are
-# M4, so a copy handed to another Mac is quarantined by Gatekeeper.
+# The bundle is signed when this machine holds a Developer ID Application
+# identity and left unsigned when it does not; `scripts/sign-bundle.sh` records
+# why that is detected rather than required. Notarisation and Sparkle remain
+# release work, so even a signed bundle from here is quarantined on another Mac
+# until `scripts/release-dmg.sh` notarises one.
 #
 # Usage: scripts/build-app.sh
 
@@ -37,7 +40,8 @@ PRODUCT="coffee-bar"
 # SIGNING: every one of these needs its own signature. `codesign` on the bundle
 # signs the main executable and seals the rest; a second Mach-O in Contents/MacOS
 # is not covered by that and Gatekeeper rejects the bundle if it is unsigned.
-# Sign the nested binaries first, then the bundle. See issue #45's checklist.
+# Sign the nested binaries first, then the bundle. `scripts/sign-bundle.sh` is
+# where that happens, and `BundleSigning_test.swift` measures both halves.
 PRODUCTS=(coffee-bar coffee-bar-probe)
 
 APP_NAME="CoffeeBar"
@@ -364,11 +368,36 @@ expected="$(printf '%s\n' "${PRODUCTS[@]}" | sort | tr '\n' ' ')"
     || die "Contents/MacOS holds '${shipped}', expected '${expected}'"
 echo "    Contents/MacOS: ${shipped}"
 
+# --- signature ---------------------------------------------------------------
+#
+# LAST, and it has to be last: a bundle signature seals Contents/Resources, so
+# the glyphs, the LICENCE, the icon and Info.plist all have to be in place
+# before this runs. Anything copied in afterwards invalidates the signature
+# while leaving the file present, which is the kind of break that shows up on
+# somebody else's Mac rather than here.
+#
+# Optional by design — no Developer ID on this machine means an unsigned bundle
+# and exit 0, never a failed build. `scripts/sign-bundle.sh` carries that
+# argument in full.
+echo "==> signing"
+"${SCRIPT_DIR}/sign-bundle.sh" "${APP}" || die "signing failed"
+
+# What the artifact IS, read back off it, rather than what this script believes
+# it did. The line used to say "unsigned" unconditionally, and that was true
+# until the step above existed; printing it from a variable set by the signing
+# branch would make the same mistake in a new place.
+signature_team="$(codesign -dv --verbose=4 "${APP}" 2>&1 | sed -n 's/^TeamIdentifier=//p' || true)"
+if [ -n "${signature_team}" ] && [ "${signature_team}" != "not set" ]; then
+    SIGNATURE="signed, team ${signature_team}"
+else
+    SIGNATURE="unsigned"
+fi
+
 # --- done --------------------------------------------------------------------
 
 cat <<DONE
 
-Built ${APP} (version ${VERSION}, unsigned)
+Built ${APP} (version ${VERSION}, ${SIGNATURE})
 
 Launch it:
 
