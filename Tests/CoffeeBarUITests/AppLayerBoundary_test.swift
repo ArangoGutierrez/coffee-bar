@@ -403,7 +403,7 @@ private func describePackage() throws -> ResolvedPackage {
                                uniquingKeysWith: { first, _ in first }))
 }
 
-// THE LEXER THIS FILE RESTS ON LIVES IN `CoffeeBarTestSupport`.
+// THE SOURCE READERS THIS FILE RESTS ON LIVE IN `CoffeeBarTestSupport`.
 //
 // `swiftCodeWithoutComments`, `swiftSourceReading` and `SwiftSourceReading`
 // were declared here, which put them out of reach of `CoffeeBarCoreTests` and
@@ -412,6 +412,13 @@ private func describePackage() throws -> ResolvedPackage {
 // in `Tests/CoffeeBarTestSupport/SwiftSourceLexer.swift`, declared once, and
 // `swiftCodeWithoutCommentsKeepsCodeAndDropsComments` below still pins them
 // from here because this file is where every case in that table came from.
+//
+// `braceBlock(after:in:)` followed the same route on 2026-08-13 and now lives
+// in `Tests/CoffeeBarTestSupport/SwiftBraceReader.swift`. `DocsClaims_test.swift`
+// resolves WHICH surface renders a documented control by reading that surface's
+// `body` block, which is the block this reader returns, and it is compiled into
+// `CoffeeBarCoreTests`. `braceDepth(atFirst:in:)` below stays here: it has one
+// caller and one target.
 
 /// The argument list of every `call` in `code`, one string per call site.
 ///
@@ -451,35 +458,6 @@ private func argumentSpans(of call: String, in code: String) -> [String] {
     return spans
 }
 
-/// The body of the first `{ … }` block that follows `needle` in `code`, and
-/// `code` with that block cut out of it.
-///
-/// Written for a TRAILING closure, which `argumentSpans(of:in:)` cannot reach:
-/// the closure sits OUTSIDE the parentheses, so a paren-balanced reader stops
-/// before it. Splitting the file into "inside that block" and "everything else"
-/// is what lets one guard hold two call sites of the SAME method INDEPENDENTLY.
-/// A `contains` cannot: one call satisfies it for both.
-///
-/// Order does not take part. The block is removed wherever it sits, so moving
-/// the registration above or below the other call site does not change either
-/// answer.
-///
-/// LIMIT, stated rather than hidden, and it is the same limit
-/// `argumentSpans(of:in:)` carries: `swiftCodeWithoutComments` KEEPS string
-/// literals, so a `{` or `}` inside one would misbalance the count. Nothing this
-/// reads carries a brace in a literal today. It is a structural reader and not
-/// the Swift grammar.
-/// Internal rather than `private`, which in Swift is scoped to this file.
-/// `PreferencesView_test.swift` scopes its version check to a `body` block with
-/// it, for the reason this one exists: a `contains` over a whole file is
-/// satisfied by any call site, including one no rendered surface reaches. One
-/// tested brace reader in this target, not two — a second could disagree with
-/// this one, and the two guards would then argue about what a block is.
-///
-/// It finds the FIRST `{` after `needle`, so a needle appearing more than once
-/// in a file scopes to the earliest match. `PreferencesView_test.swift` composes
-/// two calls — type first, then `body` — because `PanelView.swift` declares two
-/// `View`s and the first `var body: some View` in it belongs to `MenuBarLabel`.
 /// How many braces are still open where `needle` first appears, or `nil` when it
 /// does not appear at all.
 ///
@@ -503,32 +481,6 @@ func braceDepth(atFirst needle: String, in code: String) -> Int? {
         if character == "}" { depth -= 1 }
     }
     return depth
-}
-
-func braceBlock(after needle: String, in code: String)
-    -> (block: String, rest: String)? {
-    guard let found = code.range(of: needle),
-          let open = code[found.upperBound...].firstIndex(of: "{")
-    else { return nil }
-
-    var depth = 0
-    var cursor = open
-    while cursor < code.endIndex {
-        if code[cursor] == "{" { depth += 1 }
-        if code[cursor] == "}" {
-            depth -= 1
-            if depth == 0 {
-                let close = code.index(after: cursor)
-                return (String(code[open ..< close]),
-                        String(code[code.startIndex ..< open]) + String(code[close...]))
-            }
-        }
-        cursor = code.index(after: cursor)
-    }
-    // Unbalanced. Reported as "no block" rather than as a span running to the
-    // end of the file, so the caller fails rather than reads the whole file as
-    // the block and passes.
-    return nil
 }
 
 /// The four `DemotionPolicy` arguments that DEFAULT to empty.
