@@ -48,6 +48,120 @@ public protocol IngestListening: Sendable {
     /// conformance that returned "started successfully once" would let the
     /// panel claim to be serving while nothing was.
     var isReady: Bool { get }
+
+    /// Installs what the READ route answers with, or `nil` for nothing to say.
+    ///
+    /// The direction is the opposite of `start(onEvent:)` and that is the whole
+    /// point: events are pushed at the model, and this is pulled out of it at
+    /// the moment somebody asks. A snapshot pushed on a timer would be a second
+    /// copy of the state that can disagree with the panel's, which design §14
+    /// rules out for exactly this reason.
+    ///
+    /// Called ON THE MAIN THREAD, like every `onEvent` delivery, because it is
+    /// called from the same connection queue. `ServingModel` reaches the main
+    /// actor from inside it with `MainActor.assumeIsolated`, and a delivery
+    /// from any other queue makes that TRAP.
+    ///
+    /// It must do no work worth speaking of. Any process running as this user
+    /// can call the route, so whatever this closure does, it does at a rate
+    /// somebody else chooses, on the main thread of a menu-bar app.
+    func serveStatus(_ answer: @escaping @Sendable () -> IngestStatus?)
+}
+
+extension IngestListening {
+    /// A conformance that answers no read route, which is every double in the
+    /// test suites and nothing that ships.
+    ///
+    /// **A default on a requirement is normally how a missing wire ships
+    /// silently, and here it is bounded rather than free.** What is silent is a
+    /// LISTENER that ignores the installation; what would matter is the MODEL
+    /// never installing one, and `theModelIsWhatAnswersTheReadRoute` reads
+    /// `ServingModel.swift` for that call. The alternative — no default —
+    /// forces six test doubles across three files to grow a method that answers
+    /// nothing, which is the same silence written six more times.
+    public func serveStatus(_ answer: @escaping @Sendable () -> IngestStatus?) {}
+}
+
+// MARK: - What the read route publishes
+
+/// Everything coffee-bar will tell a reader about itself, and the whole of it.
+///
+/// **This is a SEPARATE channel from the hook one, and the difference is who
+/// asked.** A hook reply is something an agent tool draws on your behalf and
+/// you never see, so it carries no body at all — see `response(_:allow:)`. This
+/// is answered only to a caller that chose to ask for it, over the same
+/// filesystem socket, and it describes coffee-bar rather than your work.
+///
+/// **What it deliberately cannot carry.** Design §7 keeps conversation content
+/// out of this product: no session identity, no working directory, no
+/// transcript path, no message text. That is a property of the TYPE and not of
+/// the code that fills it — there is no field to put any of them in — and
+/// `theReadPayloadCarriesASchemaVersionAndNothingUnlisted` pins the key set so
+/// a later field has to be read against §7 before it can ship.
+///
+/// **`hookHealth` is a word, not a `HookHealthStatus`.** That enum carries the
+/// names of the events a user has left unwired, and this channel publishes the
+/// state and not the list.
+public struct IngestStatus: Codable, Equatable, Sendable {
+    /// The shape a reader is holding, as the hook payloads and the on-disk
+    /// records do — `JournalRecord.currentSchemaVersion` is the precedent.
+    ///
+    /// A reader that outlives this build has no other way to know whether a
+    /// missing key means "this build does not publish it" or "this build is
+    /// older than the key".
+    public static let currentSchemaVersion = 1
+
+    /// How healthy the hook channel is, as one word.
+    public enum HookChannel: String, Codable, Sendable {
+        case wired
+        case missing
+        case unreadable
+    }
+
+    public let schemaVersion: Int
+    /// What `AppVersion.display(from:)` renders, `unknown` included. Whoever
+    /// builds this reads the bundle; this type never guesses.
+    public let version: String
+    /// The control position the user chose, not what the machine is doing.
+    public let intent: UserIntent
+    /// Whether a power assertion is held RIGHT NOW. What actually happened,
+    /// never what was asked for — `intent` above is the asking.
+    public let holding: Bool
+    /// How many agent sessions are working. A COUNT, never the sessions.
+    public let working: Int
+    /// How many agent sessions are blocked on the human. A count, as above.
+    public let attention: Int
+    public let hookHealth: HookChannel
+    /// Whether this process is answering on the ingest socket. A reader that
+    /// got this far knows it is, so the honest use of the field is a second
+    /// process asking about the first.
+    public let listening: Bool
+
+    /// The schema version is set here and is never a parameter: a caller that
+    /// could choose it could publish a shape it does not produce.
+    public init(version: String,
+                intent: UserIntent,
+                holding: Bool,
+                working: Int,
+                attention: Int,
+                hookHealth: HookHealthStatus,
+                listening: Bool) {
+        self.schemaVersion = Self.currentSchemaVersion
+        self.version = version
+        self.intent = intent
+        self.holding = holding
+        self.working = working
+        self.attention = attention
+        // Written as a switch rather than a default, so a fourth
+        // `HookHealthStatus` case stops the build here instead of quietly
+        // reporting one of the three that exist today.
+        switch hookHealth {
+        case .wired: self.hookHealth = .wired
+        case .missing: self.hookHealth = .missing
+        case .unreadable: self.hookHealth = .unreadable
+        }
+        self.listening = listening
+    }
 }
 
 /// An HTTP-over-unix-socket ingest endpoint.
@@ -81,6 +195,26 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
     /// requests can be buffering at the same time.
     public static let defaultMaximumConnections = 32
 
+    /// Where a reader asks this process what is happening.
+    ///
+    /// NOT under `/event`, and not resolvable by `AgentTool.declared(byEndpoint:)`:
+    /// the two channels have to stay tellable apart at the routing line, and an
+    /// endpoint that resolved to a tool would put a read on the hook path.
+    ///
+    /// The command a reader runs is
+    ///
+    ///     curl --fail-with-body --unix-socket <socket> \
+    ///          -H 'Content-Length: 0' http://localhost/status
+    ///
+    /// and the header is not decoration. `HTTPRequestFramer` requires a
+    /// declared length on EVERY request; the read route is framed by that
+    /// framer rather than by a lenient second one, so a request it cannot frame
+    /// is refused whatever it was aimed at.
+    /// `aReadRequestThatDeclaresNoLengthIsRefusedLikeAnyOther` pins that, and
+    /// pins why serving this route out of the framer's `.malformed` outcome —
+    /// which is what "make a bare curl work" comes to — is refused.
+    public static let readEndpoint = "/status"
+
     /// `sun_path[104]` in `sys/un.h`, minus the terminating NUL.
     private static let maximumPathBytes = 103
 
@@ -90,6 +224,14 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
     private let lock = NSLock()
     private var listener: NWListener?
     private var activeConnections = 0
+
+    /// What the read route asks, or `nil` while nothing has been installed.
+    ///
+    /// Guarded by `lock` like every other field here, and READ OUT of the lock
+    /// before it is called: it reaches the main actor, and calling it while
+    /// holding this lock puts the model's work inside the lock every `accept`
+    /// takes.
+    private var statusAnswer: (@Sendable () -> IngestStatus?)?
 
     /// Which socket node this listener bound, captured when it reported
     /// `.ready`. Non-nil IS "ready". See `isReady`.
@@ -169,6 +311,18 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
         lock.unlock()
         guard let bound else { return false }
         return Self.nodeIdentity(atPath: socketPath) == bound
+    }
+
+    /// Installs what the read route answers with. See `IngestListening`.
+    ///
+    /// Separate from `start(onEvent:)` rather than a parameter of it, because
+    /// the answer comes from the model and the model is built holding the
+    /// listener: there is no moment at construction when both exist. It is also
+    /// idempotent, so a second `startMonitoring` re-points the route at the
+    /// model that is actually live.
+    public func serveStatus(_ answer: @escaping @Sendable () -> IngestStatus?) {
+        lock.lock(); defer { lock.unlock() }
+        statusAnswer = answer
     }
 
     /// How many connections are being served right now.
@@ -611,6 +765,19 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
                     return
 
                 case .body(let body):
+                    // THE ROUTING LINE BETWEEN THE TWO CHANNELS, and it comes
+                    // first so that everything below it is the hook channel and
+                    // nothing else. `readEndpoint` resolves to no `AgentTool`,
+                    // so a read can never fall through into the path that mints
+                    // sessions, and a hook post can never reach the one builder
+                    // in this file that can carry a body.
+                    if state.framer.requestTarget == Self.readEndpoint {
+                        self.answerRead(connection,
+                                        method: state.framer.requestMethod,
+                                        state: state)
+                        return
+                    }
+
                     // A payload that will not decode is DROPPED, and the
                     // listener survives. Cancelling here would let one malformed
                     // post silently stop ingest for the session while the panel
@@ -690,6 +857,79 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
                         })
     }
 
+    /// Answers the read route, and refuses everything that is not a read.
+    ///
+    /// Issue #9 answer 1: READ-ONLY. There is no write route and no control
+    /// route, so every other verb is refused HERE, before the answer is asked
+    /// for — a refusal that had already read the state would be a channel
+    /// answering to a verb nobody documented.
+    ///
+    /// Compared EXACTLY, for the reason the hook channel's method check gives:
+    /// RFC 9110 §9.1 makes methods case-sensitive, so `get` is not `GET`.
+    ///
+    /// Every refusal below goes through `respond`, which cannot carry a body.
+    /// The only thing in this file that can is one line down from here, and
+    /// this method is its only caller.
+    private func answerRead(_ connection: NWConnection, method: String?,
+                            state: ConnectionState) {
+        guard method == "GET" else {
+            // RFC 9110 §15.5.6 requires `Allow` on a 405, and it names GET
+            // rather than the hook channel's POST: this resource exists and
+            // serves one verb.
+            respond(connection, status: "405 Method Not Allowed",
+                    allow: "GET", state: state)
+            return
+        }
+
+        lock.lock()
+        let answer = statusAnswer
+        lock.unlock()
+
+        // 503 and NOT `200 {}`. Nothing has been wired, or the model it was
+        // wired to has gone, and an empty object is a confident claim that
+        // coffee-bar is holding nothing and tracking nothing — which a reader
+        // cannot tell from the truth. Silence is the honest answer, and it is
+        // the same one an unbound socket gives.
+        guard let status = answer?() else {
+            respond(connection, status: "503 Service Unavailable", state: state)
+            return
+        }
+
+        // `.sortedKeys`, so two reads of the same state are the same bytes and
+        // a reader diffing them sees only what changed.
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let json = try? encoder.encode(status) else {
+            // Unreachable for a payload of counts, words and flags, and handled
+            // anyway: the alternative is a `try!` that takes the menu-bar app
+            // down, and this app holds the power assertion.
+            respond(connection, status: "500 Internal Server Error", state: state)
+            return
+        }
+
+        respond(connection, status: "200 OK", json: json, state: state)
+    }
+
+    /// The ONE response path in this file that carries a body, and it serves
+    /// `readEndpoint` alone.
+    ///
+    /// **Read `response(_:allow:)` below before adding a second caller.** The
+    /// hook channel answers with a zero-length body on every code path, because
+    /// Claude Code executes hooks and can act on what they print: a body there
+    /// is coffee-bar talking into an agent nobody asked it to talk to.
+    /// `everyAnswerTheEventPathGivesCarriesNoBody` and
+    /// `aConnectionRefusedOverTheCapAlsoCarriesNoBody` measure that on the
+    /// wire, and they are what stands in for the structural guarantee this
+    /// method removed.
+    private func respond(_ connection: NWConnection, status: String,
+                         json: Data, state: ConnectionState) {
+        connection.send(content: Self.response(status, json: json),
+                        completion: .contentProcessed { [weak self] _ in
+                            guard let self else { connection.cancel(); return }
+                            self.finish(connection, state: state)
+                        })
+    }
+
     /// Answers a connection that was never admitted, so it holds no slot to
     /// give back.
     private static func refuse(_ connection: NWConnection, status: String) {
@@ -705,5 +945,25 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
     private static func response(_ status: String, allow: String? = nil) -> Data {
         let allowed = allow.map { "Allow: \($0)\r\n" } ?? ""
         return Data("HTTP/1.1 \(status)\r\n\(allowed)Content-Length: 0\r\nConnection: close\r\n\r\n".utf8)
+    }
+
+    /// The read route's answer, headers and body.
+    ///
+    /// Kept apart from `response(_:allow:)` rather than folded into it behind a
+    /// defaulted `body` parameter, and that separation is the point. The hook
+    /// channel's builder has NO WAY to carry a body — not a parameter it
+    /// happens not to pass — so the promise `SECURITY.md` makes about that
+    /// channel survives a maintainer who has not read this file.
+    ///
+    /// The length is measured from the bytes rather than declared beside them.
+    /// A `Content-Length` that disagrees with what follows makes a reader hang
+    /// waiting for bytes that never come, or truncate the answer.
+    private static func response(_ status: String, json: Data) -> Data {
+        var answer = Data(("HTTP/1.1 \(status)\r\n"
+                           + "Content-Type: application/json\r\n"
+                           + "Content-Length: \(json.count)\r\n"
+                           + "Connection: close\r\n\r\n").utf8)
+        answer.append(json)
+        return answer
     }
 }
