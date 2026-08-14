@@ -1018,6 +1018,35 @@ public final class ServingModel {
         return working.count == 1 ? "1 session working" : "\(working.count) sessions working"
     }
 
+    /// What the ingest socket's read route answers with (issue #9).
+    ///
+    /// **Derived at the moment of the read, from the properties the panel
+    /// renders, and never stored.** Design §14's rule holds here for the same
+    /// reason it holds for `working` and `attention`: a snapshot pushed on the
+    /// 30-second refresh would be a second source that agrees with the panel
+    /// until it does not, and a reader would have no way to tell which of the
+    /// two was describing this machine.
+    ///
+    /// **It answers about coffee-bar and never about your work.** `IngestStatus`
+    /// has nowhere to put a session identity, a working directory, a transcript
+    /// path or any message text, and the counts below are counts: `working` and
+    /// `attention` are arrays of `AgentSession`, and what crosses the socket is
+    /// how many.
+    ///
+    /// `version` is handed in rather than read here, because `Bundle.main` is
+    /// read at the composition point and the model stays pure — the same split
+    /// `versionLine(from: Bundle.main.infoDictionary)` uses for the panel. See
+    /// `startMonitoring`.
+    func ingestStatus(version: String) -> IngestStatus {
+        IngestStatus(version: version,
+                     intent: intent,
+                     holding: isServing,
+                     working: working.count,
+                     attention: attention.count,
+                     hookHealth: hookHealth,
+                     listening: ingestListening)
+    }
+
     /// The listener default is the REAL one, deliberately.
     ///
     /// A null default would let a missing wire ship silently, and ingest that
@@ -1480,7 +1509,10 @@ public final class ServingModel {
     /// fail — a second instance already owns it — and an app that then enforces
     /// no battery floor at all is a worse failure than an app with no ingest.
     /// `main.swift` catches the error and launches anyway.
-    public func startMonitoring(interval: TimeInterval = 30) throws {
+    public func startMonitoring(
+        interval: TimeInterval = 30,
+        version: String = AppVersion.display(from: Bundle.main.infoDictionary)
+    ) throws {
         timer?.invalidate()
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] tick in
             // `tick` stays OUT of the `assumeIsolated` closure: it is
@@ -1496,6 +1528,26 @@ public final class ServingModel {
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
+
+        // The read route, wired BEFORE the bind, so there is no window in which
+        // the socket answers and this model does not (issue #9).
+        //
+        // `assumeIsolated` is sound for the reason the event callback's is, and
+        // it is the same queue: `UnixSocketIngestListener` runs every connection
+        // on `DispatchQueue.main`, so this closure is called there.
+        //
+        // `[weak self]` for the reason the timer block uses it. An orphaned
+        // model must not be kept alive by the listener that outlives it, and
+        // `nil` here is answered with a 503 rather than with a payload
+        // describing a model nothing is driving.
+        //
+        // `version` is captured, not read here: the bundle is read at the
+        // DEFAULT ARGUMENT above — this method's one composition point, called
+        // from `App.init` — which keeps the model itself pure and lets a test
+        // hand in a stamp of its own.
+        listener.serveStatus { [weak self] in
+            MainActor.assumeIsolated { self?.ingestStatus(version: version) }
+        }
 
         guard !listenerStarted else { return }
         // `assumeIsolated` is sound here ONLY because the listener delivers on

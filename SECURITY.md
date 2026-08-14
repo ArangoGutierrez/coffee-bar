@@ -91,9 +91,11 @@ Three facts back the network claim, all checkable from a clone:
 - `Sources/` reaches the network stack in exactly one place, and binds it to a
   filesystem path. `IngestListener.swift` imports `Network` and builds an
   `NWListener`, then sets `parameters.requiredLocalEndpoint = .unix(path: path)`
-  at line 251, so the listener answers on a unix socket and never on an IP
-  endpoint. `URLSession`, `NSURL`, `CFNetwork`, `getaddrinfo` and
-  `NWConnection(host:` all return zero hits across the tree.
+  before starting it, so the listener answers on a unix socket and never on an
+  IP endpoint. `URLSession`, `NSURL`, `CFNetwork`, `getaddrinfo` and
+  `NWConnection(host:` all return zero hits across the tree. Grep for that
+  assignment rather than for a line number: this paragraph used to name one, and
+  the next edit above it made the citation point at unrelated code.
 - The only `connect(` in `Sources/` is `IngestListener.swift`, on
   `sockaddr_un` — a filesystem path, never an IP address or a hostname.
 - `Package.swift` declares no external package dependencies, so no third-party
@@ -124,6 +126,67 @@ coffee-bar observes. It never returns a decision, a permission decision, or a
 stop signal to an agent tool, and it never answers a prompt for you. A power
 utility that can block your tool calls is a supply-chain risk, so it does not
 have that power.
+
+**Two channels cross the ingest socket, and the difference between them is who
+asked.** Until v0.3 there was one, and the promise above held by construction:
+the listener had a single response builder, it hard-coded a zero-length body,
+and coffee-bar had no way to say anything to anyone. A read route replaces that
+construction with a rule, so the rule is written down here.
+
+**The hook channel stays mute.** Your agent tool runs the hook; you did not ask
+for its output and you never see it. Claude Code executes hooks and can act on
+what they print, and the `curl` in the documented hook command writes a response
+body to its stdout — so a body on that reply would be coffee-bar talking into
+your agent behind your back. Every answer `POST /event` gives carries a
+zero-length body, on every code path: the served one, a payload that will not
+decode, a request the framer cannot frame, a request over the size cap, and a
+connection refused over the connection cap before its request line is even read.
+That is measured on the wire rather than argued from the source, by
+`everyAnswerTheEventPathGivesCarriesNoBody` and
+`aConnectionRefusedOverTheCapAlsoCarriesNoBody` in
+`Tests/CoffeeBarIngestTests/IngestListener_test.swift`.
+
+**The read channel answers only when asked.** `GET /status` on the same socket
+returns coffee-bar's own state as JSON: a schema version, the version string the
+panel shows, the control position you chose, whether an assertion is held right
+now, how many sessions are working, how many are waiting on you, one word for
+hook health, and whether this process is answering on the socket. An agent can
+poll it to find out what coffee-bar is doing. Nothing reaches an agent that did
+not go and read it.
+
+The command is
+
+```
+curl --fail-with-body --unix-socket ~/Library/Application\ Support/coffee-bar/ingest.sock \
+     -H 'Content-Length: 0' http://localhost/status
+```
+
+and the `Content-Length` header is required rather than polite: one framer
+serves both channels and it declines any request that declares no length, so a
+read is refused on the same terms a malformed post is.
+
+Four commitments bound that channel, and each one is a property of the code
+rather than of how it is currently called:
+
+- **It is read-only.** There is no write route and no control route. Every verb
+  but `GET` draws a refusal, and the refusal happens before the state is read.
+- **It publishes counts, never sessions.** The payload type has nowhere to put a
+  session identity, a working directory, a transcript path or any message text,
+  and hook health crosses it as a single word rather than as the list of events
+  you have left unwired. `theReadPayloadCarriesASchemaVersionAndNothingUnlisted`
+  pins the whole key set, so a field added later has to be read against the
+  transcript commitment above before it can ship.
+- **It adds no access control, and that is deliberate.** There is no token and
+  no port. The socket is mode `0600` inside a mode `0700` directory, and the
+  filesystem is the boundary — the same boundary the hook channel has always
+  had. A token would be a second mechanism to leak, and it would not narrow who
+  can already reach the socket: as §4.1 of the design says, any process running
+  as you can post to it, and any process running as you can read from it.
+- **It opens nothing new.** Same socket, same bind, no second endpoint. The
+  no-egress commitment above is untouched.
+
+If a future release lets an agent change anything through this socket, that is a
+new commitment and it is written here first.
 
 ### It never elevates its own privilege
 

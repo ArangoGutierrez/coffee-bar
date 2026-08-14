@@ -1894,3 +1894,353 @@ private func eventRequest(body: String, declaring length: Int? = nil) -> String 
             "a connection over the cap was not refused with 503: \(refused)")
     expectCarriesNoBody(refused, "the 503 a connection over the cap draws")
 }
+
+// MARK: - The read channel answers only when asked
+
+// The other half of issue #9, and deliberately a DIFFERENT channel from the one
+// above. The hook channel is one your agent tool drives on your behalf and you
+// never see, so it stays mute. This one is driven by whoever chooses to call
+// it, and it answers with coffee-bar's own state — never with a decision, a
+// permission, or anything about your conversation.
+//
+// Everything here goes over the SAME unix socket. No port is opened and no
+// address is named, which is what keeps `SECURITY.md`'s no-egress promise and
+// `noLinkedTargetCanReachTheNetworkByAddress` true.
+
+/// Counts how many times the listener asked for a status, and hands back a
+/// fixed answer.
+///
+/// The count is the discriminating half of the method check below: a 405 that
+/// still READ the state would be a channel that leaks under a verb nobody
+/// documented, and a status-code assertion alone cannot see it.
+private final class StatusSource: @unchecked Sendable {
+    private let lock = NSLock()
+    private var asked = 0
+    private let answer: IngestStatus?
+
+    init(_ answer: IngestStatus?) { self.answer = answer }
+
+    var timesAsked: Int { lock.lock(); defer { lock.unlock() }; return asked }
+
+    var provider: @Sendable () -> IngestStatus? {
+        { [self] in
+            lock.lock()
+            asked += 1
+            lock.unlock()
+            return answer
+        }
+    }
+}
+
+/// One request to the read route, framed the way this listener frames every
+/// request: with a declared length.
+///
+/// `Content-Length: 0` is not decoration. `HTTPRequestFramer` requires a
+/// declared length on every request — `headersWithNoContentLengthAreRejected`
+/// pins that — and the read route is framed by the same framer as the hook
+/// channel rather than by a second one written to be lenient.
+private func readRequest(method: String = "GET",
+                         target: String = UnixSocketIngestListener.readEndpoint) -> String {
+    "\(method) \(target) HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n"
+}
+
+/// A fixture whose hook health carries an event name the payload must DROP.
+///
+/// `.missing(["Stop"])` is the discriminating part. `HookHealthStatus` carries
+/// the missing event names, and the read payload publishes the state word and
+/// not the list: a payload that re-encoded the associated value would put what
+/// a user has and has not wired onto a channel anything on this machine can
+/// read.
+private let readFixture = IngestStatus(version: "0.3.0-fixture",
+                                       intent: .serve,
+                                       holding: true,
+                                       working: 2,
+                                       attention: 1,
+                                       hookHealth: .missing(["Stop"]),
+                                       listening: true)
+
+@Test func theReadRouteAnswersWithTheStateItWasGiven() throws {
+    // Named bug this catches: a read route wired to nothing, or wired to a
+    // second copy of the state that can disagree with the model's. The answer
+    // is compared against the value handed in, so a route that invented a
+    // plausible-looking payload goes red.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let collected = CollectedOrigins()
+    let source = StatusSource(readFixture)
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+
+    listener.serveStatus(source.provider)
+    try listener.start { tool, event in collected.record(tool, event) }
+    try requireReady(listener)
+
+    let response = try rawExchange(readRequest(), to: sandbox.path)
+
+    #expect(response.contains("HTTP/1.1 200 OK"),
+            "the read route did not answer: \(response)")
+    #expect(headerBlock(of: response).contains("Content-Type: application/json"),
+            "the read route answered without declaring JSON: \(response)")
+
+    let body = try #require(bodyText(of: response))
+    #expect(declaredContentLength(of: response) == body.utf8.count, """
+        the read route declared \
+        \(declaredContentLength(of: response).map(String.init) ?? "nothing") \
+        and sent \(body.utf8.count) byte(s). A declared length that does not \
+        match the bytes makes a reader hang or truncate.
+        Response: \(response.debugDescription)
+        """)
+
+    let decoded = try JSONDecoder().decode(IngestStatus.self, from: Data(body.utf8))
+    #expect(decoded == readFixture, "the read route answered \(body)")
+
+    // The event names inside `.missing` are dropped, not re-encoded.
+    #expect(!response.contains("Stop"), """
+        the read payload carries the missing hook event names: \(body). The \
+        state word is what this channel publishes; which events a user has left \
+        unwired is not.
+        """)
+
+    // A read is not an event. A route that fell through to the hook path would
+    // mint a session out of a status request.
+    #expect(collected.count == 0,
+            "reading the state delivered \(collected.count) event(s)")
+}
+
+@Test func theReadPayloadCarriesASchemaVersionAndNothingUnlisted() throws {
+    // TWO rules in one measurement, because they need the same parse.
+    //
+    // The schema version is what lets a reader that outlives this build know
+    // which shape it got, exactly as `JournalRecord.currentSchemaVersion` does
+    // for the on-disk records.
+    //
+    // The key list is a PRIVACY guard, and it is the reason this is an equality
+    // and not a `contains`. Design §7 keeps conversation content out of this
+    // product, and a status route is a new way for it to get back in: a field
+    // added later carrying a working directory, a session id or a transcript
+    // path would ship silently past every other check in this file. Adding a
+    // field here is the moment somebody reads it against design §7.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+
+    listener.serveStatus(StatusSource(readFixture).provider)
+    try listener.start { _, _ in }
+    try requireReady(listener)
+
+    let response = try rawExchange(readRequest(), to: sandbox.path)
+    let body = try #require(bodyText(of: response))
+    let parsed = try JSONSerialization.jsonObject(with: Data(body.utf8))
+    let object = try #require(parsed as? [String: Any], "the read route answered \(body)")
+
+    #expect(object["schemaVersion"] as? Int == IngestStatus.currentSchemaVersion, """
+        the read payload declares schema version \
+        \(object["schemaVersion"].map { "\($0)" } ?? "nothing"), and this build \
+        publishes \(IngestStatus.currentSchemaVersion)
+        """)
+
+    #expect(Set(object.keys) == ["schemaVersion", "version", "intent", "holding",
+                                 "working", "attention", "hookHealth", "listening"], """
+        the read payload publishes \(object.keys.sorted()). Every key on this \
+        channel is readable by anything running as this user, so the set is \
+        pinned: design §7 keeps session identities, working directories, \
+        transcript paths and message text out of this product, and a new field \
+        here is where they would come back.
+        """)
+}
+
+@Test func theReadRouteRefusesEveryMethodButGet() throws {
+    // Design answer 1 for issue #9: read-only. There is no write channel and no
+    // control route, so every verb that could mean "change something" is
+    // refused before the state is even read.
+    //
+    // `timesAsked == 0` is the half a status-code check cannot do. A refusal
+    // that had already called the provider would still be a channel — one that
+    // answers 405 while a body-carrying builder sits one edit away.
+    //
+    // `get` in lower case is here for the reason the event path's 405 gives:
+    // RFC 9110 §9.1 makes methods case-sensitive, so `get` is not `GET`.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let source = StatusSource(readFixture)
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+
+    listener.serveStatus(source.provider)
+    try listener.start { _, _ in }
+    try requireReady(listener)
+
+    for method in ["POST", "PUT", "DELETE", "PATCH", "HEAD", "get"] {
+        let response = try rawExchange(readRequest(method: method), to: sandbox.path)
+        #expect(response.contains("HTTP/1.1 405 Method Not Allowed"),
+                "\(method) \(UnixSocketIngestListener.readEndpoint) answered: \(response)")
+        // RFC 9110 §15.5.6 requires `Allow` on a 405, and it must name the verb
+        // this route actually serves rather than the hook channel's POST.
+        #expect(headerBlock(of: response).contains("Allow: GET"),
+                "the refusal of \(method) named no usable verb: \(response)")
+        expectCarriesNoBody(response, "the 405 \(method) draws")
+    }
+
+    #expect(source.timesAsked == 0, """
+        a refused verb read the state \(source.timesAsked) time(s). The refusal \
+        has to come BEFORE the read, or the route answers to verbs nobody \
+        documented.
+        """)
+}
+
+@Test func aReadRouteWithNothingBehindItSaysSoAndStaysMute() throws {
+    // The app wires the answer in `startMonitoring`. Between the bind and that
+    // wire — and in any build where the wire is gone — there is genuinely
+    // nothing to report, and 503 says exactly that.
+    //
+    // Named bug this catches: answering `200 {}` with no state behind it, which
+    // is a confident claim that coffee-bar is holding nothing and tracking
+    // nothing. Silence is the honest answer; an empty object is a lie a reader
+    // cannot tell from the truth.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+
+    try listener.start { _, _ in }
+    try requireReady(listener)
+
+    let unwired = try rawExchange(readRequest(), to: sandbox.path)
+    #expect(unwired.contains("HTTP/1.1 503 Service Unavailable"),
+            "an unwired read route answered: \(unwired)")
+    expectCarriesNoBody(unwired, "the 503 an unwired read route draws")
+
+    // The mirror, on the same listener: an answer that IS installed and returns
+    // nil reads the same way. The model is held weakly, so an orphaned one
+    // yields nil here, and a route that published a payload built from nothing
+    // would be describing a model that no longer exists.
+    listener.serveStatus(StatusSource(nil).provider)
+    let silent = try rawExchange(readRequest(), to: sandbox.path)
+    #expect(silent.contains("HTTP/1.1 503 Service Unavailable"),
+            "a read route whose answer was nil answered: \(silent)")
+    expectCarriesNoBody(silent, "the 503 a nil answer draws")
+}
+
+@Test func aReadRequestThatDeclaresNoLengthIsRefusedLikeAnyOther() throws {
+    // A STATED LIMIT, pinned so it cannot become a surprise.
+    //
+    // `HTTPRequestFramer` requires a declared length on every request, and the
+    // read route is framed by that framer rather than by a lenient second one:
+    // a request the framer could not frame is refused, whatever it was aimed
+    // at. So the command a reader runs carries `Content-Length: 0`, which is
+    // what `readRequest` sends and what `SECURITY.md` prints.
+    //
+    // Named bug this catches: quietly serving the read route out of the
+    // framer's `.malformed` outcome to make a bare `curl` work. That would
+    // answer requests this listener has just said it cannot parse, on the one
+    // path that can carry a body.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+
+    listener.serveStatus(StatusSource(readFixture).provider)
+    try listener.start { _, _ in }
+    try requireReady(listener)
+
+    let bare = try rawExchange(
+        "GET \(UnixSocketIngestListener.readEndpoint) HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        to: sandbox.path)
+    #expect(bare.contains("HTTP/1.1 400 Bad Request"),
+            "a request with no declared length was framed anyway: \(bare)")
+    expectCarriesNoBody(bare, "the 400 an unframeable read request draws")
+}
+
+@Test func aReaderRunningCurlSeesTheStateOnTheOrdinarySocket() throws {
+    // The acceptance itself, end to end, through the binary a reader actually
+    // runs. Everything above drives a raw AF_UNIX client, which proves the wire
+    // format and not that a real client can reach it.
+    //
+    // The arguments are the documented command, and `--fail-with-body` is load
+    // bearing: without it curl exits 0 on a 4xx and prints nothing, which is
+    // exactly how a refused hook post once vanished with no signal anywhere.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+
+    listener.serveStatus(StatusSource(readFixture).provider)
+    try listener.start { _, _ in }
+    try requireReady(listener)
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+    process.arguments = ["--silent", "--show-error", "--fail-with-body",
+                         "--max-time", postTimeoutSeconds,
+                         "--unix-socket", sandbox.path,
+                         "-H", "Content-Length: 0",
+                         "http://localhost\(UnixSocketIngestListener.readEndpoint)"]
+    let output = Pipe()
+    process.standardOutput = output
+    process.standardError = FileHandle.nullDevice
+    try process.run()
+    let printed = output.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+
+    #expect(process.terminationStatus == 0,
+            "curl exited \(process.terminationStatus) reading the state")
+    let decoded = try JSONDecoder().decode(IngestStatus.self, from: printed)
+    #expect(decoded == readFixture,
+            "curl printed \(String(decoding: printed, as: UTF8.self))")
+}
+
+@Test func theModelIsWhatAnswersTheReadRoute() throws {
+    // A route nothing feeds answers 503 for ever, and every check above would
+    // stay green: each installs its own provider. The one thing they cannot see
+    // is the wire in the shipping app.
+    //
+    // This target cannot import `CoffeeBarUI` — `CoffeeBarIngest` is the layer
+    // BELOW it — so the model is read as text. Ugly; a route wired to nothing
+    // is worse. `theRefusedListStillNamesTheMechanismsTheCodeGuardRefuses` in
+    // `PolicyDocumentClaims_test.swift` reads another file the same way and for
+    // the same reason.
+    //
+    // STATED LIMIT: this strips line comments only, so it proves the calls are
+    // in code rather than in prose, and it cannot prove they are reached. The
+    // tokenizer that would answer precisely lives in `CoffeeBarTestSupport`,
+    // which this target does not depend on.
+    let model = packageRoot().appending(path: "Sources/CoffeeBarUI/ServingModel.swift")
+    let text = try String(contentsOf: model, encoding: .utf8)
+
+    // Positive control. A path that resolved to nothing reads as an empty file,
+    // and both checks below would then fail for a reason that has nothing to do
+    // with the wire they are about.
+    #expect(text.count > 1000,
+            "read \(text.count) byte(s) at \(model.path); the model was not found")
+
+    let code = text.split(separator: "\n", omittingEmptySubsequences: false)
+        .map { line -> String in
+            guard let comment = line.range(of: "//") else { return String(line) }
+            return String(line[..<comment.lowerBound])
+        }
+        .joined(separator: "\n")
+        .replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
+
+    #expect(code.contains("listener.serveStatus"), """
+        ServingModel.swift never calls listener.serveStatus in code, so the \
+        read route answers 503 for the life of the process while every check \
+        in this file — each of which installs its own provider — stays green.
+        """)
+    #expect(code.contains("ingestStatus(version:"), """
+        ServingModel.swift builds no IngestStatus, so whatever the read route \
+        answers with does not come from the state the panel shows.
+        """)
+}
+
+/// The repository root, from this file's own location.
+///
+/// `#filePath` and not a bundle path or `$HOME`: the subject must be the tree
+/// this test was compiled from. A harness that resolved an installed copy would
+/// green-light an artifact nobody is editing.
+private func packageRoot() -> URL {
+    URL(fileURLWithPath: #filePath)     // Tests/CoffeeBarIngestTests/IngestListener_test.swift
+        .deletingLastPathComponent()    // Tests/CoffeeBarIngestTests
+        .deletingLastPathComponent()    // Tests
+        .deletingLastPathComponent()    // the package root
+}
