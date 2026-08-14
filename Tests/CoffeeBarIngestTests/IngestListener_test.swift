@@ -1689,3 +1689,208 @@ private let stopPayload = #"{"hook_event_name":"Stop","session_id":"s1"}"#
             "an unparseable request line drew a method refusal: \(response)")
     #expect(collected.count == 0)
 }
+
+// MARK: - The hook channel stays mute
+
+// `SECURITY.md` "It does not influence agent behaviour" is a promise to users,
+// and until now it held BY CONSTRUCTION: one response builder, one hard-coded
+// zero-length body, no way to say anything at all. Claude Code executes hooks
+// and can act on their stdout, and `curl` writes a response body to stdout, so
+// a body on this path is a channel from coffee-bar INTO the agent.
+//
+// The construction argument dies the moment a second response builder exists.
+// These checks replace it with a measurement: whatever the event path answers,
+// it answers with nothing in it. They are written to fail if somebody gives
+// `POST /event` a body, not merely to pass against today's tree.
+
+/// The header block of a response, up to but not including its terminator.
+///
+/// Split on the FIRST `\r\n\r\n`. A body may contain that sequence itself, and
+/// a reader that took the last one would parse body bytes as headers.
+private func headerBlock(of response: String) -> String {
+    guard let separator = response.range(of: "\r\n\r\n") else { return response }
+    return String(response[..<separator.lowerBound])
+}
+
+/// The bytes after the header block, as text. `nil` for a response with no
+/// header terminator at all, which is not the same as an empty body.
+private func bodyText(of response: String) -> String? {
+    guard let separator = response.range(of: "\r\n\r\n") else { return nil }
+    return String(response[separator.upperBound...])
+}
+
+/// The length a response DECLARES, read from its headers only.
+///
+/// `nil` for a response that declares none. Field names are matched
+/// case-insensitively, as RFC 9110 §5.1 requires — a builder that emitted
+/// `content-length` would otherwise read as "declares nothing" and slip past
+/// the checks below.
+private func declaredContentLength(of response: String) -> Int? {
+    for line in headerBlock(of: response).split(separator: "\r\n") {
+        let parts = line.split(separator: ":", maxSplits: 1)
+        guard parts.count == 2,
+              parts[0].trimmingCharacters(in: .whitespaces).lowercased() == "content-length"
+        else { continue }
+        return Int(parts[1].trimmingCharacters(in: .whitespaces))
+    }
+    return nil
+}
+
+/// Holds one answer to the hook channel to the empty-body rule.
+///
+/// BOTH halves are asserted, and neither is redundant. A builder that sent
+/// bytes and left `Content-Length: 0` standing would be caught only by the
+/// second; one that declared a length and sent nothing yet, only by the first.
+private func expectCarriesNoBody(_ response: String, _ what: String,
+                                 sourceLocation: SourceLocation = #_sourceLocation) {
+    #expect(declaredContentLength(of: response) == 0, """
+        \(what) declared Content-Length \
+        \(declaredContentLength(of: response).map(String.init) ?? "nothing"). \
+        The hook channel answers with a zero-length body on every path; a hook's \
+        curl writes a body to stdout, and Claude Code acts on hook stdout.
+        Response: \(response.debugDescription)
+        """, sourceLocation: sourceLocation)
+
+    #expect(bodyText(of: response) == "", """
+        \(what) put \(bodyText(of: response)?.utf8.count ?? -1) byte(s) after \
+        its header block. Response: \(response.debugDescription)
+        """, sourceLocation: sourceLocation)
+}
+
+/// Sends one raw request and reads the whole answer back.
+///
+/// Raw rather than `curl`, because three of the paths below cannot be expressed
+/// through curl at all: a `Content-Length` curl would never write, a declared
+/// length with no bytes behind it, and a connection parked mid-request.
+private func rawExchange(_ request: String, to socketPath: String) throws -> String {
+    let client = try #require(RawClient(path: socketPath))
+    defer { client.close() }
+    client.transmit(request)
+    return client.readResponse()
+}
+
+/// One `POST /event` request with a chosen body and a chosen declared length.
+private func eventRequest(body: String, declaring length: Int? = nil) -> String {
+    "POST /event HTTP/1.1\r\nHost: localhost\r\n"
+        + "Content-Length: \(length ?? body.utf8.count)\r\n\r\n\(body)"
+}
+
+@Test func theResponseReaderSeesABodyWhenAResponseCarriesOne() {
+    // THE POSITIVE CONTROL, and without it everything below is theater. Both
+    // readers report "no body" for text they cannot parse, so an invariant
+    // built on them would stay green against a reader that had quietly stopped
+    // working — the false-absence trap this repository has hit three separate
+    // ways.
+    //
+    // The fixture carries the exact thing the rule forbids, so this is a
+    // measurement of DISCRIMINATION and not of self-consistency: the same two
+    // functions the invariant calls are shown answering differently for a
+    // response with a body and one without.
+    let carrying = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                 + "Content-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}"
+    #expect(declaredContentLength(of: carrying) == 11)
+    #expect(bodyText(of: carrying) == "{\"ok\":true}")
+
+    let mute = "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    #expect(declaredContentLength(of: mute) == 0)
+    #expect(bodyText(of: mute) == "")
+
+    // A body that itself ends in a blank line. A reader splitting on the LAST
+    // terminator would report this body as empty and pass the invariant.
+    let awkward = "HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nab\r\n\r\n"
+    #expect(bodyText(of: awkward) == "ab\r\n\r\n")
+
+    // Case-insensitive, per RFC 9110 §5.1.
+    #expect(declaredContentLength(of: "HTTP/1.1 200 OK\r\ncontent-length: 4\r\n\r\nabcd") == 4)
+}
+
+@Test func everyAnswerTheEventPathGivesCarriesNoBody() throws {
+    // Named bug this catches: a second response builder — the one this branch
+    // adds for the read route — wired into any answer on the hook channel.
+    // Mutation-proved by giving `UnixSocketIngestListener.response` a body,
+    // which turns this red on all four paths at once.
+    //
+    // Every REQUEST-SHAPED path the listener can take for `POST /event` is
+    // walked here: the served answer, a body that will not decode, a declared
+    // length that is not a length, and a declared length over the cap. The
+    // fifth — a connection refused before its request is read — needs a second
+    // listener and has its own check below.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let collected = CollectedOrigins()
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path)
+    defer { listener.stop() }
+
+    try listener.start { tool, event in collected.record(tool, event) }
+    try requireReady(listener)
+
+    // 204 — a payload that decodes. The one path a working hook takes.
+    let served = try rawExchange(eventRequest(body: stopPayload), to: sandbox.path)
+    #expect(served.contains("HTTP/1.1 204 No Content"),
+            "a valid POST /event was not served: \(served)")
+    expectCarriesNoBody(served, "the 204 a served POST /event draws")
+
+    // 400 — framed correctly, and the bytes are not that tool's envelope.
+    let undecodable = try rawExchange(eventRequest(body: "not json at all"),
+                                      to: sandbox.path)
+    #expect(undecodable.contains("HTTP/1.1 400 Bad Request"),
+            "an undecodable payload changed its answer: \(undecodable)")
+    expectCarriesNoBody(undecodable, "the 400 an undecodable payload draws")
+
+    // 400 — a negative declared length, the shape that once trapped the framer.
+    // curl cannot send this.
+    let malformed = try rawExchange(eventRequest(body: "", declaring: -1),
+                                    to: sandbox.path)
+    #expect(malformed.contains("HTTP/1.1 400 Bad Request"),
+            "a negative Content-Length changed its answer: \(malformed)")
+    expectCarriesNoBody(malformed, "the 400 a malformed request draws")
+
+    // 413 — refused on the DECLARED length, so no oversized body is sent.
+    let tooLarge = try rawExchange(
+        eventRequest(body: "", declaring: HTTPRequestFramer.maximumBytes + 1),
+        to: sandbox.path)
+    #expect(tooLarge.contains("HTTP/1.1 413 Content Too Large"),
+            "an oversized declared length changed its answer: \(tooLarge)")
+    expectCarriesNoBody(tooLarge, "the 413 an oversized request draws")
+
+    #expect(collected.count == 1,
+            "the event path delivered \(collected.count) event(s); exactly one payload decodes")
+}
+
+@Test func aConnectionRefusedOverTheCapAlsoCarriesNoBody() throws {
+    // The fifth path, and the one that does not go through `respond`: a
+    // connection over the cap is answered by `refuse`, before any request line
+    // is read. It reaches the hook's curl exactly like the others do, so the
+    // rule covers it.
+    //
+    // A cap of ONE, so this needs two connections rather than thirty-three, and
+    // a long idle timeout so the only thing that can answer the second
+    // connection is the cap.
+    let sandbox = SocketSandbox()
+    defer { sandbox.remove() }
+    let listener = UnixSocketIngestListener(socketPath: sandbox.path,
+                                            idleTimeout: 60,
+                                            maximumConnections: 1)
+    defer { listener.stop() }
+    try listener.start { _, _ in }
+    try requireReady(listener)
+
+    let parked = try #require(RawClient(path: sandbox.path))
+    defer { parked.close() }
+    parked.transmit("POST /event HTTP/1.1\r\nHost: localhost\r\n")
+
+    // The parked connection must be ADMITTED before the second arrives, or this
+    // measures a race rather than the cap. A cap of one admits the first, so a
+    // count under one here is a slow runner and never a wrong cap.
+    let admitBudget: TimeInterval = 30
+    pump(until: { listener.activeConnectionCount == 1 }, seconds: admitBudget)
+    try #require(listener.activeConnectionCount == 1, """
+        the first connection was not admitted within \(admitBudget) s, so the \
+        refusal below would have been a race rather than the cap.
+        """)
+
+    let refused = try rawExchange(eventRequest(body: stopPayload), to: sandbox.path)
+    #expect(refused.contains("HTTP/1.1 503 Service Unavailable"),
+            "a connection over the cap was not refused with 503: \(refused)")
+    expectCarriesNoBody(refused, "the 503 a connection over the cap draws")
+}
