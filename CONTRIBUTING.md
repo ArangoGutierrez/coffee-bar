@@ -67,13 +67,24 @@ Build of product 'coffee-bar' complete! (0.20s)
 ==> assembling .../build/CoffeeBar.app
     8 glyph files copied
     LSUIElement=true (no Dock icon)
+==> signing
+    no Developer ID Application identity in this keychain: the bundle is UNSIGNED.
+    ...
 
 Built .../build/CoffeeBar.app (version 0.0.0-dev, unsigned)
 ```
 
-The bundle is unsigned, so a copy handed to another Mac is quarantined by
-Gatekeeper. The version comes from `git describe --tags --abbrev=0`. No tag
-exists yet, so every build today reports `0.0.0-dev`. Read it back with:
+**Signing is detected, not required.** Without a Developer ID Application
+identity in your keychain the bundle is left unsigned and the build still exits
+0 — the normal case for a contributor, and for CI. The private key is the
+maintainer's and cannot be shared, and a build that failed for want of one would
+break `git clone && scripts/build-app.sh` for everybody else. An unsigned copy
+handed to another Mac is refused by Gatekeeper. With an identity the last line
+names the team that signed it instead, `(version 0.0.0-dev, signed, team
+ABCDE12345)`, and `docs/BUILDING.md` covers what that does and does not buy.
+
+The version comes from `git describe --tags --dirty`. No tag exists yet, so
+every build today reports `0.0.0-dev`. Read it back with:
 
 ```
 $ /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" \

@@ -116,17 +116,37 @@ the suite.
 
 ## Signing
 
-The bundle is ad-hoc signed, not notarised. `codesign -dv` reports
-`Signature=adhoc` with `flags=0x20002(adhoc,linker-signed)`. That is enough to
-run on the machine that built it, and not enough for Gatekeeper to accept a copy
-handed to another Mac. Developer ID signing and notarisation are planned release
-work.
+`scripts/build-app.sh` signs the bundle when this machine holds a **Developer ID
+Application** identity, and leaves it unsigned when it does not. Signing is
+detected rather than required, because the private key cannot be shared: a build
+that failed without one would break `git clone && scripts/build-app.sh` for
+every contributor, and CI assembles the bundle on a runner with no keychain
+identity at all. No identity means a line explaining what is lost, and exit 0.
+`scripts/sign-bundle.sh` is where this happens and carries the argument in full.
+
+With an identity, `codesign -dv` reports `flags=0x10000(runtime)` and the team
+that signed it. Without one, the bundle carries nothing but the ad-hoc signature
+the linker applies — `Signature=adhoc` with `flags=0x20002(adhoc,linker-signed)`
+— which is enough to run on the machine that built it and not enough for
+Gatekeeper to accept a copy handed to another Mac.
+
+Neither bundle is notarised. A copy that reaches another Mac carrying
+`com.apple.quarantine` is refused unless it is notarised, so a local build is
+for this machine either way. `scripts/release-dmg.sh` is what signs, notarises
+and staples a release.
 
 **Two executables mean two signatures.** `Contents/MacOS/` holds `coffee-bar` and
 `coffee-bar-probe`, and signing the bundle covers the main executable — a nested
-Mach-O is sealed by the bundle signature but is not itself signed by it. Sign the
-nested binary first and the bundle second: an unsigned nested executable makes
-Gatekeeper reject the whole bundle, and notarisation refuses it before that.
+Mach-O is sealed by the bundle signature but is not itself signed by it. The
+nested binaries are signed first and the bundle second, because signing a nested
+binary afterwards changes a file the bundle's seal covers and invalidates it.
+
+The bundle's own verification cannot police this. Measured on a two-binary
+fixture: with only the bundle signed, `codesign --verify --deep --strict`
+returns 0 while the nested binary still holds the linker's signature and names
+no team — which notarisation refuses before Gatekeeper ever sees it. So the
+script reads each binary back individually rather than trusting that exit code,
+and `Tests/CoffeeBarCoreTests/BundleSigning_test.swift` holds it to that.
 
 ### Why a formula and not a cask
 
