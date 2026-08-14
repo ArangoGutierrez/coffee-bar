@@ -244,8 +244,18 @@ struct BadPattern: Error, CustomStringConvertible {
 /// `\u{2014}`, which is Swift escape syntax and not ICU regex syntax, so the
 /// duration pattern silently matched nothing and the check passed over a README
 /// full of durations.
-func matches(_ pattern: String, in text: String) throws -> [[String]] {
-    guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+///
+/// `options` DEFAULTS to the case-insensitive reading every caller above was
+/// written against, so none of them changes. The control-location guard passes
+/// `[]` instead: a control's name is a proper label, and under `.caseInsensitive`
+/// an ICU `[A-Z]` matches a lower-case letter too — which would read the literal
+/// `"no battery"` as a control called "no battery". Measured 2026-08-13 over all
+/// eleven documented surfaces: both readings extract the same 17 locating
+/// claims today, so this is the semantics being pinned before it costs
+/// something, not a fix for a live miss.
+func matches(_ pattern: String, in text: String,
+             options: NSRegularExpression.Options = [.caseInsensitive]) throws -> [[String]] {
+    guard let re = try? NSRegularExpression(pattern: pattern, options: options)
     else { throw BadPattern(pattern: pattern) }
     let ns = text as NSString
     return re.matches(in: text, range: NSRange(location: 0, length: ns.length)).map { m in
@@ -1028,6 +1038,436 @@ func codeContains(_ phrase: String, inSwiftUnder directory: URL) -> Bool {
         \(fixtures.appending(path: "ReallyOffered.swift").path) and the scan \
         still did not find it, so this walk reads nothing and every control \
         claim would fail against a correct product.
+        """)
+}
+
+// MARK: - Claim 3b: a control is documented on the surface it renders on
+
+/// The nouns a document calls a rendering surface by, each mapped to the
+/// SwiftUI `View` type that draws it.
+///
+/// **This is a vocabulary, and not a control map.** It records what "the panel"
+/// is CALLED in prose. It says nothing about which controls are on it: which
+/// surface renders a given control is read out of `Sources/` on every run by
+/// `renderedControls(ofViewTypes:inSwiftUnder:)`, so a control moved from one
+/// surface to the other moves here with no edit at all — which is the whole
+/// point of issue #69. A hand-written control-to-surface table would have to be
+/// corrected by the same person who forgot to correct the document, and a fact
+/// kept in two places that must be edited together is how these documents
+/// drifted in the first place.
+///
+/// ORDERED, longest noun first, because ICU alternation is leftmost-first: with
+/// `[Pp]references` ahead of `[Pp]references window`, every claim about the
+/// window would be read as a claim about a bare `Preferences`.
+///
+/// A bare `[Ss]ettings` is deliberately ABSENT. Every page here says "settings
+/// file" about `~/.claude/settings.json`, which is not a surface of this app at
+/// all, and a noun that matched it would turn pages of hook-wiring instructions
+/// into control claims.
+private let surfaceNouns: [(noun: String, viewType: String)] = [
+    ("[Mm]enu bar panel", "PanelView"),
+    ("[Pp]references window", "PreferencesView"),
+    ("[Ss]ettings window", "PreferencesView"),
+    ("[Pp]anel", "PanelView"),
+    ("[Mm]enu bar", "PanelView"),
+    ("[Pp]references", "PreferencesView"),
+]
+
+/// The `View` types the vocabulary above names, sorted.
+///
+/// Derived rather than written out, so a third surface added to the vocabulary
+/// is scanned without a second edit that somebody has to remember.
+private let documentedViewTypes = Set(surfaceNouns.map(\.viewType)).sorted()
+
+/// A phrase that could be a control's name on screen: it opens with a capital
+/// and is long enough to name something rather than to be a state or a tag.
+///
+/// The capture is the phrase without its quotes.
+private let controlLabelPattern = "\"([A-Z][A-Za-z][A-Za-z '’-]{2,38})\""
+
+enum SurfaceScanError: Error, CustomStringConvertible {
+    case noSuchView(String)
+    case noBody(String)
+
+    var description: String {
+        switch self {
+        case .noSuchView(let type):
+            return "no .swift file declares `struct \(type): View`, so nothing can say where a control renders"
+        case .noBody(let type):
+            return "`struct \(type): View` declares no `var body: some View`, so nothing says what it renders"
+        }
+    }
+}
+
+/// What each rendering surface actually draws, read out of Swift source.
+struct RenderedControls {
+    /// Every label-shaped phrase a surface's `body` renders, keyed by view type.
+    let phrases: [String: Set<String>]
+
+    /// The one surface that renders `phrase`, or `nil` when none does — or when
+    /// several do.
+    ///
+    /// `nil` for several deliberately. A phrase two surfaces both draw cannot
+    /// settle a claim about either of them, and answering with one of the two
+    /// would be a guess dressed as a verdict. The sweep skips those rather than
+    /// judging them, which is why `unambiguous` is what it sweeps.
+    func soleSurface(rendering phrase: String) -> String? {
+        let drawn = phrases.filter { $0.value.contains(phrase) }.keys
+        return drawn.count == 1 ? drawn.first : nil
+    }
+
+    /// Every phrase exactly one surface renders, sorted.
+    ///
+    /// Sorted because `Set` does not specify its order, and an unsorted list
+    /// reorders the claims in a failure message between runs — which makes a
+    /// real, repeatable failure read as flaky.
+    var unambiguous: [String] {
+        Set(phrases.values.joined()).filter { soleSurface(rendering: $0) != nil }.sorted()
+    }
+}
+
+/// Every label-shaped phrase each of `types` renders, read out of the Swift
+/// under `directory`.
+///
+/// **How a surface is read.** `braceBlock(after:in:)` takes the declaration of
+/// `struct <type>: View` and then the first `var body: some View` inside it —
+/// the two composed calls `PreferencesView_test.swift` already uses, and for
+/// its reason: `PanelView.swift` declares two `View`s and the first
+/// `var body: some View` in the file belongs to `MenuBarLabel`. Comments go
+/// first, so a surface that merely DESCRIBES a control in a doc comment does
+/// not count as rendering it — issue #40's discriminator, inherited rather than
+/// re-implemented.
+///
+/// **String literals, and the constants that stand for them.** A phrase counts
+/// as rendered when the `body` block carries it as a literal, or carries the
+/// name of a constant declared with that literal somewhere under `directory`.
+/// The indirection is not optional: the quiet control is written
+/// `Toggle(ServingModel.quietOthersLabel, …)`, and a reader that saw only
+/// literals would report its name rendered by no surface at all, then skip
+/// every claim made about it — silently, which is the failure mode this whole
+/// file exists to end.
+///
+/// Takes the directory rather than reading `Sources/` itself, so
+/// `aControlLocationClaimIsJudgedAgainstWhereTheControlRenders` can hand it
+/// fixture views and pin the discrimination on files it wrote itself, instead
+/// of on whichever control happens to sit in this tree today.
+func renderedControls(ofViewTypes types: [String],
+                      inSwiftUnder directory: URL) throws -> RenderedControls {
+    var code: [String: String] = [:]
+    if let walker = FileManager.default.enumerator(atPath: directory.path) {
+        for case let relative as String in walker where relative.hasSuffix(".swift") {
+            let url = directory.appending(path: relative)
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            code[relative] = swiftCodeWithoutComments(text)
+        }
+    }
+
+    // A constant's name to the label it holds, for names declared EXACTLY ONCE.
+    // A name declared twice is a name this reader cannot resolve, and picking
+    // one of the two would attribute a control to a surface on a coin toss.
+    var declarations: [String: Int] = [:]
+    var label: [String: String] = [:]
+    for source in code.values {
+        for m in try matches(
+            "\\b(?:let|var)\\s+([A-Za-z_][A-Za-z0-9_]{3,})\\s*(?::\\s*String\\s*)?=\\s*\(controlLabelPattern)",
+            in: source, options: []) {
+            declarations[m[1], default: 0] += 1
+            label[m[1]] = m[2]
+        }
+    }
+
+    var phrases: [String: Set<String>] = [:]
+    for type in types.sorted() {
+        guard let file = code.keys.sorted()
+            .first(where: { code[$0]?.contains("struct \(type): View") == true }),
+              let source = code[file]
+        else { throw SurfaceScanError.noSuchView(type) }
+
+        guard let declaration = braceBlock(after: "struct \(type): View", in: source),
+              let body = braceBlock(after: "var body: some View", in: declaration.block)
+        else { throw SurfaceScanError.noBody(type) }
+
+        var drawn = Set(try matches(controlLabelPattern, in: body.block, options: []).map { $0[1] })
+        for (name, text) in label where declarations[name] == 1 {
+            let mentioned = try matches("\\b\(NSRegularExpression.escapedPattern(for: name))\\b",
+                                        in: body.block, options: [])
+            if !mentioned.isEmpty { drawn.insert(text) }
+        }
+        phrases[type] = drawn
+    }
+
+    return RenderedControls(phrases: phrases)
+}
+
+/// One document sentence that places a named control on a surface.
+struct ControlLocationClaim {
+    /// The control's name, spelled as the product renders it.
+    let control: String
+    /// The `View` type the sentence puts it on.
+    let claimedViewType: String
+    /// The matched text, so a failure can quote the sentence a reader would
+    /// have followed.
+    let sentence: String
+}
+
+/// Every locating claim `prose` makes about one of `controls`.
+///
+/// **Three shapes, each demanding an explicit LOCATING phrase** rather than
+/// mere proximity:
+///
+///   1. `<control> … in the <surface>` — "a Display control in the Preferences
+///      window", "Serving in the panel", "… live in the Preferences window".
+///   2. `the <surface> holds … <control>` — the same claim written backwards.
+///   3. `| <control> | <surface> |` — a Markdown table row, which is how the
+///      quick start registers four controls at once.
+///
+/// Proximity alone was tried and rejected, and there is a live sentence that
+/// settles it: "The panel holds the Serving control, a battery line, the
+/// Waiting on you list, the version, Preferences…, and Quit." names a control
+/// and a second surface noun a few characters apart and locates nothing about
+/// that noun. A proximity reader calls that a claim, fails on a correct
+/// document, and teaches everybody to route around this file.
+///
+/// `[^.|\n]` bounds every span, so a claim cannot reach across a sentence, a
+/// line, or a table cell to borrow its neighbour's surface noun.
+func controlLocationClaims(in prose: String,
+                           forControls controls: [String],
+                           nouns: [(noun: String, viewType: String)]) throws
+    -> [ControlLocationClaim] {
+    let alternation = nouns.map { "(?:\($0.noun))" }.joined(separator: "|")
+    var found: [ControlLocationClaim] = []
+
+    for control in controls {
+        let name = NSRegularExpression.escapedPattern(for: control)
+        for pattern in [
+            "\(name)\\b[^.|\\n]{0,60}?\\b(?:in|on|under|inside)\\s+the\\s+(\(alternation))\\b",
+            "\\b[Tt]he\\s+(\(alternation))\\b[^.|\\n]{0,25}?\\b(?:holds|carries|has)\\b"
+                + "[^.|\\n]{0,40}?\\b\(name)\\b",
+            "\\|\\s*\(name)\\s*\\|\\s*(?:[Tt]he\\s+)?(\(alternation))\\s*\\|",
+        ] {
+            for m in try matches(pattern, in: prose, options: []) {
+                guard let type = try viewType(named: m[1], among: nouns) else { continue }
+                found.append(ControlLocationClaim(
+                    control: control,
+                    claimedViewType: type,
+                    sentence: m[0].replacingOccurrences(of: "\n", with: " ")))
+            }
+        }
+    }
+
+    return found
+}
+
+/// The surface `noun` names, or `nil` when the vocabulary does not know it.
+///
+/// Anchored at both ends, so `Preferences window` cannot answer to a bare
+/// `[Pp]references` entry that sits later in the list.
+private func viewType(named noun: String,
+                      among nouns: [(noun: String, viewType: String)]) throws -> String? {
+    for candidate in nouns {
+        if try !matches("^(?:\(candidate.noun))$", in: noun, options: []).isEmpty {
+            return candidate.viewType
+        }
+    }
+    return nil
+}
+
+/// A document may not put a control on a surface that does not render it.
+///
+/// **The defect, and it is issue #69.** `everyControlNamedExistsInTheProduct`
+/// above proves a named control EXISTS somewhere under `Sources/`. It says
+/// nothing about WHERE it renders, so a sentence that sends the reader to the
+/// menu bar panel for a control that lives in the Preferences window is green
+/// in every guard this repository had. Eight sentences did exactly that, and
+/// the whole suite passed over all eight.
+///
+/// The surface is resolved from SOURCE every run — the `body` block of the
+/// SwiftUI `View` that draws the control — so moving a control between the two
+/// surfaces turns every document that still names the old one red without
+/// anybody remembering to update a list.
+///
+/// **What this cannot do, stated rather than hidden.** It judges the claims it
+/// can READ: a control's name beside a locating phrase. A page that describes
+/// a control's position without naming a surface — "at the top of the second
+/// group" — is invisible to it, and so is a control two surfaces both render,
+/// which `soleSurface(rendering:)` refuses to guess about.
+@Test(arguments: documentedSurfaces)
+func everyControlLocatedInADocumentRendersOnThatSurface(_ name: String) throws {
+    let rendering = try renderedControls(ofViewTypes: documentedViewTypes,
+                                         inSwiftUnder: repoRoot().appending(path: "Sources"))
+    let prose = try surfaceProse(name)
+
+    for claim in try controlLocationClaims(in: prose,
+                                           forControls: rendering.unambiguous,
+                                           nouns: surfaceNouns) {
+        let renders = rendering.soleSurface(rendering: claim.control)
+        #expect(claim.claimedViewType == renders, """
+            \(name) puts the \(claim.control) control on \(claim.claimedViewType) — \
+            "\(claim.sentence)" — and \(claim.control) renders in \
+            \(renders ?? "no surface at all"). A reader who follows that sentence \
+            opens the wrong surface and does not find the control.
+            """)
+    }
+}
+
+/// The sweep above is reading real claims, and would notice if it stopped.
+///
+/// Every `@Test(arguments: documentedSurfaces)` above passes trivially when its
+/// loop body never runs, and this file already learned that the expensive way:
+/// `everyControlNamedExistsInTheProduct` sweeps eleven surfaces and matches
+/// nothing on any of them, which nobody knew until `controlOfferPattern` was
+/// pinned. A locating pattern that rotted would fail the same way — quietly,
+/// while reporting success on every page.
+@Test func theControlLocationSweepStillReadsRealClaims() throws {
+    let rendering = try renderedControls(ofViewTypes: documentedViewTypes,
+                                         inSwiftUnder: repoRoot().appending(path: "Sources"))
+
+    // NAMES, and deliberately no surfaces. WHICH surface renders each of these
+    // is the answer the sweep computes; repeating it here would let the guard
+    // agree with itself instead of with the product.
+    for control in ["Serving", "Display", "Battery floor", "Quiet everything else"] {
+        #expect(rendering.soleSurface(rendering: control) != nil, """
+            no single surface renders "\(control)", one of the four controls the \
+            quick start registers by name, so every claim about it is skipped \
+            in silence. Either its label left a `body` block or this reader \
+            stopped finding it. Read: \(rendering.phrases.mapValues { $0.sorted() })
+            """)
+    }
+
+    var claims: [ControlLocationClaim] = []
+    var documentsMakingOne: Set<String> = []
+    for name in documentedSurfaces {
+        let here = try controlLocationClaims(in: try surfaceProse(name),
+                                             forControls: rendering.unambiguous,
+                                             nouns: surfaceNouns)
+        claims += here
+        if !here.isEmpty { documentsMakingOne.insert(name) }
+    }
+
+    // Measured 2026-08-13: 17 claims, over 4 controls, in 5 documents. The
+    // floors sit below those so ordinary rewording does not fail here, and far
+    // enough above zero that a rotted pattern does. Without them this sweep is
+    // loudest about being correct exactly when it is reading nothing.
+    #expect(claims.count >= 12, """
+        the documents make \(claims.count) locating claim(s) the reader can see. \
+        17 were measured when it was written, so either the patterns have \
+        rotted and the sweep is judging almost nothing, or a page that told \
+        readers where the controls are no longer does.
+        """)
+    #expect(Set(claims.map(\.control)).count >= 4, """
+        the claims cover \(Set(claims.map(\.control)).sorted()) — fewer than the \
+        four controls the quick start registers, so at least one control's \
+        location is documented nowhere this guard can read it.
+        """)
+    #expect(documentsMakingOne.count >= 4, """
+        only \(documentsMakingOne.sorted()) locate a control. Five documents did \
+        when this was written; a page that stopped is a page whose control \
+        claims nothing reads.
+        """)
+}
+
+/// The claim reader answers to WHERE a control renders, not to what the
+/// document says twice.
+///
+/// **Fixtures, never `Sources/`.** Anchoring this on whichever control sits in
+/// the tree today gives a check that stops discriminating the moment somebody
+/// moves one, and stops silently. Two fixture views and three fixture sentences
+/// differ by exactly the thing under test: which surface the sentence names.
+///
+/// The mislocating sentence is SPLIT ACROSS CONCATENATED LITERALS. This guard
+/// reads documents and never Swift, so it cannot read itself — but a fixture
+/// written whole is a sentence sitting in the repository that says a control is
+/// somewhere it is not, and the next guard to walk `Tests/` inherits it.
+@Test func aControlLocationClaimIsJudgedAgainstWhereTheControlRenders() throws {
+    let fixtures = FileManager.default.temporaryDirectory
+        .appending(path: "coffee-bar-control-surface-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: fixtures, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: fixtures) }
+
+    try """
+        struct FixturePanel: View {
+            var body: some View {
+                Picker("Cup strength", selection: $model.strength) { }
+            }
+        }
+        """.write(to: fixtures.appending(path: "FixturePanel.swift"),
+                  atomically: true, encoding: .utf8)
+
+    // The label reaches this view through a CONSTANT, which is the shape
+    // `Toggle(ServingModel.quietOthersLabel, …)` uses in the real window. A
+    // reader that followed only literals would report "Grind fine" rendered
+    // nowhere and skip every sentence below without a word.
+    try """
+        struct FixtureWindow: View {
+            var body: some View {
+                Toggle(FixtureLabels.grindLabel, isOn: $model.grind)
+            }
+        }
+        """.write(to: fixtures.appending(path: "FixtureWindow.swift"),
+                  atomically: true, encoding: .utf8)
+
+    try """
+        enum FixtureLabels {
+            /// A comment naming "Cup strength" here must not move the control.
+            static let grindLabel = "Grind fine"
+        }
+        """.write(to: fixtures.appending(path: "FixtureLabels.swift"),
+                  atomically: true, encoding: .utf8)
+
+    let rendering = try renderedControls(ofViewTypes: ["FixturePanel", "FixtureWindow"],
+                                         inSwiftUnder: fixtures)
+    #expect(rendering.soleSurface(rendering: "Cup strength") == "FixturePanel",
+            "a literal in FixturePanel's body resolved to \(rendering.soleSurface(rendering: "Cup strength") ?? "nothing")")
+    #expect(rendering.soleSurface(rendering: "Grind fine") == "FixtureWindow", """
+        a label reaching a body through a constant resolved to \
+        \(rendering.soleSurface(rendering: "Grind fine") ?? "nothing"). Every claim \
+        about a constant-labelled control would be skipped in silence.
+        """)
+
+    let nouns = [(noun: "[Pp]references window", viewType: "FixtureWindow"),
+                 (noun: "[Pp]anel", viewType: "FixturePanel")]
+
+    // THE POSITIVE. A control documented where it renders raises nothing, so
+    // this guard is not simply always-red.
+    let right = try controlLocationClaims(in: "Grind fine lives in the Preferences window.",
+                                          forControls: rendering.unambiguous, nouns: nouns)
+    #expect(right.count == 1, "the reader found \(right.count) claim(s) in a sentence that makes one")
+    #expect(right.allSatisfy { $0.claimedViewType == rendering.soleSurface(rendering: $0.control) },
+            "a control documented on the surface that renders it was reported as mislocated")
+
+    // THE NEGATIVE, and it is the defect: same sentence, other surface, no
+    // change to the product.
+    let wrong = try controlLocationClaims(in: "Grind fine lives in the " + "panel.",
+                                          forControls: rendering.unambiguous, nouns: nouns)
+    #expect(wrong.count == 1, "the reader found \(wrong.count) claim(s) in a sentence that makes one")
+    #expect(wrong.contains { $0.claimedViewType != rendering.soleSurface(rendering: $0.control) }, """
+        a sentence putting a control on the surface that does NOT render it was \
+        read as correct. That is the entire defect: the guard would stay green \
+        over a document sending every reader to the wrong window.
+        """)
+
+    // A control named near a surface noun that locates nothing. The live
+    // sentence this mirrors lists Preferences… as an ITEM on the panel, a few
+    // characters after a control's name; a reader matching on proximity fails
+    // on it, and a guard that fails on correct prose gets routed around.
+    let listing = try controlLocationClaims(
+        in: "The panel holds the Cup strength control, the version, Preferences…, and Quit.",
+        forControls: rendering.unambiguous, nouns: nouns)
+    #expect(listing.count == 1, "the reader found \(listing.count) claim(s): \(listing.map(\.sentence))")
+    #expect(listing.first?.claimedViewType == "FixturePanel", """
+        "the <surface> holds the <control>" resolved to \
+        \(listing.first?.claimedViewType ?? "nothing"). Read on proximity, the \
+        trailing Preferences… wins and a correct sentence fails.
+        """)
+
+    // Naming a control and a surface in one sentence is not locating it.
+    let mention = try controlLocationClaims(
+        in: "The panel shows the reading, and Grind fine is remembered across launches.",
+        forControls: rendering.unambiguous, nouns: nouns)
+    #expect(mention.isEmpty, """
+        a sentence that locates nothing was read as \(mention.count) claim(s). A \
+        reader that treats every co-occurrence as a claim reports defects in \
+        prose that has none.
         """)
 }
 
