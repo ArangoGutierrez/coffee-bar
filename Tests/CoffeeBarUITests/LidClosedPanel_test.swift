@@ -164,12 +164,15 @@ private let documentedProbe = ServingModel.documentedProbePath
     // `ProbeVerb.defaultTTLSeconds`, and a literal typed into the sentence
     // drifts the moment the constant moves.
     //
-    // Named bug this catches: the default raised to an hour for a good reason,
-    // and a settings window that goes on promising 30 minutes to somebody
-    // deciding whether to walk away from a laptop on battery.
-    let minutes = ProbeVerb.defaultTTLSeconds / 60
-    #expect(ServingModel.lidClosedSummary(probeAt: documentedProbe).contains("\(minutes) minutes"), """
-        the summary does not state \(minutes) minutes, which is what \
+    // Named bug this catches: the default raised for a good reason, and a
+    // settings window that goes on promising the old figure to somebody
+    // deciding whether to shut the lid and walk away.
+    //
+    // HOURS since #74, not minutes. The default is the AC hold now, and "480
+    // minutes" is a number a reader has to divide before it means anything.
+    let hours = ProbeVerb.defaultTTLSeconds / 3600
+    #expect(ServingModel.lidClosedSummary(probeAt: documentedProbe).contains("\(hours) hours"), """
+        the summary does not state \(hours) hours, which is what \
         ProbeVerb.defaultTTLSeconds is. It reads:
         \(ServingModel.lidClosedSummary(probeAt: documentedProbe))
         """)
@@ -362,29 +365,64 @@ private let documentedProbe = ServingModel.documentedProbePath
         """)
 
     // EVERY duration in the section, not merely the presence of the right one.
-    // A section stating both "30 minutes" and "45 minutes" satisfies a
-    // containment check while telling the reader two different things.
-    let minutes = ProbeVerb.defaultTTLSeconds / 60
-    let durations = try NSRegularExpression(pattern: "(\\d+)\\s*minutes?")
+    // A section stating both "8 hours" and "12 hours" satisfies a containment
+    // check while telling the reader two different things.
+    //
+    // BOTH UNITS since #74, and reading only one of them is what would make
+    // this vacuous. The page states two figures now — the default hold and the
+    // ceiling `--ttl` may reach — and both are hours, so a pattern that read
+    // "minutes" alone would find nothing on the page and assert nothing about
+    // it. Seconds are in too: they are the unit `--ttl` takes, so a future
+    // edit that spells the hold out in seconds stays covered.
+    //
+    // The section states exactly two DISTINCT holds and this pins each to its
+    // own constant, rather than accepting "some product constant" — swapping
+    // the default and the ceiling in one paragraph leaves both numbers real
+    // and both sentences wrong.
+    let holds: Set<Int> = [ProbeVerb.defaultTTLSeconds, JournalRecord.maxTTLSeconds]
+    let scale = ["second": 1, "minute": 60, "hour": 3600]
+    let durations = try NSRegularExpression(pattern: "(\\d+)\\s*(second|minute|hour)s?",
+                                            options: [.caseInsensitive])
     let sectionNS = section as NSString
     let stated = durations
         .matches(in: section, range: NSRange(location: 0, length: sectionNS.length))
-        .map { sectionNS.substring(with: $0.range(at: 1)) }
+        .compactMap { match -> (text: String, seconds: Int)? in
+            let digits = sectionNS.substring(with: match.range(at: 1))
+            let unit = sectionNS.substring(with: match.range(at: 2)).lowercased()
+            guard let value = Int(digits), let per = scale[unit] else { return nil }
+            return (sectionNS.substring(with: match.range), value * per)
+        }
 
-    #expect(stated.count >= 1, """
-        the lid-closed section of site/docs.html states no hold at all. A reader \
-        deciding whether to shut the lid and walk away needs the \(minutes) \
-        minutes ProbeVerb.defaultTTLSeconds gives them.
+    #expect(stated.count >= 2, """
+        the lid-closed section of site/docs.html states \(stated.count) \
+        duration(s). A reader deciding whether to shut the lid and walk away \
+        needs BOTH the \(ProbeVerb.defaultTTLSeconds / 3600) hours \
+        ProbeVerb.defaultTTLSeconds gives them and the \
+        \(JournalRecord.maxTTLSeconds / 3600) hours --ttl may reach. Is the \
+        number inside a <code> block, which readerFacingProse strips?
         """)
 
     for value in stated {
-        #expect(Int(value) == minutes, """
-            the lid-closed section of site/docs.html states "\(value) minutes"; \
-            ProbeVerb.defaultTTLSeconds is \(ProbeVerb.defaultTTLSeconds) s = \
-            \(minutes) minutes. A number typed onto the page drifts the moment \
-            the constant moves, and it drifts on the surface a stranger reads.
+        #expect(holds.contains(value.seconds), """
+            the lid-closed section of site/docs.html states "\(value.text)" = \
+            \(value.seconds) s, which is neither ProbeVerb.defaultTTLSeconds \
+            (\(ProbeVerb.defaultTTLSeconds) s) nor JournalRecord.maxTTLSeconds \
+            (\(JournalRecord.maxTTLSeconds) s). A number typed onto the page \
+            drifts the moment the constant moves, and it drifts on the surface \
+            a stranger reads.
             """)
     }
+
+    // ANTI-VACUITY on the pairing: both constants, not the same one twice. A
+    // page that stated the ceiling in both sentences satisfies every assertion
+    // above while never telling the reader what a bare `arm` actually holds
+    // for.
+    #expect(Set(stated.map(\.seconds)) == holds, """
+        the lid-closed section of site/docs.html states \
+        \(Set(stated.map(\.seconds)).sorted()) s, and the two holds it has to \
+        describe are \(holds.sorted()) s — the default and the ceiling. One of \
+        them is missing or is stated as the other.
+        """)
 }
 
 // MARK: - Issue #64: the binary the docs send people to has to be in the bundle

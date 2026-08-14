@@ -482,7 +482,7 @@ private let laterBootSession = "5C0FFEE0-0000-4000-8000-00000000B008"
 
     let written = try #require(try store.load())
     #expect(written.ttlSeconds == JournalRecord.maxTTLSeconds)
-    #expect(written.ttlSeconds == 8 * 60 * 60)
+    #expect(written.ttlSeconds == 24 * 60 * 60)
 }
 
 @Test func armAnswersWithTheHoldItTookRatherThanTheOneItWasAskedFor() throws {

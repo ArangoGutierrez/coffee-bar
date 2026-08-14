@@ -719,15 +719,15 @@ private func durationsStated(in text: String) throws -> [(digits: String, unit: 
 /// Every duration a policy document states is a constant the product really
 /// holds.
 ///
-/// **Named bug this catches.** `SECURITY.md` says the default TTL is 30 minutes
-/// and the cap is 8 hours. Change `ProbeVerb.defaultTTLSeconds` to 45 minutes
-/// and the document keeps promising 30 — a security policy describing a bound
-/// the code no longer enforces. `theDocumentedTTLBoundsAreTheShippedConstants`
-/// catches that only where the number sits on the SAME LINE as its backticked
-/// symbol, because its anchor is `[^\n]{0,60}?`. It therefore misses the third
-/// mention, "the 30-minute default is deliberately the worst case", which names
-/// no symbol at all. This guard reads the prose instead of the neighbourhood of
-/// a symbol, so it sees all three.
+/// **Named bug this catches.** `SECURITY.md` states the default hold and the
+/// hard ceiling. Change `ProbeVerb.defaultTTLSeconds` and the document keeps
+/// promising the old figure — a security policy describing a bound the code no
+/// longer enforces. `theDocumentedTTLBoundsAreTheShippedConstants` catches that
+/// only where the number sits on the SAME LINE as its backticked symbol,
+/// because its anchor is `[^\n]{0,60}?`. It therefore misses the third mention,
+/// the one in the sentence about what a hold you walk away from will spend,
+/// which names no symbol at all. This guard reads the prose instead of the
+/// neighbourhood of a symbol, so it sees all three.
 ///
 /// STRUCTURAL / EQUALITY, with a PRESENCE anti-vacuity half below.
 ///
@@ -768,8 +768,8 @@ private func durationsStated(in text: String) throws -> [(digits: String, unit: 
     // produced zero phrases asserted nothing at all and stayed green.
     #expect(sweptInSecurity >= 3, """
         the duration sweep found \(sweptInSecurity) duration(s) in SECURITY.md \
-        and that document states at least three: the 30-minute default twice \
-        and the 8-hour cap once. The pattern has rotted, so this guard is \
+        and that document states at least three: the default hold twice and \
+        the hard ceiling once. The pattern has rotted, so this guard is \
         reading nothing.
         """)
     #expect(seen.contains(ProbeVerb.defaultTTLSeconds), """
