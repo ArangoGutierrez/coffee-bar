@@ -2222,12 +2222,20 @@ private let readFixture = IngestStatus(version: "0.3.0-fixture",
         .joined(separator: "\n")
         .replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
 
-    #expect(code.contains("listener.serveStatus"), """
+    // Bound to a `Bool` BEFORE the expectation, and that is not a style
+    // preference. swift-testing expands the operands of what it is handed, so
+    // `#expect(code.contains(...))` prints the whole whitespace-stripped model
+    // — measured at forty thousand characters when this was mutation-checked —
+    // and the sentence explaining the failure scrolls off the top.
+    let wiresTheRoute = code.contains("listener.serveStatus")
+    #expect(wiresTheRoute, """
         ServingModel.swift never calls listener.serveStatus in code, so the \
         read route answers 503 for the life of the process while every check \
         in this file — each of which installs its own provider — stays green.
         """)
-    #expect(code.contains("ingestStatus(version:"), """
+
+    let buildsTheAnswer = code.contains("ingestStatus(version:")
+    #expect(buildsTheAnswer, """
         ServingModel.swift builds no IngestStatus, so whatever the read route \
         answers with does not come from the state the panel shows.
         """)
