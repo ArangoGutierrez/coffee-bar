@@ -6,11 +6,12 @@
 # .xcodeproj is involved and none is needed — SwiftPM builds the SwiftUI
 # MenuBarExtra fine and the bundle is assembled by hand.
 #
-# The bundle is signed when this machine holds a Developer ID Application
-# identity and left unsigned when it does not; `scripts/sign-bundle.sh` records
-# why that is detected rather than required. Notarisation and Sparkle remain
-# release work, so even a signed bundle from here is quarantined on another Mac
-# until `scripts/release-dmg.sh` notarises one.
+# The bundle this produces is unsigned unless you ask for a signature by setting
+# SIGN_IDENTITY; `scripts/sign-bundle.sh` records why signing is opt-in rather
+# than detected, and this script is the reason — it is also the Homebrew
+# formula's build path. Notarisation and Sparkle remain release work, so even a
+# signed bundle from here is quarantined on another Mac until
+# `scripts/release-dmg.sh` notarises one.
 #
 # Usage: scripts/build-app.sh
 
@@ -376,9 +377,10 @@ echo "    Contents/MacOS: ${shipped}"
 # while leaving the file present, which is the kind of break that shows up on
 # somebody else's Mac rather than here.
 #
-# Optional by design — no Developer ID on this machine means an unsigned bundle
-# and exit 0, never a failed build. `scripts/sign-bundle.sh` carries that
-# argument in full.
+# OPT-IN by design — no SIGN_IDENTITY means an unsigned bundle and exit 0, never
+# a failed build and never a reach into the keychain for somebody else's key.
+# This script is the Homebrew formula's build path, so an unset variable has to
+# mean "sign nothing". `scripts/sign-bundle.sh` carries that argument in full.
 echo "==> signing"
 "${SCRIPT_DIR}/sign-bundle.sh" "${APP}" || die "signing failed"
 

@@ -7,19 +7,43 @@
 #
 # Usage: scripts/sign-bundle.sh <path to .app>
 #
-#   SIGN_IDENTITY  codesign identity, skipping detection. `-` signs ad hoc.
-#                  Unset (the normal case) means: find the Developer ID in the
-#                  keychain, and if there is none, do not sign.
+#   SIGN_IDENTITY  codesign identity to sign with. `-` signs ad hoc.
+#                  Unset (the normal case) means: do not sign at all.
 #
-# SIGNING IS OPTIONAL AND DETECTED, and that is a deliberate decision rather
-# than a shortcut. A contributor cloning this repository has no Developer ID
-# Application certificate — the private key is the maintainer's and cannot be
-# shared — and `.github/workflows/ci.yml` builds the bundle on a hosted runner
-# that has no keychain identity either. A build that FAILS because the machine
-# lacks a private key is a worse outcome than a build that produces an unsigned
-# bundle and says so: the first breaks `git clone && scripts/build-app.sh` for
-# everyone who is not the maintainer, the second costs a copy handed to another
-# Mac, which was already the case.
+# SIGNING IS OPT-IN, and that is the load-bearing decision here. Nothing else in
+# this script matters as much.
+#
+# `scripts/build-app.sh` calls this, and `build-app.sh` is ALSO the Homebrew
+# formula's build path. An earlier version of this file resolved the identity as
+# `${SIGN_IDENTITY:-$(detect_identity)}`, so an unset variable meant "find a
+# Developer ID in this keychain and use it". The formula sets no SIGN_IDENTITY.
+# The result: `brew install coffee-bar` on any machine that happens to hold a
+# Developer ID ran `codesign --sign <that person's private key>` over a bundle
+# they were merely installing. Measured on the fixture bundle before this change,
+# with nothing in the environment: `TeamIdentifier=85FN4Z37V8`. Nobody asked for
+# that signature.
+#
+# A script that runs on other people's machines does not reach for a signing key
+# without being asked, and `brew install` is the path most likely to reach a
+# stranger. It also falsifies a written promise: `SECURITY.md` states, under
+# "Things that are not vulnerabilities", that a Homebrew-installed bundle is
+# ad-hoc signed and names no team.
+#
+# So an unset SIGN_IDENTITY leaves the bundle exactly as `swift build` emitted
+# it — ad-hoc, linker-signed, naming no team — and exits 0. That is also the
+# right default for the two cases that were already normal: a contributor
+# cloning this repository has no Developer ID Application certificate, because
+# the private key is the maintainer's and cannot be shared, and
+# `.github/workflows/ci.yml` builds the bundle on a hosted runner with no
+# keychain identity at all. A build that FAILS for want of a private key breaks
+# `git clone && scripts/build-app.sh` for everyone who is not the maintainer.
+#
+# There is no `--sign` flag, deliberately. `build-app.sh` takes no arguments and
+# forwards none, so a flag would be reachable only by calling this script
+# directly — a second opt-in surface with no caller. A bare `--sign` would also
+# have to pick an identity on the user's behalf, which is the question opt-in
+# exists to stop answering. SIGN_IDENTITY already crosses the build-app.sh
+# boundary with no plumbing; when #71b needs a flag, adding one is cheap.
 #
 # This is the LOCAL build. Releases are signed by `scripts/release-dmg.sh`,
 # which re-signs everything with `--force` and a secure timestamp before it
@@ -50,6 +74,12 @@ die() {
 
 # --- which identity, if any --------------------------------------------------
 #
+# REPORTING ONLY. `detect_identity` answers "what could this machine sign with",
+# which is what the opt-in message needs so it can name an identity the reader
+# can paste back. It is NOT how the identity is chosen — that is SIGN_IDENTITY
+# and nothing else. Reading which certificates exist and signing with one are
+# different acts, and only the second needs consent.
+#
 # `security` is called by NAME rather than by absolute path, so a test can put a
 # stand-in earlier on PATH and exercise the machine-with-no-identity case
 # without touching the keychain. Nothing here writes to the keychain; the only
@@ -71,20 +101,32 @@ detect_identity() {
         | head -1 || true
 }
 
-IDENTITY="${SIGN_IDENTITY:-$(detect_identity)}"
+# SIGN_IDENTITY and nothing else. There is no fallback to `detect_identity`
+# here, and the absence is the fix: see the opening comment.
+IDENTITY="${SIGN_IDENTITY:-}"
 
 if [ -z "${IDENTITY}" ]; then
     cat <<'UNSIGNED'
-    no Developer ID Application identity in this keychain: the bundle is UNSIGNED.
+    SIGN_IDENTITY is unset, so this bundle is UNSIGNED. Signing is OPT-IN: this
+    script does not reach for a signing key it was not asked to use.
 
-    It runs on this machine. A copy handed to another Mac arrives carrying
-    com.apple.quarantine, and Gatekeeper refuses to open an unsigned app that
-    has it. Notarisation needs a signature too, so that route is closed as well.
+    The bundle runs on the machine that built it. A copy handed to another Mac
+    arrives carrying com.apple.quarantine, and Gatekeeper refuses to open an
+    unsigned app that has it. Notarisation needs a signature too, so that route
+    is closed as well.
 
-    This is expected on a contributor's machine and on CI, and it is not an
-    error. `security find-identity -v -p codesigning` lists what this machine
-    has.
+    This is the normal case for a contributor, for CI and for a Homebrew
+    install, and it is not an error.
 UNSIGNED
+
+    # What this machine COULD sign with, so opting in is a paste rather than a
+    # lookup. Read-only, and it chooses nothing.
+    available="$(detect_identity)"
+    if [ -n "${available}" ]; then
+        printf "\n    To sign with the identity already in this keychain, ask for it:\n\n        SIGN_IDENTITY='%s' scripts/build-app.sh\n\n" "${available}"
+    else
+        printf "\n    To sign, set SIGN_IDENTITY to a codesign identity. This keychain holds\n    no Developer ID Application certificate; \`security find-identity -v -p\n    codesigning\` lists what it does have, and SIGN_IDENTITY='-' signs ad hoc.\n\n"
+    fi
     exit 0
 fi
 
