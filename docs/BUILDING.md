@@ -116,13 +116,34 @@ the suite.
 
 ## Signing
 
-`scripts/build-app.sh` signs the bundle when this machine holds a **Developer ID
-Application** identity, and leaves it unsigned when it does not. Signing is
-detected rather than required, because the private key cannot be shared: a build
-that failed without one would break `git clone && scripts/build-app.sh` for
-every contributor, and CI assembles the bundle on a runner with no keychain
-identity at all. No identity means a line explaining what is lost, and exit 0.
-`scripts/sign-bundle.sh` is where this happens and carries the argument in full.
+`scripts/build-app.sh` leaves the bundle unsigned unless you ask for a
+signature. Set `SIGN_IDENTITY` and it signs with that identity; leave it unset
+and the bundle keeps the ad-hoc signature the linker gave it, and the build
+still exits 0.
+
+```
+SIGN_IDENTITY='Developer ID Application: Your Name (TEAMID)' scripts/build-app.sh
+```
+
+`security find-identity -v -p codesigning` lists what a machine holds, and an
+unsigned run prints the same hint with this machine's identity filled in.
+`SIGN_IDENTITY='-'` signs ad hoc.
+
+**Signing is opt-in, not detected**, and the reason is that this script is also
+the Homebrew formula's build path. A version that reached for whatever Developer
+ID it found in the keychain made `brew install coffee-bar` run
+`codesign --sign <that person's private key>` over a bundle they were merely
+installing — a third party's signing identity used without their consent, on the
+route most likely to reach somebody who never read this repository. So an unset
+variable has to mean *sign nothing*. `scripts/sign-bundle.sh` carries the
+argument in full.
+
+Unset is also the right default for the two cases that were always the normal
+ones: a contributor holds no Developer ID Application certificate, because the
+private key is the maintainer's and cannot be shared, and CI assembles the
+bundle on a runner with no keychain identity at all. A build that failed for
+want of a private key would break `git clone && scripts/build-app.sh` for
+everyone who is not the maintainer.
 
 With an identity, `codesign -dv` reports `flags=0x10000(runtime)` and the team
 that signed it. Without one, the bundle carries nothing but the ad-hoc signature

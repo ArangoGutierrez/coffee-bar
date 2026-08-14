@@ -68,20 +68,29 @@ Build of product 'coffee-bar' complete! (0.20s)
     8 glyph files copied
     LSUIElement=true (no Dock icon)
 ==> signing
-    no Developer ID Application identity in this keychain: the bundle is UNSIGNED.
+    SIGN_IDENTITY is unset, so this bundle is UNSIGNED. Signing is OPT-IN: this
+    script does not reach for a signing key it was not asked to use.
     ...
 
 Built .../build/CoffeeBar.app (version 0.0.0-dev, unsigned)
 ```
 
-**Signing is detected, not required.** Without a Developer ID Application
-identity in your keychain the bundle is left unsigned and the build still exits
-0 — the normal case for a contributor, and for CI. The private key is the
-maintainer's and cannot be shared, and a build that failed for want of one would
-break `git clone && scripts/build-app.sh` for everybody else. An unsigned copy
-handed to another Mac is refused by Gatekeeper. With an identity the last line
-names the team that signed it instead, `(version 0.0.0-dev, signed, team
-ABCDE12345)`, and `docs/BUILDING.md` covers what that does and does not buy.
+**Signing is opt-in, not detected.** The bundle is left unsigned and the build
+exits 0 unless you set `SIGN_IDENTITY` — the normal case for a contributor, for
+CI, and for a Homebrew install, because `scripts/build-app.sh` is the formula's
+build path too. A script that signed with whatever Developer ID it happened to
+find would use a stranger's private key on their own machine, so an unset
+variable means sign nothing. An unsigned copy handed to another Mac is refused
+by Gatekeeper.
+
+To sign a local build, name the identity:
+
+```
+$ SIGN_IDENTITY='Developer ID Application: Your Name (TEAMID)' ./scripts/build-app.sh
+```
+
+The last line then names the team that signed it, `(version 0.0.0-dev, signed,
+team ABCDE12345)`. `docs/BUILDING.md` covers what that does and does not buy.
 
 The version comes from `git describe --tags --dirty`. No tag exists yet, so
 every build today reports `0.0.0-dev`. Read it back with:
