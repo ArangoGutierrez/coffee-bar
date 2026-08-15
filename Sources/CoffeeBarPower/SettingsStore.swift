@@ -84,6 +84,30 @@ public enum SettingsKey {
     /// `theAgentToolsKeyStringNeverChangesAndCollidesWithNothing` holds the
     /// string itself.
     public static let agentTools = "agentTools"
+
+    /// How long the user wants lid-closed mode to hold the machine (issue #74).
+    ///
+    /// Absent by default, and the default is `ProbeVerb.defaultTTLSeconds`.
+    /// Absent is NOT zero, and this is the second key the `Int?` on
+    /// `integer(forKey:)` exists for — more sharply than the first. A missing
+    /// key read as 0 becomes `--ttl 0`: a hold that has expired before the
+    /// watchdog's first tick, so lid-closed mode would appear to do nothing
+    /// whatever for every user who has never opened Preferences, with no error
+    /// anywhere and nothing in the window to say why.
+    ///
+    /// SECONDS, not minutes or hours, because that is the unit `--ttl` takes and
+    /// this value is interpolated straight into that flag. A stored unit that
+    /// needed converting on the way out is a conversion that can be forgotten at
+    /// one of the two call sites.
+    ///
+    /// It collides with `batteryFloorPercent` most dangerously of the five,
+    /// because BOTH are `Int`: every other pair in this enum is caught by the
+    /// type mismatch making the read answer `nil`, while these two would read
+    /// each other's value cleanly and the window would show a battery floor of
+    /// 28 800 percent beside a hold of fifteen seconds.
+    /// `theLidClosedHoldKeyStringNeverChangesAndCollidesWithNothing` holds the
+    /// string itself and pins it apart from the other four.
+    public static let lidClosedHoldSeconds = "lidClosedHoldSeconds"
 }
 
 /// Where a user preference is kept.

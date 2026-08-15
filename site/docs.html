@@ -125,8 +125,12 @@
      that file's `durationSweepExclusions`, and
      `everyDurationOnADocumentedSitePageIsARealProductConstant` in
      `Tests/CoffeeBarPowerTests/PolicyDocumentClaims_test.swift` reads it
-     instead. `theSiteExplainsLidClosedModeAndStatesTheShippedHold` pairs the
-     30-minute figure with the sentence it belongs to.
+     instead. `theSiteExplainsLidClosedModeAndStatesTheShippedHold` pairs each
+     figure with the sentence it belongs to, and since #74 there are TWO of
+     them — the default hold and the ceiling `--ttl` may reach. That guard
+     requires BOTH, and requires each to be its own constant, so stating the
+     ceiling in place of the default now goes red rather than passing on the
+     grounds that the number is real.
 
      Both of those read the page with <code> STRIPPED, exactly as note A2
      describes. So a duration wrapped in <code> is read by NOBODY, on a page
@@ -273,11 +277,19 @@ and forces the display off. The order matters: nothing is changed until the
 record is on disk and the watchdog that undoes it is loaded, so a process killed
 half way through leaves no held setting behind it.</p>
 
-<p>An armed hold lasts 30 minutes and then the watchdog puts your setting back.
-<code>--ttl</code> takes a number of seconds and buys more, up to a cap of 8
-hours. The default is short on purpose: nothing here watches your work, so it
-cannot end the hold early when the agent finishes, and the time you ask for is
-what a machine you have walked away from will spend.</p>
+<p>An armed hold lasts 8 hours and then the watchdog puts your setting back.
+<code>--ttl</code> takes a number of seconds and buys more or less, up to a
+ceiling of 24 hours. Nothing here watches your work, so the hold cannot end
+early when the agent finishes, and the time you ask for is what a machine you
+have walked away from will spend.</p>
+
+<p>That is deliberately long, and the reason is what actually ends a hold on a
+laptop. The watchdog checks the battery before it checks the clock: on battery
+the hold ends at 15% however much time is left, so a machine shut in a bag is
+bounded by charge rather than by the number above. On mains power there is
+nothing to protect, and a short hold there only ended the long unattended run
+this mode exists for. Preferences lets you set the length you want, and writes
+it into the command it prints for you to run.</p>
 
 <p>The display is forced off rather than left to sleep on its own. A closed lid
 over a lit panel is heat with nowhere to go, and it burns the battery this whole

@@ -28,16 +28,51 @@ public enum ProbeVerb: String, CaseIterable, Sendable {
 
     /// How long `arm` holds the setting when the caller names no `--ttl`.
     ///
-    /// 30 minutes, and deliberately NOT `JournalRecord.maxTTLSeconds`. §8.2(5)
-    /// makes 8 h a CAP — the longest hold a user may ASK for — and using it as
-    /// the default confuses two different numbers.
+    /// 8 hours, and deliberately NOT `JournalRecord.maxTTLSeconds`. §8.2(5)
+    /// makes that a CEILING — the longest hold a user may ASK for — and using
+    /// it as the default confuses two different numbers.
     ///
-    /// Supervision on this path is TTL-only. There is no heartbeat writer, so
-    /// nothing cuts a hold short when the work finishes early: the default is
-    /// the WORST CASE for a user who arms, walks away and never comes back.
-    /// Eight hours of that is an overnight battery. Half an hour covers an
-    /// ordinary agent run, and `--ttl` buys more, up to the cap.
-    public static let defaultTTLSeconds = 30 * 60
+    /// **Was 30 minutes, and the argument for that was wrong rather than
+    /// merely conservative (#74).** It ran: supervision here is TTL-only, there
+    /// is no heartbeat writer, so the default is the WORST CASE for a user who
+    /// arms, walks away and never comes back — and eight hours of that is an
+    /// overnight battery.
+    ///
+    /// The overnight battery is the case the TTL never covered. It runs ON
+    /// BATTERY, and `WatchdogDecision.decide` checks the battery floor at rung
+    /// 5, one rung ABOVE this. That hold ends at the daemon's built-in 15%
+    /// floor whatever the TTL says; the floor was doing the work the TTL was
+    /// being credited with. What half an hour actually ended was a hold on AC,
+    /// where the machine is plugged in and nothing whatever is at risk — and it
+    /// ended it in the middle of the long unattended run the mode exists for.
+    ///
+    /// So this is the AC hold: long enough to outlast a real agent run, and
+    /// adjustable. The Preferences window writes the value a user chose into
+    /// the `--ttl` on the command it prints, up to the ceiling. That is the
+    /// only route the setting takes — nothing here reads a preference file,
+    /// because this process runs as root and the preferences belong to a user.
+    /// SECURITY.md states the same thing under "Supervision is TTL-only".
+    public static let defaultTTLSeconds = 8 * 60 * 60
+
+    /// The flag that carries a hold on the command line, spelled ONCE.
+    ///
+    /// **Two programs read this string and they are not the same program.**
+    /// `main.swift` matches on it to parse argv; `ServingModel` interpolates the
+    /// user's chosen hold beside it into the command the Preferences window
+    /// prints. Before this constant those were two literals in two modules, and
+    /// the drift between them is silent in the worst way: `parse()` ignores
+    /// unknown flags by design, so renaming the flag in `main.swift` — to
+    /// `--hold`, say — leaves the window printing a command that succeeds,
+    /// reports success, and arms the DEFAULT hold rather than the one the user
+    /// chose. Nothing errors, and every other check in the package stays green.
+    ///
+    /// This is the whole channel issue #74's setting travels down. The value a
+    /// user picks reaches the root daemon by being typed into a shell as part of
+    /// this flag and by no other route, because a root process reading an
+    /// unprivileged user's preferences is a data flow SECURITY.md declines to
+    /// create. A channel with one link in it is worth naming.
+    /// `theTTLFlagThePrintedCommandUsesIsTheOneTheBinaryParses` reads both sides.
+    public static let ttlFlag = "--ttl"
 
     /// What `main.swift` runs when argv names no verb.
     ///

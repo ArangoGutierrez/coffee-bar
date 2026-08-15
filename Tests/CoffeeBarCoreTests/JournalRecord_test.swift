@@ -8,16 +8,29 @@ import Foundation
 private let provenance = ArmProvenance(
     pid: 4242, binaryPath: "/usr/local/bin/coffee-bar-probe", uid: 501)
 
-@Test func ttlIsClampedToEightHoursOnInit() {
+@Test func theHardCeilingIsTwentyFourHours() {
+    // #74 raised this from eight hours. The ceiling is the longest hold a user
+    // may ASK for — `--ttl` and the Preferences control both stop here — and it
+    // is enforced by `clamp` on both the init and the decode path, so a
+    // hand-edited journal cannot exceed it either.
+    //
+    // A LITERAL, deliberately, and it is the point of the test: every other
+    // check in this file reads the constant, so a typo that turned 24 hours
+    // into 240 would leave all of them green while the product held a machine
+    // awake for ten days. This is the one assertion that would go red.
+    #expect(JournalRecord.maxTTLSeconds == 24 * 60 * 60)
+}
+
+@Test func ttlIsClampedToTheTwentyFourHourCeilingOnInit() {
     let r = JournalRecord(intent: .sleepDisabled, priorValue: false,
                           setAt: Date(timeIntervalSince1970: 0),
                           setAtMonotonic: 10_000,
                           bootSessionID: "1BE0B007-0000-4000-8000-000000000077",
                           ttlSeconds: 999_999_999, armedBy: provenance)
-    #expect(r.ttlSeconds == 28_800)
+    #expect(r.ttlSeconds == 86_400)
 }
 
-@Test func ttlIsClampedToEightHoursOnDecode() throws {
+@Test func ttlIsClampedToTheTwentyFourHourCeilingOnDecode() throws {
     // The bug this catches: clamping only in init lets a hand-edited or
     // corrupted journal on disk hold SleepDisabled for 31 years.
     let json = """
@@ -26,7 +39,7 @@ private let provenance = ArmProvenance(
      "armedBy":{"pid":4242,"binaryPath":"/x","uid":501}}
     """
     let r = try JSONDecoder().decode(JournalRecord.self, from: Data(json.utf8))
-    #expect(r.ttlSeconds == 28_800)
+    #expect(r.ttlSeconds == 86_400)
 }
 
 @Test func ttlBelowOneIsRaisedToOne() {
@@ -48,14 +61,14 @@ private let provenance = ArmProvenance(
 }
 
 @Test func expiryUsesTheClampedTTLNotTheRequestedOne() {
-    // Requested 999999999s; clamped to 28800. If expiry were computed from
+    // Requested 999999999s; clamped to 86400. If expiry were computed from
     // the requested value the journal would appear valid for 31 years.
     let base = Date(timeIntervalSince1970: 1_000_000)
     let r = JournalRecord(intent: .sleepDisabled, priorValue: false,
                           setAt: base, setAtMonotonic: 10_000,
                           bootSessionID: "1BE0B007-0000-4000-8000-000000000077",
                           ttlSeconds: 999_999_999, armedBy: provenance)
-    #expect(r.expiry == base.addingTimeInterval(28_800))
+    #expect(r.expiry == base.addingTimeInterval(86_400))
 }
 
 @Test func decodePathAlsoRaisesNonPositiveTTLToOne() throws {

@@ -164,15 +164,108 @@ private let documentedProbe = ServingModel.documentedProbePath
     // `ProbeVerb.defaultTTLSeconds`, and a literal typed into the sentence
     // drifts the moment the constant moves.
     //
-    // Named bug this catches: the default raised to an hour for a good reason,
-    // and a settings window that goes on promising 30 minutes to somebody
-    // deciding whether to walk away from a laptop on battery.
-    let minutes = ProbeVerb.defaultTTLSeconds / 60
-    #expect(ServingModel.lidClosedSummary(probeAt: documentedProbe).contains("\(minutes) minutes"), """
-        the summary does not state \(minutes) minutes, which is what \
+    // Named bug this catches: the default raised for a good reason, and a
+    // settings window that goes on promising the old figure to somebody
+    // deciding whether to shut the lid and walk away.
+    //
+    // HOURS since #74, not minutes. The default is the AC hold now, and "480
+    // minutes" is a number a reader has to divide before it means anything.
+    let hours = ProbeVerb.defaultTTLSeconds / 3600
+    #expect(ServingModel.lidClosedSummary(probeAt: documentedProbe, holdingFor: ProbeVerb.defaultTTLSeconds).contains("\(hours) hours"), """
+        the summary does not state \(hours) hours, which is what \
         ProbeVerb.defaultTTLSeconds is. It reads:
-        \(ServingModel.lidClosedSummary(probeAt: documentedProbe))
+        \(ServingModel.lidClosedSummary(probeAt: documentedProbe, holdingFor: ProbeVerb.defaultTTLSeconds))
         """)
+}
+
+// MARK: - Issue #74: the hold is the user's, and it travels in the printed --ttl
+
+@MainActor
+@Test func theHoldTheUserChoseIsWhatTheSummaryPromisesAndWhatTheCommandAsksFor() {
+    // **THE WHOLE OF #74'S USER-FACING HALF, in one property.** Carlos's decision
+    // was a cap the user configures, and the route it takes is the ONLY route
+    // available: the app writes the chosen number into the `--ttl` of the command
+    // it prints, and the user runs that command themselves. Nothing here reaches
+    // the daemon — the daemon runs as root, the preference belongs to a user, and
+    // SECURITY.md defers that data flow rather than opening it.
+    //
+    // So the sentence and the command are two statements of one number, and they
+    // are asserted TOGETHER because apart they are both satisfiable by a bug: a
+    // summary promising four hours beside a command asking for eight is worse
+    // than either alone, and it is what a second source of truth produces.
+    //
+    // FOUR HOURS, which is neither constant. A chosen hold equal to the default
+    // cannot tell "honours the choice" apart from "ignores the choice and states
+    // the default", and a chosen hold equal to the ceiling cannot tell it apart
+    // from "clamps everything to the ceiling". 14 400 s is a real slider position
+    // and is neither.
+    let chosen = 4 * 60 * 60
+    let summary = ServingModel.lidClosedSummary(probeAt: documentedProbe, holdingFor: chosen)
+
+    #expect(summary.contains("4 hours"), """
+        the summary was asked for a \(chosen) s hold and does not state 4 hours. \
+        A window that promises the shipped default whatever the user chose makes \
+        the control decorative. It reads:
+        \(summary)
+        """)
+
+    // Neither of the two constants may appear as the promised duration, which is
+    // the half that catches a summary ignoring its argument.
+    #expect(!summary.contains("8 hours"), "the summary states the default hold rather than the chosen one")
+    #expect(!summary.contains("24 hours"), "the summary states the ceiling rather than the chosen hold")
+
+    // The command inside it carries the same number as a `--ttl`, in seconds,
+    // because seconds are what the flag takes.
+    #expect(summary.contains(ServingModel.lidClosedCommand(holdingFor: chosen)), """
+        the summary never prints "\(ServingModel.lidClosedCommand(holdingFor: chosen))", \
+        so the user is promised a hold and handed a command that asks for a \
+        different one. It reads:
+        \(summary)
+        """)
+    #expect(ServingModel.lidClosedCommand(holdingFor: chosen).hasSuffix("\(ProbeVerb.ttlFlag) \(chosen)"), """
+        the printed command is "\(ServingModel.lidClosedCommand(holdingFor: chosen))", \
+        which does not end in the flag and the seconds the user chose.
+        """)
+}
+
+@MainActor
+@Test func theCommandWithAHoldIsTheBareCommandPlusTheFlag() {
+    // ONE command, spelled once, with a suffix. The page and the window print
+    // `lidClosedCommand`; the window's copy carries a `--ttl` the page's does
+    // not, and every guard in this file that reads the bare string keeps working
+    // because the long form CONTAINS it.
+    //
+    // Named bug this catches: a second command builder. Two strings composed
+    // from `privilegedProbePath` and `ProbeVerb.arm` drift the moment either
+    // moves, and the drift lands on a user who has already typed `sudo`.
+    #expect(ServingModel.lidClosedCommand(holdingFor: 28_800)
+                .hasPrefix(ServingModel.lidClosedCommand), """
+        the hold-carrying command is "\(ServingModel.lidClosedCommand(holdingFor: 28_800))" \
+        and the bare one is "\(ServingModel.lidClosedCommand)". The first is no \
+        longer the second plus a flag, so they are two spellings of one command.
+        """)
+}
+
+@MainActor
+@Test func theHoldLabelReadsAsProseRatherThanAsSeconds() {
+    // The number beside the slider and the number in the sentence are the same
+    // string, and this is what builds it. "28800" is a hold nobody can judge at
+    // a glance; the whole point of the readout is that a user deciding whether
+    // to shut the lid can read it.
+    //
+    // Literals on both sides — recomputing the divmod here would restate the
+    // implementation and assert nothing.
+    //
+    // Named bug this catches: `"\(seconds / 3600) hours"` alone, which reads a
+    // 90-minute hold as "1 hours" and a 30-minute one as "0 hours". Every slider
+    // position between the whole hours is one of those, and 47 of the 48
+    // positions are not whole days.
+    #expect(ServingModel.holdLabel(for: 28_800) == "8 hours")
+    #expect(ServingModel.holdLabel(for: 86_400) == "24 hours")
+    #expect(ServingModel.holdLabel(for: 5_400) == "1 hour 30 minutes")
+    #expect(ServingModel.holdLabel(for: 3_600) == "1 hour")
+    #expect(ServingModel.holdLabel(for: 1_800) == "30 minutes")
+    #expect(ServingModel.holdLabel(for: 60) == "1 minute")
 }
 
 @MainActor
@@ -191,7 +284,7 @@ private let documentedProbe = ServingModel.documentedProbePath
     // paragraph was explanation and moved to `site/docs.html`; this half is a
     // product LIMITATION, and a user who armed the mode and meets no signal
     // anywhere has been told nothing. Shortening the summary must not take it.
-    let summary = ServingModel.lidClosedSummary(probeAt: documentedProbe)
+    let summary = ServingModel.lidClosedSummary(probeAt: documentedProbe, holdingFor: ProbeVerb.defaultTTLSeconds)
 
     #expect(summary.contains(ServingModel.lidClosedCommand), """
         the summary never prints \(ServingModel.lidClosedCommand), so the user \
@@ -238,7 +331,7 @@ private let documentedProbe = ServingModel.documentedProbePath
     // follows it, which is not pedantry — `coffee-bar-probe` carries no period
     // but a version or an abbreviation would, and splitting on every `.` would
     // count sentences that no reader sees.
-    let summary = ServingModel.lidClosedSummary(probeAt: documentedProbe)
+    let summary = ServingModel.lidClosedSummary(probeAt: documentedProbe, holdingFor: ProbeVerb.defaultTTLSeconds)
     let characters = Array(summary)
     var sentences = 0
     for (index, character) in characters.enumerated() where ".!?".contains(character) {
@@ -277,7 +370,7 @@ private let documentedProbe = ServingModel.documentedProbePath
     // Named bug this catches: the sentence softened to "coffee-bar will arm
     // lid-closed mode for you", which reads better and describes a product that
     // would need an authorization prompt to exist.
-    let summary = ServingModel.lidClosedSummary(probeAt: documentedProbe).lowercased()
+    let summary = ServingModel.lidClosedSummary(probeAt: documentedProbe, holdingFor: ProbeVerb.defaultTTLSeconds).lowercased()
 
     for promise in ["click", "toggle", "turn it on here", "arm it for you",
                     "we will arm", "coffee-bar will arm"] {
@@ -285,7 +378,7 @@ private let documentedProbe = ServingModel.documentedProbePath
             the summary says "\(promise)", which offers a control this app does \
             not have and must not gain. It prints a command for the user to run. \
             It reads:
-            \(ServingModel.lidClosedSummary(probeAt: documentedProbe))
+            \(ServingModel.lidClosedSummary(probeAt: documentedProbe, holdingFor: ProbeVerb.defaultTTLSeconds))
             """)
     }
 }
@@ -362,29 +455,64 @@ private let documentedProbe = ServingModel.documentedProbePath
         """)
 
     // EVERY duration in the section, not merely the presence of the right one.
-    // A section stating both "30 minutes" and "45 minutes" satisfies a
-    // containment check while telling the reader two different things.
-    let minutes = ProbeVerb.defaultTTLSeconds / 60
-    let durations = try NSRegularExpression(pattern: "(\\d+)\\s*minutes?")
+    // A section stating both "8 hours" and "12 hours" satisfies a containment
+    // check while telling the reader two different things.
+    //
+    // BOTH UNITS since #74, and reading only one of them is what would make
+    // this vacuous. The page states two figures now — the default hold and the
+    // ceiling `--ttl` may reach — and both are hours, so a pattern that read
+    // "minutes" alone would find nothing on the page and assert nothing about
+    // it. Seconds are in too: they are the unit `--ttl` takes, so a future
+    // edit that spells the hold out in seconds stays covered.
+    //
+    // The section states exactly two DISTINCT holds and this pins each to its
+    // own constant, rather than accepting "some product constant" — swapping
+    // the default and the ceiling in one paragraph leaves both numbers real
+    // and both sentences wrong.
+    let holds: Set<Int> = [ProbeVerb.defaultTTLSeconds, JournalRecord.maxTTLSeconds]
+    let scale = ["second": 1, "minute": 60, "hour": 3600]
+    let durations = try NSRegularExpression(pattern: "(\\d+)\\s*(second|minute|hour)s?",
+                                            options: [.caseInsensitive])
     let sectionNS = section as NSString
     let stated = durations
         .matches(in: section, range: NSRange(location: 0, length: sectionNS.length))
-        .map { sectionNS.substring(with: $0.range(at: 1)) }
+        .compactMap { match -> (text: String, seconds: Int)? in
+            let digits = sectionNS.substring(with: match.range(at: 1))
+            let unit = sectionNS.substring(with: match.range(at: 2)).lowercased()
+            guard let value = Int(digits), let per = scale[unit] else { return nil }
+            return (sectionNS.substring(with: match.range), value * per)
+        }
 
-    #expect(stated.count >= 1, """
-        the lid-closed section of site/docs.html states no hold at all. A reader \
-        deciding whether to shut the lid and walk away needs the \(minutes) \
-        minutes ProbeVerb.defaultTTLSeconds gives them.
+    #expect(stated.count >= 2, """
+        the lid-closed section of site/docs.html states \(stated.count) \
+        duration(s). A reader deciding whether to shut the lid and walk away \
+        needs BOTH the \(ProbeVerb.defaultTTLSeconds / 3600) hours \
+        ProbeVerb.defaultTTLSeconds gives them and the \
+        \(JournalRecord.maxTTLSeconds / 3600) hours --ttl may reach. Is the \
+        number inside a <code> block, which readerFacingProse strips?
         """)
 
     for value in stated {
-        #expect(Int(value) == minutes, """
-            the lid-closed section of site/docs.html states "\(value) minutes"; \
-            ProbeVerb.defaultTTLSeconds is \(ProbeVerb.defaultTTLSeconds) s = \
-            \(minutes) minutes. A number typed onto the page drifts the moment \
-            the constant moves, and it drifts on the surface a stranger reads.
+        #expect(holds.contains(value.seconds), """
+            the lid-closed section of site/docs.html states "\(value.text)" = \
+            \(value.seconds) s, which is neither ProbeVerb.defaultTTLSeconds \
+            (\(ProbeVerb.defaultTTLSeconds) s) nor JournalRecord.maxTTLSeconds \
+            (\(JournalRecord.maxTTLSeconds) s). A number typed onto the page \
+            drifts the moment the constant moves, and it drifts on the surface \
+            a stranger reads.
             """)
     }
+
+    // ANTI-VACUITY on the pairing: both constants, not the same one twice. A
+    // page that stated the ceiling in both sentences satisfies every assertion
+    // above while never telling the reader what a bare `arm` actually holds
+    // for.
+    #expect(Set(stated.map(\.seconds)) == holds, """
+        the lid-closed section of site/docs.html states \
+        \(Set(stated.map(\.seconds)).sorted()) s, and the two holds it has to \
+        describe are \(holds.sorted()) s — the default and the ceiling. One of \
+        them is missing or is stated as the other.
+        """)
 }
 
 // MARK: - Issue #64: the binary the docs send people to has to be in the bundle
@@ -697,7 +825,7 @@ private func declaredExecutables() throws -> [String] {
     var armTargets: Set<String> = []
 
     for install in installs {
-        let summary = ServingModel.lidClosedSummary(probeAt: install.path)
+        let summary = ServingModel.lidClosedSummary(probeAt: install.path, holdingFor: ProbeVerb.defaultTTLSeconds)
         let ns = summary as NSString
         let matches = armPattern.matches(in: summary,
                                          range: NSRange(location: 0, length: ns.length))
@@ -959,10 +1087,10 @@ private func shellSplit(of command: String) throws -> ShellSplit {
         // corrects a helper the summary stops calling is not a fix — the same
         // reason `theArmedProbeIsNeverTheCopyInsideTheAppBundle` reads the
         // summary rather than a command accessor.
-        #expect(ServingModel.lidClosedSummary(probeAt: probe.path).contains(command), """
+        #expect(ServingModel.lidClosedSummary(probeAt: probe.path, holdingFor: ProbeVerb.defaultTTLSeconds).contains(command), """
             for \(probe.label), the Preferences window does not print the install \
             command this guard checked. It reads:
-            \(ServingModel.lidClosedSummary(probeAt: probe.path))
+            \(ServingModel.lidClosedSummary(probeAt: probe.path, holdingFor: ProbeVerb.defaultTTLSeconds))
             """)
     }
 }

@@ -200,6 +200,45 @@ struct SettingsStoreTests {
         #expect(SettingsKey.quietEverythingElse != SettingsKey.demotableProcessNames)
     }
 
+    // MARK: - The lid-closed hold (issue #74)
+
+    @Test func theLidClosedHoldKeyStringNeverChangesAndCollidesWithNothing() {
+        // Held for the reason every other key is: a rename discards the hold of
+        // every user who chose one, silently, and the next launch falls back to
+        // `ProbeVerb.defaultTTLSeconds` with nothing to report.
+        //
+        // It collides with `batteryFloorPercent` most dangerously of the five,
+        // because BOTH are `Int`. Every other pair in this file is caught by the
+        // type mismatch on the read answering `nil`; these two would read each
+        // other's value cleanly and the window would show a battery floor of
+        // 28 800 percent beside a hold of fifteen seconds.
+        #expect(SettingsKey.lidClosedHoldSeconds == "lidClosedHoldSeconds")
+        #expect(SettingsKey.lidClosedHoldSeconds != SettingsKey.holdDisplayAwake)
+        #expect(SettingsKey.lidClosedHoldSeconds != SettingsKey.batteryFloorPercent)
+        #expect(SettingsKey.lidClosedHoldSeconds != SettingsKey.demotableProcessNames)
+        #expect(SettingsKey.lidClosedHoldSeconds != SettingsKey.quietEverythingElse)
+        #expect(SettingsKey.lidClosedHoldSeconds != SettingsKey.agentTools)
+    }
+
+    @Test func anUnsetHoldReadsAsAbsentRatherThanAsZeroSeconds() throws {
+        // The `Int?` on `integer(forKey:)` earning its keep for a second setting,
+        // and this one is worse than the floor if it is got wrong. `UserDefaults`
+        // built-in `integer(forKey:)` answers 0 for a key nobody wrote, and a
+        // hold of 0 seconds printed into `--ttl` arms a mode that expires before
+        // the watchdog's first tick — lid-closed mode would appear to do nothing
+        // at all for every user who never opened Preferences.
+        let suite = try throwawaySuite()
+        defer { suite.defaults.removePersistentDomain(forName: suite.name) }
+        let store = UserDefaultsSettingsStore(defaults: suite.defaults)
+
+        #expect(store.integer(forKey: SettingsKey.lidClosedHoldSeconds) == nil)
+
+        // And a written one round-trips, so the check above is about absence
+        // rather than about a key this store cannot hold.
+        store.setInteger(3_600, forKey: SettingsKey.lidClosedHoldSeconds)
+        #expect(store.integer(forKey: SettingsKey.lidClosedHoldSeconds) == 3_600)
+    }
+
     @Test func anUnsetQuietOthersSwitchIsOffAndNotOn() throws {
         // The bug this catches is `UserDefaults.bool(forKey:)` reaching this
         // setting, which answers `false` for a key nobody wrote — the same

@@ -190,9 +190,30 @@ public func decide(_ inputs: WatchdogInputs,
     // wall frame, so a clock put back seven hours re-opens a window that had
     // already closed and the hold simply continues. This is the only rung that
     // ends a healthy hold on the CLI path, so that was the whole cap.
+    //
+    // **WHOSE NUMBER `ttlSeconds` IS, since #74.** It used to be an author's
+    // constant that a `--ttl` could raise; it is now the hold the user chose in
+    // Preferences, carried here as the `--ttl` of a command they ran
+    // themselves, and clamped by `JournalRecord` to a ceiling of 24 hours. That
+    // changes nothing on this line, and saying so is the point: the rung reads
+    // the journal's own field and does not care where it came from, which is
+    // what let the hold become configurable without touching the ladder. What
+    // it must NOT become is unbounded — `JournalRecord.clamp` is what keeps a
+    // hand-edited journal claiming 31 years from reaching this comparison.
     if elapsed > TimeInterval(journal.ttlSeconds) {
         return .revert(.ttlExpired)
     }
+    // BELOW THE CAP, and that ordering is the whole reason this rung is safe to
+    // keep. The heartbeat is the one input an unprivileged process could
+    // influence and its only power is to make this function HOLD, which is the
+    // open failure direction — so the cap above has to outrank it, and does.
+    //
+    // **It cannot fire on the daemon path**, because `LidClosedSession`
+    // substitutes `now` for the heartbeat it has no channel to receive. That is
+    // documented in full where the substitution is made, and it is a property
+    // of that CALLER rather than of this rung: `decide()` is public, takes a
+    // real `lastHeartbeat`, and `staleHeartbeatReverts` and
+    // `missingHeartbeatReverts` drive it here from a caller that supplies one.
     guard let beat = inputs.lastHeartbeat,
           inputs.now.timeIntervalSince(beat) <= policy.heartbeatTimeout else {
         return .revert(.heartbeatLost)

@@ -424,6 +424,48 @@ public struct WatchdogService: Sendable {
                 // Substituting `now` is safe because it can only ever make the
                 // heartbeat guard PASS, and `decide()` tests the TTL first — so
                 // no heartbeat, forged or absent, buys a second past expiry.
+                //
+                // **SAID PLAINLY, because #74 asked and a half-answer here is
+                // worse than none: THIS SUBSTITUTION MAKES RUNG 7 UNABLE TO
+                // FIRE ON THIS PATH.** `main.swift`'s watchdog loop calls
+                // `evaluate(now:monotonicNow:)` and never passes a heartbeat, so
+                // `beat == now` on every tick the daemon takes,
+                // `now.timeIntervalSince(beat)` is 0, and 0 is inside any
+                // timeout. Not "rarely fires" — cannot. A guard that cannot
+                // fire is theatre, so it has to be justified or removed, and
+                // this is the justification:
+                //
+                //   1. What is inert is this CALLER, not the rung. `decide()`
+                //      is public in `CoffeeBarCore` and takes a real
+                //      `lastHeartbeat`; `staleHeartbeatReverts` and
+                //      `missingHeartbeatReverts` drive it and pass. Deleting
+                //      the rung would delete a live guard to tidy away one
+                //      caller's substitution.
+                //   2. The substitution is not optional. Passing `nil` through
+                //      makes `decide()` answer `.heartbeatLost` on the first 5 s
+                //      tick and revert every `arm` immediately —
+                //      `theWatchdogHoldsWhileTheTTLIsLiveAndNoHeartbeatWriterExists`
+                //      is the positive control for exactly that.
+                //   3. It cannot be abused, because it sits BELOW the cap.
+                //      Rung 6 ends the hold on elapsed monotonic time whatever
+                //      this value is, so a heartbeat — absent, substituted, or
+                //      forged a year into the future — buys nothing.
+                //      `aForgedFutureHeartbeatCannotOutliveTheTTL` pins the
+                //      ordering and
+                //      `anACHoldRunsTheWholeConfiguredCapAndOnlyTheCapEndsIt`
+                //      pins that it stays inert across the full 24-hour ceiling
+                //      #74 raised the cap to, which is the far end the 60-second
+                //      control above never reached.
+                //
+                // #74 asked specifically whether removing the TTL would remove
+                // this justification with it. It would have — point 3 IS the
+                // TTL — and that is one of the reasons the hold stayed bounded
+                // rather than running indefinitely on AC. The TTL still exists;
+                // it is the configurable hold now rather than a fixed half
+                // hour, and it is still tested first. Building a real heartbeat
+                // is a new channel into a root daemon and is out of scope here:
+                // SECURITY.md's claim is that there is no channel at all, and
+                // adding one needs its own review rather than a comment.
                 lastHeartbeat: lastHeartbeat ?? now,
                 // §8.2(4) asks whether the MACHINE booted while this journal
                 // was live — an unclean exit. It does NOT ask whether this

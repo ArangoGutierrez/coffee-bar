@@ -482,7 +482,7 @@ private let laterBootSession = "5C0FFEE0-0000-4000-8000-00000000B008"
 
     let written = try #require(try store.load())
     #expect(written.ttlSeconds == JournalRecord.maxTTLSeconds)
-    #expect(written.ttlSeconds == 8 * 60 * 60)
+    #expect(written.ttlSeconds == 24 * 60 * 60)
 }
 
 @Test func armAnswersWithTheHoldItTookRatherThanTheOneItWasAskedFor() throws {
@@ -1364,6 +1364,60 @@ private func armedRecord(priorValue: Bool = false, ttlSeconds: Int = 3600,
     #expect(decision == .revert(.ttlExpired), """
         a forged heartbeat held the setting past its TTL. The heartbeat is \
         attacker-influenced and may only shorten a hold, never extend it.
+        """)
+    #expect(armed.power.state.current == false)
+}
+
+@Test func anACHoldRunsTheWholeConfiguredCapAndOnlyTheCapEndsIt() throws {
+    // #74's question, answered by running it rather than by reading the ladder.
+    //
+    // The hold is a user setting now and its ceiling moved from 8 hours to 24,
+    // which makes a claim nobody had measured load-bearing: that across that
+    // whole span, on AC, with no heartbeat writer anywhere, NOTHING ends the
+    // hold except the cap. `theWatchdogHoldsWhileTheTTLIsLiveAndNoHeartbeatWriterExists`
+    // is the same shape and stops at 60 seconds — comfortably past the 45-second
+    // heartbeat timeout, and nowhere near the far end this raises.
+    //
+    // **Named bug this catches, and it is the one the brief asked about.**
+    // `LidClosedSession` substitutes `now` for the heartbeat it has no channel
+    // to receive. Delete that `?? now` and rung 7 reverts every arm — measured:
+    // the first assertion below answers `.revert(.heartbeatLost)`. Delete rung 6
+    // and the second answers `.hold`, and a machine holds `SleepDisabled` past a
+    // ceiling this project documents as hard. Each half fails on its own mutant,
+    // which is what makes this a guard rather than a demonstration.
+    //
+    // AC and `percent: nil`, from the default `FakeEnvironment`. That is the
+    // configuration the whole change is about: on battery rung 5 ends the hold
+    // at the floor whatever the clock says, so the cap is only ever the
+    // terminator with the machine plugged in.
+    let root = try makeScratchRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let ceiling = JournalRecord.maxTTLSeconds
+    let armed = try makeArmedWatchdog(root: root, record: armedRecord(ttlSeconds: ceiling))
+
+    // One second SHORT of the ceiling — 86 399 s in, which is 1919 heartbeat
+    // timeouts deep. Still holding.
+    let live = try armed.service.evaluate(now: fixedNow.addingTimeInterval(TimeInterval(ceiling - 1)),
+                                          monotonicNow: uptime(after: TimeInterval(ceiling - 1)),
+                                          lastHeartbeat: nil)
+    #expect(live == .hold, """
+        the daemon answered \(live) one second short of a \(ceiling) s hold, on \
+        AC, with no heartbeat. Rung 7 is meant to be unable to fire on this \
+        path: LidClosedSession substitutes `now`, which can only make it pass.
+        """)
+    #expect(armed.power.state.current == true, "the hold was released early")
+    #expect(try armed.store.load() != nil, "the journal went early")
+
+    // One second PAST it, and the reason must be the cap rather than anything
+    // else that might have woken up over 24 hours.
+    let expired = try armed.service.evaluate(now: fixedNow.addingTimeInterval(TimeInterval(ceiling + 1)),
+                                             monotonicNow: uptime(after: TimeInterval(ceiling + 1)),
+                                             lastHeartbeat: nil)
+    #expect(expired == .revert(.ttlExpired), """
+        the daemon answered \(expired) one second past a \(ceiling) s hold. The \
+        cap is the only thing that ends an AC hold, so anything else here means \
+        either the hold outlived its ceiling or a different rung is ending it.
         """)
     #expect(armed.power.state.current == false)
 }

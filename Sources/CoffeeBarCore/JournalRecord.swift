@@ -30,8 +30,27 @@ public struct JournalRecord: Codable, Equatable, Sendable {
     // rung reverts an unknown schema, which is the safe answer and needs no
     // migration code to reach it.
     public static let currentSchemaVersion = 3
-    /// Handoff §8.2(5): hard cap regardless of settings.
-    public static let maxTTLSeconds = 8 * 60 * 60
+    /// Handoff §8.2(5): hard ceiling regardless of settings.
+    ///
+    /// **A CEILING, and since #74 it is no longer also the practical cap.** The
+    /// hold a user actually gets is `ProbeVerb.defaultTTLSeconds` unless they
+    /// ask for another, and this is the longest they may ask for. Two numbers,
+    /// deliberately: one bounds the worst case, the other is what happens when
+    /// nobody chooses.
+    ///
+    /// Raised from eight hours to twenty-four. Eight was chosen when the TTL
+    /// was believed to be what protected a user who armed the machine and
+    /// walked away — and it is not. `decide()` checks the battery floor at rung
+    /// 5 and this at rung 6, so a hold that is genuinely dangerous ends at the
+    /// floor whatever this says. On AC there is nothing to protect, and eight
+    /// hours refused an overnight run for no benefit anybody could name.
+    ///
+    /// Twenty-four and not "no ceiling at all". The clamp is what makes a
+    /// hand-edited journal claiming 31 years unenforceable, and a ceiling that
+    /// cannot be reached by any honest user still bounds a dishonest file. A
+    /// day is longer than any run this product is for and short enough that a
+    /// forgotten hold ends by itself.
+    public static let maxTTLSeconds = 24 * 60 * 60
 
     public let schemaVersion: Int
     public let intent: Intent

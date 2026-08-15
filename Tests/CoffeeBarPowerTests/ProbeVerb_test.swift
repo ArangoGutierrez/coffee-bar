@@ -146,25 +146,41 @@ func advertisedVerbs(in usage: String) -> [String] {
     }
 }
 
-@Test func theDefaultTTLIsMinutesRatherThanTheEightHourCap() throws {
-    // §8.2(5) makes 8 h a CAP, "hard-capped regardless of settings". It was
-    // also the DEFAULT, which is a different claim and a much worse one.
-    //
-    // Supervision on this path is TTL-only: there is no heartbeat writer, so
-    // nothing shortens a hold that is running long. The default TTL therefore
-    // IS the worst case — a user who runs `sudo coffee-bar-probe arm`, walks
-    // away and never returns kept the machine awake for the full default.
-    // Eight hours of that is an overnight battery.
+@Test func theDefaultTTLIsTheACHoldAndNotTheHardCeiling() throws {
+    // §8.2(5)'s cap and the default are still two different numbers, and this
+    // half of the check is unchanged: `JournalRecord.maxTTLSeconds` is the
+    // longest hold a user may ASK for, and the default is what they get for
+    // asking nothing. Collapsing the two makes every bare `arm` take the
+    // ceiling.
     #expect(ProbeVerb.defaultTTLSeconds < JournalRecord.maxTTLSeconds, """
-        the default TTL is the cap. A cap bounds the worst case a user asks \
-        for; a default is what they get for asking nothing.
+        the default TTL is the ceiling. A ceiling bounds the worst case a user \
+        asks for; a default is what they get for asking nothing.
         """)
-    // Minutes, not hours. The bound is deliberately loose — this pins the
-    // ORDER OF MAGNITUDE, which is the property that was wrong, not one
-    // particular number somebody may tune later.
-    #expect(ProbeVerb.defaultTTLSeconds <= 60 * 60)
-    #expect(ProbeVerb.defaultTTLSeconds >= 5 * 60,
-            "a default this short makes the feature useless without --ttl")
+
+    // WHAT CHANGED (#74), and why the old bound is gone. This asserted
+    // `<= 60 * 60` — "minutes, not hours" — on the grounds that supervision is
+    // TTL-only, so the default IS the worst case for a user who arms and walks
+    // away, and eight hours of that is an overnight battery.
+    //
+    // That reasoning had a hole, and the hole is the reason this test now says
+    // the opposite. The overnight-battery case runs ON BATTERY, where rung 5 of
+    // `WatchdogDecision.decide` ends the hold at the daemon's built-in 15%
+    // floor — and rung 5 is checked BEFORE the TTL. The TTL was never what
+    // protected that user; the floor was. What the 30-minute default actually
+    // did was end a hold on AC, where nothing is at risk, half an hour into an
+    // agent run the user had walked away from on purpose.
+    //
+    // So the default is now the AC hold: long enough to outlast a real run,
+    // bounded by the ceiling, and adjustable in Preferences.
+    //
+    // Named bug this catches: somebody restores a "safe-looking" short default
+    // on battery-life grounds, and lid-closed mode goes back to expiring in the
+    // middle of the overnight job it exists for.
+    #expect(ProbeVerb.defaultTTLSeconds == 8 * 60 * 60, """
+        the default hold is \(ProbeVerb.defaultTTLSeconds) s. #74 makes it \
+        eight hours: the battery floor is what ends a hold that matters, and \
+        the TTL's job on AC is to be long enough to be useful.
+        """)
 
     // And it survives the clamp unchanged, so the default a user is told about
     // is the default they get.

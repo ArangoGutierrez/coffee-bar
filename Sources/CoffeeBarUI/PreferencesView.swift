@@ -92,6 +92,57 @@ public struct PreferencesView: View {
                         .monospacedDigit()
                 }
 
+                // Issue #74's control, and the only setting in this window that
+                // governs a mode this process cannot run. The two above change
+                // what coffee-bar does; this changes what it TELLS YOU TO DO,
+                // by writing the number into the `--ttl` of the command in the
+                // paragraph below.
+                //
+                // That indirection is the security posture, not an awkwardness
+                // to be tidied away later. Arming needs root, coffee-bar never
+                // elevates its own privilege, and SECURITY.md defers "a root
+                // process reading an unprivileged user's preferences" as a new
+                // data flow needing its own review. So the value reaches the
+                // daemon as an argument the user typed. A slider that wrote a
+                // preference file the watchdog then read would be the shorter
+                // path and the one that has to be reviewed first.
+                //
+                // A SLIDER, matching the floor above, and for the same reason:
+                // `permitted` and `step` derive 48 positions, which no picker
+                // can show. Built OVER `LidClosedHold.permitted` so this view
+                // holds no bound of its own — it does NOT call
+                // `LidClosedHold.bounded` and must not. Bounding lives at
+                // `ServingModel.holdInForce`, and a second site here is one
+                // value corrected in two places by rules that can disagree.
+                // Constructing the control over the range makes an out-of-range
+                // position unreachable rather than corrected.
+                //
+                // ABOVE the lid-closed paragraph and below the floor, which is
+                // deliberate placement rather than the end of the list: the
+                // paragraph explains the mode this control configures and
+                // prints the command this control changes, so a reader meets
+                // the setting and then the sentence it acts on.
+                HStack {
+                    Text("Lid-closed hold")
+                    Slider(
+                        value: Binding(
+                            get: { Double(model.lidClosedHoldSeconds) },
+                            set: { model.lidClosedHoldSeconds = Int($0) }
+                        ),
+                        in: Double(LidClosedHold.permitted.lowerBound)
+                            ... Double(LidClosedHold.permitted.upperBound),
+                        step: Double(LidClosedHold.step)
+                    )
+                    // `holdReadout` and not a duration formatted here. The
+                    // stored setting is unbounded — `defaults write` can put
+                    // -3600 in it — so a label built from it would state a hold
+                    // the product does not honour, which is issue #68 on the
+                    // floor repeated on a value that ends up in a root command.
+                    // The model hands over a finished string.
+                    Text(model.holdReadout)
+                        .monospacedDigit()
+                }
+
                 // Lid-closed mode: the third power question, and the only one
                 // with no control anywhere in this window.
                 //
@@ -133,9 +184,14 @@ public struct PreferencesView: View {
                 // literal would be right for a disk-image install and wrong for
                 // Homebrew, for a `swift build` tree, and for a copy on the
                 // Desktop.
+                // `model.holdInForce` and NOT `model.lidClosedHoldSeconds`.
+                // The stored setting is unbounded, and this sentence embeds the
+                // number in a command the user pastes into a root shell — the
+                // bounded value is the only one that may reach it.
                 Text(ServingModel.lidClosedSummary(
                     probeAt: ServingModel.probePath(
-                        besideExecutable: Bundle.main.executableURL)))
+                        besideExecutable: Bundle.main.executableURL),
+                    holdingFor: model.holdInForce))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

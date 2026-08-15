@@ -2705,3 +2705,124 @@ private let installedElsewhere = "/Volumes/Spare/CoffeeBar.app/Contents/MacOS/co
         command appears to do nothing until coffee-bar is relaunched
         """)
 }
+
+// MARK: - Issue #74: the lid-closed hold the user chose
+
+@MainActor
+@Test func theStoredLidClosedHoldIsWhatTheWindowOffersAndTheDefaultWhenUnset() {
+    // The fifth setting, read once in `init` like the other four, and the `Int?`
+    // on `integer(forKey:)` earning its keep a second time.
+    //
+    // Named bug this catches: `?? 0`, or the built-in `integer(forKey:)` whose
+    // missing-key answer IS 0. Every user who has never opened Preferences would
+    // be handed `--ttl 0` — a hold that has expired before the watchdog's first
+    // tick — and lid-closed mode would appear to do nothing whatever, with no
+    // error anywhere and nothing in the window to say why.
+    let unset = ServingModel(holder: SpyHolder(), reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth(), settings: FakeSettings())
+    #expect(unset.lidClosedHoldSeconds == ProbeVerb.defaultTTLSeconds, """
+        a user who never chose a hold gets \(unset.lidClosedHoldSeconds) s rather \
+        than the shipped \(ProbeVerb.defaultTTLSeconds) s.
+        """)
+
+    let chosen = ServingModel(
+        holder: SpyHolder(), reader: FakeReader(source: .ac, percent: 80),
+        health: fixtureHealth(),
+        settings: FakeSettings([SettingsKey.lidClosedHoldSeconds: 5_400]))
+    #expect(chosen.lidClosedHoldSeconds == 5_400)
+}
+
+@MainActor
+@Test func draggingTheHoldSliderSurvivesARelaunch() {
+    // A setting that is not written is a control that appears to work and
+    // silently forgets, which is the failure `SettingsKey`'s doc comment
+    // describes. Two models over ONE store, which is what a relaunch is.
+    //
+    // Named bug this catches: a setter that updates the backing property and
+    // never reaches the store. Every in-session assertion stays green — the
+    // getter reads the property it just wrote — and the choice is gone at the
+    // next launch.
+    let store = FakeSettings()
+    #expect(store.integer(forKey: SettingsKey.lidClosedHoldSeconds) == nil,
+            "precondition: nothing has written the hold yet")
+
+    let first = ServingModel(holder: SpyHolder(), reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth(), settings: store)
+    first.lidClosedHoldSeconds = 5_400
+    #expect(store.integer(forKey: SettingsKey.lidClosedHoldSeconds) == 5_400,
+            "the setter never reached the store")
+
+    let relaunched = ServingModel(holder: SpyHolder(), reader: FakeReader(source: .ac, percent: 80),
+                                  health: fixtureHealth(), settings: store)
+    #expect(relaunched.lidClosedHoldSeconds == 5_400,
+            "the hold the user chose did not survive a relaunch")
+}
+
+@MainActor
+@Test func aHoldOutsideThePermittedRangeIsReadOutBoundedAndPrintedBounded() {
+    // Issue #68's defect, refused in advance for the second numeric setting.
+    // There the stored floor was unbounded, the slider was built over the
+    // permitted range, and the decision bounded — three numbers for one setting
+    // in one window.
+    //
+    // Here the stakes are higher than a wrong label: this number is interpolated
+    // into a string the user pastes into a ROOT shell. `defaults write … -int
+    // -3600` is one command away, and `--ttl -3600` in a sudo command is a
+    // product telling its user something has gone wrong without saying what.
+    //
+    // BOUNDED ONCE, at `holdInForce`. The readout and the printed command both
+    // read that one property, so they cannot disagree.
+    let store = FakeSettings([SettingsKey.lidClosedHoldSeconds: -3_600])
+    let low = ServingModel(holder: SpyHolder(), reader: FakeReader(source: .ac, percent: 80),
+                           health: fixtureHealth(), settings: store)
+
+    #expect(low.holdInForce == 1_800, "a stored -3600 reached the window as \(low.holdInForce)")
+    #expect(low.holdReadout == "30 minutes", "the readout quoted \(low.holdReadout)")
+    #expect(!ServingModel.lidClosedCommand(holdingFor: low.holdInForce).contains("-3600"), """
+        the window prints "\(ServingModel.lidClosedCommand(holdingFor: low.holdInForce))" \
+        into a root shell.
+        """)
+
+    // The far end, which the journal would clamp anyway — and the window must
+    // not be the surface that first tells the user about it.
+    let high = ServingModel(
+        holder: SpyHolder(), reader: FakeReader(source: .ac, percent: 80),
+        health: fixtureHealth(),
+        settings: FakeSettings([SettingsKey.lidClosedHoldSeconds: 999_999_999]))
+    #expect(high.holdInForce == 86_400, "a stored 999999999 reached the window as \(high.holdInForce)")
+    #expect(high.holdReadout == "24 hours", "the readout quoted \(high.holdReadout)")
+
+    // REPORTED, never rewritten — the rule issue #68 settled for the floor. This
+    // project does not silently edit a preference a user set; it declines to act
+    // on it.
+    #expect(low.lidClosedHoldSeconds == -3_600, "the window rewrote the user's stored hold")
+    #expect(high.lidClosedHoldSeconds == 999_999_999, "the window rewrote the user's stored hold")
+}
+
+@MainActor
+@Test func anInRangeStoredHoldIsReadOutUnchanged() {
+    // The regression half, for the reason `anInRangeStoredFloorIsReadOutUnchanged`
+    // exists: every hold a user can reach on the slider is inside
+    // `LidClosedHold.permitted`, so the bounding above is worthless if it moves
+    // any of them.
+    //
+    // Literal pairs rather than a computation over `LidClosedHold`: an
+    // expectation derived the way the subject derives it agrees with a broken
+    // subject.
+    for (stored, expected) in [(1_800, "30 minutes"), (28_800, "8 hours"),
+                               (45_000, "12 hours 30 minutes"), (86_400, "24 hours")] {
+        let model = ServingModel(
+            holder: SpyHolder(), reader: FakeReader(source: .ac, percent: 80),
+            health: fixtureHealth(),
+            settings: FakeSettings([SettingsKey.lidClosedHoldSeconds: stored]))
+        #expect(model.holdReadout == expected,
+                "a stored \(stored) read out as \(model.holdReadout)")
+    }
+
+    // And the live path: dragging the slider moves the readout on the same pass
+    // rather than at the next launch.
+    let model = ServingModel(holder: SpyHolder(), reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth(), settings: FakeSettings())
+    model.lidClosedHoldSeconds = 3_600
+    #expect(model.holdReadout == "1 hour", "the readout lagged the control: \(model.holdReadout)")
+}
