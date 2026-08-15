@@ -2826,3 +2826,170 @@ private let installedElsewhere = "/Volumes/Spare/CoffeeBar.app/Contents/MacOS/co
     model.lidClosedHoldSeconds = 3_600
     #expect(model.holdReadout == "1 hour", "the readout lagged the control: \(model.holdReadout)")
 }
+
+// MARK: - Issue #73: the scope the window claims against the scope the daemon has
+
+/// Every percentage a sentence NAMES, in the order it names them.
+///
+/// A scan rather than a `contains("15%")`, and the difference is the whole
+/// point of the guards below. `contains` answers "is the right number in
+/// there somewhere", which a sentence naming TWO floors also satisfies — and a
+/// window that quotes two floors for one question is the defect #73 reports
+/// with an extra number added. This answers "which numbers does it name", so a
+/// second one is visible.
+///
+/// Hand-written rather than a regex: `%` is the only terminator that matters
+/// and the scan is four lines. `\(digits)%` is how `suppressionAdvisory` and
+/// `floorLabel(for:)` both spell a charge, so it is the spelling this reads.
+private func percentagesNamed(in sentence: String) -> [Int] {
+    var found: [Int] = []
+    var digits = ""
+    for character in sentence {
+        if character.isNumber { digits.append(character); continue }
+        if character == "%", let value = Int(digits) { found.append(value) }
+        digits = ""
+    }
+    return found
+}
+
+/// The charge at which the lid-closed daemon's own ladder ends a hold, OBSERVED
+/// by running it rather than read off a constant.
+///
+/// **This is what makes the guard below more than a restatement.** The obvious
+/// spelling is `WatchdogPolicy.default.batteryFloorPercent`, which is the
+/// expression the sentence itself interpolates — an expectation derived the way
+/// the subject derives it agrees with a broken subject, which is the rule
+/// `anInRangeStoredFloorIsReadOutUnchanged` states one screen up. Asking
+/// `decide` instead reaches the number by a different route: the policy, the
+/// comparison at rung 5, and the ordering of the rungs above it all have to
+/// agree with the window before this returns what the window says.
+///
+/// Concretely, three edits it catches that reading the constant does not:
+/// flipping rung 5 from `pct <= floor` to `pct < floor` (the daemon then ends
+/// holds at one percent lower than the window states), moving rung 5 below the
+/// TTL, and giving `WatchdogService` a policy of its own. `main.swift` builds
+/// that service with no `policy:` argument, so `.default` here is the policy
+/// the shipped probe runs under.
+///
+/// `nil` when NO charge ends a hold, which is a failure and not a shrug: a
+/// ladder that never reverts on battery is a floor that does not exist, and the
+/// guard `#require`s a value rather than passing over one.
+private func floorTheWatchdogLadderEnforces() -> Int? {
+    let armedAt = Date(timeIntervalSince1970: 1_000_000)
+    let armedAtMonotonic: TimeInterval = 10_000
+    let record = JournalRecord(
+        intent: .sleepDisabled, priorValue: false,
+        setAt: armedAt, setAtMonotonic: armedAtMonotonic,
+        bootSessionID: "1BE0B007-0000-4000-8000-000000000001",
+        ttlSeconds: 900,
+        armedBy: ArmProvenance(pid: 1, binaryPath: "/x", uid: 501))
+    // Ten seconds into a fifteen-minute hold, wall and monotonic frames in
+    // step, heartbeat fresh, thermal nominal: every rung above and below the
+    // floor is satisfied, so rung 5 is the only one that can answer.
+    let now = armedAt.addingTimeInterval(10)
+    let endsTheHold = (0...100).filter { percent in
+        CoffeeBarCore.decide(
+            WatchdogInputs(journal: record, now: now,
+                           monotonicNow: armedAtMonotonic + 10,
+                           lastHeartbeat: now,
+                           isBootEvaluation: false, thermal: .nominal,
+                           batteryPercent: percent, onBattery: true),
+            policy: .default) == .revert(.batteryFloor)
+    }
+    // The HIGHEST charge that still reverts is the floor. `PowerBroker` and
+    // rung 5 both suppress at `percent <= floor`, so the boundary charge is the
+    // floor itself rather than one below it.
+    return endsTheHold.max()
+}
+
+@MainActor
+@Test func theScopeNoteNamesTheFloorTheLidClosedDaemonActuallyEnforces() throws {
+    // ISSUE #73, AND THE HARD HALF OF IT. The window's battery slider reads as
+    // though it governs every hold; it governs none of the lid-closed one. The
+    // remedy is a sentence that says so, and a sentence is worth nothing if it
+    // can go on naming 15% after the daemon has moved to 20 — that is the same
+    // defect one indirection along, and it would ship green.
+    //
+    // Named bug this catches: the scope note written with a literal. `"…the
+    // built-in floor of 15%…"` is the shortest way to write this sentence, it
+    // is correct on the day it is written, and `BatteryFloor.default` is a
+    // constant with an editable value that four other call sites already derive
+    // from. The moment somebody raises it, this window states a floor no part of
+    // the product enforces — in the one paragraph whose entire job is to say
+    // what the daemon actually does.
+    let enforced = try #require(floorTheWatchdogLadderEnforces(), """
+        no battery charge from 0 to 100 makes the watchdog ladder end a hold \
+        under WatchdogPolicy.default, so the floor the Preferences window \
+        describes is not a floor the daemon has. Either rung 5 stopped firing \
+        or the policy lost its floor; the window's sentence is wrong either way.
+        """)
+
+    let claimed = percentagesNamed(in: ServingModel.powerScopeNote)
+
+    // EXACTLY ONE, and the equality is against a one-element array rather than
+    // a `first ==`. A sentence that names two floors is the failure this shape
+    // catches and a `contains`/`first` cannot: quoting the user's own setting
+    // beside the built-in one puts two answers to one question in one caption,
+    // which is #73 restated rather than closed.
+    #expect(claimed == [enforced], """
+        the Preferences window names the floors \(claimed) while the watchdog \
+        ladder ends a hold at \(enforced)%. The window is claiming a scope the \
+        daemon does not have, which is the whole of issue #73. Derive the number \
+        from WatchdogPolicy.default rather than writing it out.
+        """)
+}
+
+@MainActor
+@Test func theScopeNoteDescribesTheDaemonWhileTheReadoutDescribesTheUser() throws {
+    // The SHORTER fix, refused. Building the note from `batteryFloorPercent`
+    // makes the sentence agree with the slider it sits under, reads as correct
+    // in every screenshot, and restores exactly the lie #73 reports: the window
+    // would announce that a lid-closed hold ends at the floor the user dragged
+    // to while the daemon went on ending it at the built-in one.
+    //
+    // Named bug this catches: that substitution. It is invisible to the guard
+    // above whenever the user has left the floor on its default, which is the
+    // state every developer's machine is in.
+    //
+    // A floor CHOSEN to differ from the daemon's rather than a literal 10:
+    // under a `BatteryFloor.default` of 10 a hard-coded pair would agree by
+    // accident and this guard would report a defect that is not there.
+    let chosen = try #require(BatteryFloor.choices.first {
+        $0 != WatchdogPolicy.default.batteryFloorPercent
+    }, "every floor the control offers equals the daemon's, so this cannot discriminate")
+
+    let model = ServingModel(
+        holder: SpyHolder(), reader: FakeReader(source: .battery, percent: 80),
+        health: fixtureHealth(), settings: FakeSettings())
+    model.batteryFloorPercent = chosen
+
+    // The two surfaces sit a few points apart in one window and they must
+    // DISAGREE, which is the disclosure this task exists to make. Asserting the
+    // readout too is what stops the check passing on a model that never took
+    // the setting.
+    #expect(model.floorReadout == "\(chosen)%",
+            "the readout did not take the user's floor: \(model.floorReadout)")
+    #expect(!ServingModel.powerScopeNote.contains(model.floorReadout), """
+        the scope note quotes \(model.floorReadout), which is the floor the USER \
+        chose. That number governs the holds coffee-bar runs itself and governs \
+        nothing the root daemon does, so a note carrying it tells the user the \
+        lid-closed hold obeys a setting it has never read.
+        """)
+
+    // THE SECOND SLIDER'S SCOPE, which #74 made urgent: the window now shows a
+    // control labelled "Lid-closed hold" directly under the battery floor, and
+    // a note explaining only the floor reads as confirming that the two are one
+    // group. The route that hold actually takes to the daemon is the `--ttl` of
+    // a command the user types, and naming it is what separates the two.
+    //
+    // `ProbeVerb.ttlFlag` and never the literal, for the reason
+    // `theTTLFlagThePrintedCommandUsesIsTheOneTheBinaryParses` gives about the
+    // command itself: a flag renamed on one side leaves this paragraph
+    // describing a route the binary no longer offers.
+    #expect(ServingModel.powerScopeNote.contains(ProbeVerb.ttlFlag), """
+        the scope note never names \(ProbeVerb.ttlFlag), so it says nothing \
+        about how the Lid-closed hold slider above it reaches the daemon. A note \
+        that scopes only the battery floor leaves the second control under a \
+        lid-closed heading with its scope still unstated.
+        """)
+}
