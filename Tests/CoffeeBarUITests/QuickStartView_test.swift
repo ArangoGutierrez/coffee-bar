@@ -288,7 +288,21 @@ private func configuredUser() -> [String: Any] {
 
     #expect(store.bool(forKey: SettingsKey.holdDisplayAwake) == true)
     #expect(store.integer(forKey: SettingsKey.batteryFloorPercent) == 35)
-    #expect(store.stringArray(forKey: SettingsKey.agentTools) == [AgentTool.cursor.rawValue])
+
+    // BOTH TOOLS, and the one that was NOT ticked here is the interesting half.
+    // `setAdvises` freezes the whole answer rather than the tool it was handed:
+    // until the first call there is no stored selection at all, only the
+    // inference from `hookHealths`, so writing `[cursor]` would silently discard
+    // Claude Code — which the `wired.json` fixture has on disk and which the
+    // page was therefore SHOWING as ticked. A wizard is where that costs most: a
+    // user answering "yes I run Cursor too" would switch off the tool they
+    // actually use.
+    //
+    // This expectation was `[cursor]` when it was written, and the run corrected
+    // it. That is the documented behaviour of `setAdvises(_:for:)`, not an
+    // accident of it.
+    #expect(store.stringArray(forKey: SettingsKey.agentTools)
+                == [AgentTool.claudeCode.rawValue, AgentTool.cursor.rawValue])
 }
 
 @MainActor
@@ -363,6 +377,7 @@ private func configuredUser() -> [String: Any] {
 
 // MARK: - What the page says
 
+@MainActor
 @Test func theQuickStartAsksThreeDistinctQuestions() {
     // Named bug this catches: a copy-paste that asks the same question three
     // times, or a question with no text at all. The sentences live on the model
