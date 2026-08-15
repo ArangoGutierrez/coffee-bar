@@ -278,9 +278,20 @@ policy:
 - **What ends a hold, stated rather than implied (#74).** On battery it is the
   floor above. That check is guarded by `inputs.onBattery` and sits at rung 5 of
   `WatchdogDecision.decide`, one rung ABOVE the TTL, so it ends a hold whatever
-  the TTL says — the hazardous case, a closed machine in a bag, runs on battery
-  and is bounded by charge rather than by time. On AC it is the TTL, and
-  nothing else in the ordinary course; a thermal abort and a reboot remain.
+  the TTL says — the hazardous case, a closed machine in a bag, normally runs on
+  battery and is bounded by charge rather than by time. **With one exception,
+  and it is the worst case this change makes worse.** Rung 5 needs a battery
+  PERCENTAGE, not merely "on battery": it reads
+  `if inputs.onBattery, let pct = inputs.batteryPercent`. When the capacity keys
+  are missing or report a maximum of zero, `SystemPowerReader` yields a nil
+  percentage, and `unknownBatteryDoesNotTriggerFloor` pins that input to holding
+  rather than reverting — deliberately, because a floor cannot be enforced
+  against a charge nobody can read. On that path the floor cannot fire and the
+  TTL is the only bound left, so a machine whose battery reporting is broken
+  now holds for the hold you chose rather than for thirty minutes. That is a
+  real widening of the worst case, it is why the ceiling is 24 hours and not
+  unbounded, and it is stated here rather than discovered. On AC it is the TTL,
+  and nothing else in the ordinary course; a thermal abort and a reboot remain.
   This section used to say the model was *scheduled* to change, toward a hold
   that continued indefinitely on AC. It does not do that. An unbounded hold on
   a privileged process is a bound this document could not state, so the hold
