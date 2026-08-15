@@ -72,7 +72,13 @@ public final class AssertionHolder: @unchecked Sendable {
     /// The same again, for the network hold. A THIRD distinct sentence, for the
     /// reason `SECURITY.md` gives: distinct names are how a stranded assertion
     /// is attributed to the code that stranded it.
-    public static let networkAssertionName = "coffee-bar is reachable"
+    ///
+    /// It says what the MACHINE is doing, not what coffee-bar is. "coffee-bar
+    /// is reachable" would have claimed something this assertion does not ask
+    /// for and cannot know — whether anything can actually get here — and a
+    /// user reading it in `pmset -g assertions` would take it as a reachability
+    /// report rather than a hold.
+    public static let networkAssertionName = "coffee-bar is keeping the network up"
 
     private let lock = NSLock()
 
