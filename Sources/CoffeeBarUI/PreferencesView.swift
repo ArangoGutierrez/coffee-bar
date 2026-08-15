@@ -256,10 +256,14 @@ public struct PreferencesView: View {
                 if let advisory = model.staleHelperAdvisory(
                     probeAt: ServingModel.probePath(
                         besideExecutable: Bundle.main.executableURL)) {
-                    Text(advisory)
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
+                    AdvisoryRow(line: advisory)
+                        // The one advisory whose sentence carries a command
+                        // meant to be pasted into a root shell. Chained here
+                        // rather than put inside `AdvisoryRow` because the other
+                        // advisories carry nothing worth selecting;
+                        // `.textSelection` reaches the Text through the
+                        // Environment. The panel's copy of this line does the
+                        // same, at its own call site, for the same reason.
                         .textSelection(.enabled)
                 }
 
