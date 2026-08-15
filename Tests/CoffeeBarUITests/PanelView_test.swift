@@ -80,7 +80,7 @@ private func settingsActionBlock(in code: String) -> String? {
 /// the message is the failure report, so it says what breaks for a user rather
 /// than naming a missing token.
 private let requiredInSettingsAction: [(needle: String, cost: String)] = [
-    (".close()",
+    ("dismiss()",
      "the panel is never dismissed, so it draws over the window it just opened"),
     ("setActivationPolicy(.regular)",
      "macOS 14 declines a foreground request from an .accessory app, so the window opens grey and takes no keystrokes"),
@@ -142,22 +142,29 @@ func thePreferencesActionDismissesAndActivates() throws {
           \(missing.joined(separator: "\n  "))
         """)
 
-    // ORDER, and it is not cosmetic. The dismissal closes the KEY window; once
-    // the Settings window is up it is the key window, so a close that runs after
-    // openSettings() shuts the window it just opened. This is the one ordering
-    // in the action that changes behaviour rather than reading nicely.
+    // ORDER. The dismissal is about the panel THIS click came from, so it runs
+    // before the window that click opens.
+    //
+    // This rationale used to claim the ordering was load-bearing because the
+    // dismissal closed the KEY window, and a close after `openSettings()` would
+    // shut the window it had just opened. That argument belonged to a mechanism
+    // that was built, measured and REJECTED — `NSApp.keyWindow?.close()` — and it
+    // does not transfer to `dismiss()`, which addresses the panel's own
+    // presentation and cannot reach the Settings window at all. The ordering is
+    // kept because it is the one that reads correctly and the one that shipped
+    // green; it is no longer claimed to prevent a specific measured failure.
     let action = try #require(settingsActionBlock(in: source), """
         no Button in PanelView.swift has an action that calls openSettings(, so \
         there is no Preferences action to read.
         """)
-    let dismissAt = try #require(action.range(of: ".close()"),
-                                 "the Preferences action never closes the panel")
+    let dismissAt = try #require(action.range(of: "dismiss()"),
+                                 "the Preferences action never dismisses the panel")
     let openAt = try #require(action.range(of: "openSettings("),
                               "the Preferences action never opens Settings")
     #expect(dismissAt.lowerBound < openAt.lowerBound, """
-        PanelView.swift closes the key window AFTER opening Settings. By then the \
-        key window IS the Settings window, so this closes the window it has just \
-        opened. Dismiss first.
+        PanelView.swift dismisses the panel AFTER opening Settings. Dismiss \
+        first: the dismissal is about the panel this click came from, and \
+        ordering it after the window it opens has no reason to be correct.
         """)
 }
 
@@ -207,7 +214,7 @@ func theGuardsDiscriminateTheOldShapeFromTheNew() throws {
     // that finds nothing anywhere.
     let actionShape = """
         Button {
-            NSApp.keyWindow?.close()
+            dismiss()
             NSApp.setActivationPolicy(.regular)
             openSettings()
             NSApp.activate(ignoringOtherApps: true)
@@ -253,7 +260,7 @@ func theGuardsDiscriminateTheOldShapeFromTheNew() throws {
         Button("Quit coffee-bar") { NSApplication.shared.terminate(nil) }
 
         Button {
-            NSApp.keyWindow?.close()
+            dismiss()
             NSApp.setActivationPolicy(.regular)
             openSettings()
             NSApp.activate(ignoringOtherApps: true)
