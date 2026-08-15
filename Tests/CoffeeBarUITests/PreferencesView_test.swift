@@ -798,3 +798,41 @@ private func copyButtonLabel(in body: String) throws -> String {
             """)
     }
 }
+
+@Test func thisWindowIsWhatDrivesTheAutomaticUpdateCheck() throws {
+    // WHERE the one automatic outbound request is triggered from, held at the
+    // one surface that can trigger it.
+    //
+    // Named bug this catches: the section renders, the button works, and the
+    // automatic half is wired nowhere — so the sentence beside it promising a
+    // check "once a day" is true of a check nothing ever makes, and the window
+    // says "not looked yet" for ever to every user who never presses the
+    // button.
+    //
+    // `checkForUpdatesIfDue` and NOT `checkForUpdates`, and the difference is
+    // the interval itself: opening this window four times in an afternoon must
+    // post once. A guard that accepted either name would pass the version of
+    // this line that turns a stated daily check into a request per window open.
+    let prefs = try surfaceCode(named: "PreferencesView.swift")
+
+    let appear = try #require(braceBlock(after: ".onAppear", in: prefs), """
+        PreferencesView.swift declares no .onAppear block, so nothing asks \
+        whether a newer version is published unless the user presses the button.
+        """)
+
+    #expect(appear.block.contains("checkForUpdatesIfDue"), """
+        PreferencesView.swift opens without asking whether a newer version is \
+        published. The update section then states an interval that governs \
+        nothing: coffee-bar would look only when the user presses Check now, \
+        and a user who never presses it is never told about a release.
+        """)
+
+    // The interval-respecting call is the ONLY automatic one. An unconditional
+    // `checkForUpdates()` on appear reads almost identically and turns a stated
+    // daily check into one request per window open.
+    #expect(!appear.block.contains("checkForUpdates()"), """
+        PreferencesView.swift checks unconditionally when the window opens, \
+        ignoring the interval it states two lines above. Opening the window \
+        four times in an afternoon would post four requests off this machine.
+        """)
+}

@@ -415,13 +415,20 @@ private final class FakeFetcher: ReleaseManifestFetching, @unchecked Sendable {
         return asked
     }
 
-    func fetch() async throws -> FetchedManifest {
+    /// Records the ask and hands back the answer, SYNCHRONOUSLY.
+    ///
+    /// Split out of `fetch()` because `NSLock.lock()` is unavailable from an
+    /// asynchronous context — a lock held across a suspension point deadlocks
+    /// under a cooperative thread pool. Nothing here suspends, and keeping the
+    /// whole critical section in a non-async method is what says so.
+    private func take() -> Result<FetchedManifest, any Error> {
         lock.lock()
+        defer { lock.unlock() }
         asked += 1
-        let answer = self.answer
-        lock.unlock()
-        return try answer.get()
+        return answer
     }
+
+    func fetch() async throws -> FetchedManifest { try take().get() }
 }
 
 private struct NoAnswer: Error {}
