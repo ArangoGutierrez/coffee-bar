@@ -30,9 +30,10 @@ import SwiftUI
 /// `staleHelperAdvisory` — without ever naming this role. Issue #30 measured
 /// what that cost: as caption TEXT on a light backdrop the pigment reaches
 /// 1.75:1 to 2.31:1 against a 4.5:1 floor. Those lines now render through
-/// `advisoryRow`, which carries an `exclamationmark.triangle` and a `.primary`
-/// sentence, so the meaning is in the SHAPE and the panel is back inside the
-/// rule assets/art/README.md line 22 states: neither accent carries body text.
+/// `AdvisoryRow`, which carries an `exclamationmark.triangle` and a `.primary`
+/// sentence, so the meaning is in the SHAPE and both surfaces are back inside
+/// the rule assets/art/README.md line 22 states: neither accent carries body
+/// text.
 ///
 /// So `brand(.warning)` is not the route back. It resolves to the same
 /// systemOrange the advisories just gave up, and
@@ -156,9 +157,10 @@ public enum BrandPalette {
     /// `#8C5200`, which is no longer distinguishable from the roast `state`
     /// colour, so that fix would delete the distinction it exists to draw.
     ///
-    /// Issue #30 was therefore answered by spending SHAPE instead. The panel's
+    /// Issue #30 was therefore answered by spending SHAPE instead. The
     /// advisories dropped the pigment for a symbol and a `.primary` sentence;
-    /// see `advisoryRow` in `PanelView.swift`. This value is unchanged because
+    /// see `AdvisoryRow` in `AdvisoryRow.swift`, which both the panel and the
+    /// Preferences window render through. This value is unchanged because
     /// nothing here was wrong — the role was never the carrier.
     ///
     /// So: `.warning` marks an icon or a rule, never body text in the light
