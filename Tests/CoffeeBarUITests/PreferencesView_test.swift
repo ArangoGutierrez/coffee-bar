@@ -609,3 +609,79 @@ private func copyButtonLabel(in body: String) throws -> String {
             """)
     }
 }
+
+/// The scope note issue #73 adds is RENDERED, and it sits under BOTH controls.
+///
+/// Two properties, and the second is the one #74 made necessary. A sentence
+/// that scopes the battery floor is worth nothing if the user never reaches it,
+/// and it is worse than nothing if it sits ABOVE the "Lid-closed hold" slider:
+/// `PreferencesView.swift` states the placement rule itself — "a paragraph above
+/// a slider reads as instructions for the slider" — so a note placed between the
+/// two controls would be read as describing the lid-closed one alone, which is
+/// the confusion it exists to remove.
+///
+/// BRACE DEPTH for the first half, borrowed from
+/// `everyMovedControlIsRenderedAsUnconditionallyAsTheHeadingsAboveIt` above
+/// along with the defect that guard records: wrapping a member of this page in
+/// `if false { … }` left the whole suite green while the window shipped without
+/// it. A `contains` cannot tell a live paragraph from a dead one.
+///
+/// SOURCE ORDER for the second half. It reads the comment-stripped body, so the
+/// long prose in `PreferencesView.swift` explaining each control cannot satisfy
+/// any of it, and each anchor is the needle that file's own guards already use
+/// for that control.
+@Test func theScopeNoteIsRenderedUnconditionallyUnderBothPowerControls() throws {
+    // Named bug this catches: the note added to the file, disabled behind a
+    // condition, or filed under the lid-closed paragraph as a third sentence
+    // about the mode rather than as a statement about the two sliders.
+    let prefs = try surfaceCode(named: "PreferencesView.swift")
+
+    let anchorDepth = try #require(braceDepth(atFirst: "Text(\"Power\")", in: prefs), """
+        PreferencesView.swift no longer contains Text("Power"), so this guard \
+        has no unconditional neighbour to compare against and measured nothing.
+        """)
+    let noteDepth = try #require(braceDepth(atFirst: "powerScopeNote", in: prefs), """
+        PreferencesView.swift names powerScopeNote nowhere in code, so the \
+        window never tells the user which holds the battery floor governs — \
+        which is issue #73 with a string added to the model and nothing shown.
+        """)
+    // EQUAL, not `<=`. The note is a direct child of the same `VStack` the two
+    // headings sit in, so any brace between it and `Text("Power")` is a
+    // condition or a closure the heading is not inside.
+    #expect(noteDepth == anchorDepth, """
+        PreferencesView.swift renders the scope note at brace depth \(noteDepth) \
+        while the unconditional Text("Power") sits at \(anchorDepth). The \
+        sentence is inside something the heading is not — an `if`, a `switch`, a \
+        closure — so it is in the file and the user may never see it.
+        """)
+
+    // Each anchor is the needle the control's own guard uses:
+    // `BatteryFloor.permitted` and `LidClosedHold.permitted` are how
+    // `everyMovedControlIsRenderedAsUnconditionallyAsTheHeadingsAboveIt` finds
+    // the two sliders, and `lidClosedSummary` is the paragraph that prints the
+    // root command the note points at with the words "the root command below".
+    let floorSlider = try #require(prefs.range(of: "BatteryFloor.permitted"),
+                                   "the Battery floor slider is gone from the window")
+    let holdSlider = try #require(prefs.range(of: "LidClosedHold.permitted"),
+                                  "the Lid-closed hold slider is gone from the window")
+    let note = try #require(prefs.range(of: "powerScopeNote"))
+    let command = try #require(prefs.range(of: "lidClosedSummary"),
+                               "the paragraph carrying the root command is gone from the window")
+
+    #expect(floorSlider.upperBound < note.lowerBound, """
+        the scope note is rendered ABOVE the Battery floor slider, so the \
+        sentence that says what that slider governs arrives before the reader \
+        has met it.
+        """)
+    #expect(holdSlider.upperBound < note.lowerBound, """
+        the scope note is rendered between the Battery floor slider and the \
+        Lid-closed hold slider. PreferencesView.swift's own rule is that a \
+        paragraph above a slider reads as instructions for that slider, so a \
+        note placed here scopes the lid-closed control instead of both — the \
+        #74 confusion it was added to remove.
+        """)
+    #expect(note.upperBound < command.lowerBound, """
+        the scope note is rendered below the lid-closed paragraph, so it says \
+        "the root command below" with the command already above it.
+        """)
+}

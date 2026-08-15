@@ -822,6 +822,66 @@ public final class ServingModel {
         + "runs as you — so run \(lidClosedReportCommand) to find out."
     }
 
+    /// Which holds the two Power controls actually govern (issue #73).
+    ///
+    /// **The defect is a promise, not a floor.** The battery slider sits in a
+    /// window that reads as the product's settings, so it reads as governing
+    /// every hold coffee-bar is involved in. It does not govern the lid-closed
+    /// one at all: `main.swift` builds `WatchdogService` with no `policy:`
+    /// argument, that default is `WatchdogPolicy.default`, and its floor is the
+    /// compiled-in `BatteryFloor.default`. Drag the slider to 50% and an armed
+    /// hold still ends at 15%, with nothing on any surface saying so.
+    ///
+    /// **Plumbing the setting through is the other repair and it is refused.**
+    /// SECURITY.md defers it in as many words — "a root process reading an
+    /// unprivileged user's preferences is a new data flow into a privileged
+    /// process, and it deserves its own review before it exists rather than
+    /// after" — and #74 re-confirmed the same refusal for the hold length. So
+    /// the gap stays and stops being undiscoverable, which is the only half of
+    /// it this layer may close.
+    ///
+    /// **BOTH controls, and #74 is why that is not padding.** The window now
+    /// shows "Battery floor" immediately above a slider labelled "Lid-closed
+    /// hold". A reader takes those as one group governing one feature, so a
+    /// note scoping only the first, under a heading naming the second, reads as
+    /// confirming the misreading rather than correcting it. The second sentence
+    /// therefore states the route the chosen hold DOES take — an argument the
+    /// user types — beside the setting that takes no route at all.
+    ///
+    /// **The number is DERIVED, and that is the whole durability of this.** A
+    /// literal `15%` here is correct on the day it is written and becomes a
+    /// false claim the moment `BatteryFloor.default` moves, in the one
+    /// paragraph whose entire job is to say what the daemon really does.
+    /// `WatchdogPolicy.default.batteryFloorPercent` is the value the shipped
+    /// probe runs under, reached through the same symbol it reaches it through.
+    /// `theScopeNoteNamesTheFloorTheLidClosedDaemonActuallyEnforces` goes red on
+    /// a literal that has drifted, and it derives its own expectation by running
+    /// `decide` rather than by reading this expression back.
+    ///
+    /// `ProbeVerb.ttlFlag` and never a literal `--ttl`, for the reason
+    /// `lidClosedCommand(holdingFor:)` above gives: a flag renamed on one side
+    /// leaves this describing a route the binary no longer offers.
+    ///
+    /// A STATIC, unlike `floorReadout`, and the isolation is the guarantee. This
+    /// sentence describes a process that reads no preference of the user's, so
+    /// it must not vary with one — as a static there is no instance for it to
+    /// read a setting from, which makes the substitution
+    /// `theScopeNoteDescribesTheDaemonWhileTheReadoutDescribesTheUser` refuses
+    /// unwritable rather than merely refused.
+    ///
+    /// Composed here rather than in the window, for the reason every other
+    /// sentence in this file is: M1 design §5.4 forbids asserting on rendered
+    /// AppKit text, so a paragraph written in `PreferencesView.swift` is a
+    /// paragraph no check reads — and an unread paragraph is precisely how this
+    /// window came to promise a scope nobody had checked.
+    nonisolated static let powerScopeNote =
+        "The battery floor governs the holds coffee-bar runs itself, and only "
+        + "those. A lid-closed hold is armed by the root command below, which "
+        + "never reads your preferences: on battery it ends at coffee-bar's "
+        + "built-in floor of \(WatchdogPolicy.default.batteryFloorPercent)% "
+        + "whatever you set here, and the hold you chose reaches it only as the "
+        + "\(ProbeVerb.ttlFlag) in that command."
+
     /// The one line the panel shows about the battery floor, or `nil` for no
     /// line.
     ///
