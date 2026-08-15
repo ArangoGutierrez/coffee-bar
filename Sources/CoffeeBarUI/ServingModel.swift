@@ -675,6 +675,41 @@ public final class ServingModel {
     nonisolated public static let lidClosedCommand =
         "sudo \(shellQuoted(privilegedProbePath)) \(ProbeVerb.arm.rawValue)"
 
+    /// The same command, carrying the hold the user chose (issue #74).
+    ///
+    /// **This function IS the channel the setting travels down.** The value a
+    /// user picks in Preferences reaches the root daemon by being typed into a
+    /// shell as part of this string, and by no other route: coffee-bar never
+    /// elevates its own privilege, and a root process reading an unprivileged
+    /// user's preference file is a new data flow SECURITY.md declines to create
+    /// until it has had its own review. So the window prints, and the user runs.
+    ///
+    /// Built ON `lidClosedCommand` rather than beside it, so `sudo`, the path
+    /// and the verb have one spelling. A second composition here would drift
+    /// from the bare command that `site/docs.html` prints and that
+    /// `theLidClosedCommandNamesAVerbTheBinaryAcceptsAndItIsArm` reads.
+    ///
+    /// `ProbeVerb.ttlFlag` and never a literal `--ttl`. `parse()` in
+    /// `main.swift` ignores unknown flags by design, so a flag renamed on one
+    /// side leaves this printing a command that succeeds, reports success, and
+    /// arms the default hold instead of the chosen one — silent in both
+    /// directions. `theTTLFlagThePrintedCommandUsesIsTheOneTheBinaryParses`
+    /// reads the constant out of both sides.
+    ///
+    /// **UNCONDITIONAL, even when the hold equals the default.** Omitting the
+    /// flag for the default would be shorter and is the wrong trade: the window
+    /// shows a number beside a slider and then a command, and a command that
+    /// sometimes carries that number and sometimes does not is one the user has
+    /// to reason about before pasting. Always stating it also removes the branch
+    /// that could state it wrongly.
+    ///
+    /// The caller passes `holdInForce`, never the raw setting. Bounding lives
+    /// there; this composes a string and bounds nothing, which is the same split
+    /// `floorReadout` keeps.
+    nonisolated public static func lidClosedCommand(holdingFor seconds: Int) -> String {
+        "\(lidClosedCommand) \(ProbeVerb.ttlFlag) \(seconds)"
+    }
+
     /// The command that prints what is currently armed.
     ///
     /// `report` is a root verb for a reason worth repeating here: the journal
@@ -768,11 +803,21 @@ public final class ServingModel {
     /// yet, which is the same failure as #75 with a different error message.
     /// `theLidClosedSummaryIsTheShortVersionAndNotTheMovedParagraph` bounds the
     /// count, and `site/docs.html` carries the version with the reasoning in it.
-    nonisolated public static func lidClosedSummary(probeAt path: String) -> String {
+    /// **`holdingFor` HAS NO DEFAULT, deliberately, and issue #74 is why.** The
+    /// hold is now a setting, and this sentence prints the command that carries
+    /// it. A default here would let a caller render the paragraph without ever
+    /// deciding which hold it describes — and the failure is silent and exactly
+    /// wrong: the window would show a slider reading 12 hours above a sentence
+    /// promising 8, printing a command that arms 8. The one production caller,
+    /// `PreferencesView`, passes `model.holdInForce`, which is the bounded
+    /// value. `WatchdogService`'s `environment` parameter is required for the
+    /// same reason and records what the omission cost there.
+    nonisolated public static func lidClosedSummary(probeAt path: String,
+                                                    holdingFor seconds: Int) -> String {
         "Lid-closed mode needs root, so you install the probe where root can "
         + "trust it with \(lidClosedInstallCommand(probeAt: path)) and arm it "
-        + "yourself with \(lidClosedCommand), which holds for "
-        + "\(ProbeVerb.defaultTTLSeconds / 60) minutes. coffee-bar cannot show "
+        + "yourself with \(lidClosedCommand(holdingFor: seconds)), which holds "
+        + "for \(holdLabel(for: seconds)). coffee-bar cannot show "
         + "you whether it is armed — the journal belongs to root and this app "
         + "runs as you — so run \(lidClosedReportCommand) to find out."
     }
@@ -1099,6 +1144,18 @@ public final class ServingModel {
         // first touch of the control heals it.
         self.batteryFloorPercentStorage =
             settings.integer(forKey: SettingsKey.batteryFloorPercent) ?? BatteryFloor.default
+        // Read once, here, for the reason above, and the `??` is load-bearing in
+        // a way the floor's is not. `UserDefaults.integer(forKey:)` answers 0
+        // for a key nobody wrote; 0 seconds becomes `--ttl 0`, a hold that has
+        // expired before the watchdog's first tick. Every user who has never
+        // opened Preferences would find lid-closed mode does nothing at all,
+        // with nothing to read anywhere that says why.
+        //
+        // NOT bounded here, for the reason the floor above is not: `holdInForce`
+        // is the one place that happens, and a second application of the rule on
+        // this line is the drift the invariant forbids.
+        self.lidClosedHoldSecondsStorage =
+            settings.integer(forKey: SettingsKey.lidClosedHoldSeconds) ?? ProbeVerb.defaultTTLSeconds
         // Read once, here, for the reason above. `?? false` is the product's
         // default and is the second of the two opt-ins issue #14 requires: a
         // key nobody wrote reads as `nil` here, never as `true`, so coffee-bar
@@ -1259,6 +1316,108 @@ public final class ServingModel {
     /// The backing store for `batteryFloorPercent`, seeded from the settings in
     /// `init`. Private, for the reason `holdDisplayAwakeStorage` is.
     private var batteryFloorPercentStorage: Int
+
+    /// Bound to the Preferences window's lid-closed hold slider. How long the
+    /// user wants `arm` to hold the machine (issue #74).
+    ///
+    /// **It reports what the user STORED, unbounded**, exactly as
+    /// `batteryFloorPercent` above does and for the same reason: this project
+    /// does not silently rewrite a preference somebody set. What the window
+    /// ACTS on is `holdInForce` below, which is the bounded one, and the two
+    /// differ only for a hold hand-written outside the permitted range with
+    /// `defaults write`.
+    ///
+    /// The setter writes through to the store on every change. A setter that
+    /// updated only the property would keep every in-session assertion green —
+    /// the getter reads what it just wrote — while the choice vanished at the
+    /// next launch. `draggingTheHoldSliderSurvivesARelaunch` drives two models
+    /// over one store, which is what a relaunch is.
+    ///
+    /// **No `refresh()`, unlike the floor setter.** That one reconciles because
+    /// raising the floor on a low battery is a request for the hold to stop NOW.
+    /// This changes nothing coffee-bar is currently doing: it changes the text
+    /// of a command the user has not run yet, on a mode this process cannot
+    /// arm, observe or revert. There is nothing to reconcile.
+    public var lidClosedHoldSeconds: Int {
+        get { lidClosedHoldSecondsStorage }
+        set {
+            lidClosedHoldSecondsStorage = newValue
+            settings.setInteger(newValue, forKey: SettingsKey.lidClosedHoldSeconds)
+        }
+    }
+
+    /// The backing store for `lidClosedHoldSeconds`, seeded from the settings in
+    /// `init`. Private, for the reason `holdDisplayAwakeStorage` is.
+    private var lidClosedHoldSecondsStorage: Int
+
+    /// The hold the window ACTS on — bounded, and the single place that happens.
+    ///
+    /// **Issue #68's defect, refused in advance for the second numeric setting.**
+    /// There the stored floor was unbounded, the slider was built over the
+    /// permitted range, and the decision bounded somewhere else: three numbers
+    /// for one setting in one window, with the readout naming the wrong one.
+    /// Here the readout and the printed command both read THIS property, so
+    /// they cannot disagree with each other whatever is in the preferences file.
+    ///
+    /// The stakes are higher than a mislabelled slider. This number is
+    /// interpolated into a string the user pastes into a ROOT shell, and
+    /// `defaults write … -int -3600` is one command away — `--ttl -3600` in a
+    /// sudo command is a product telling its user something has gone wrong
+    /// without saying what.
+    ///
+    /// It BOUNDS rather than clamps-and-stores, so `lidClosedHoldSeconds` still
+    /// reports the user's own value and a hold typed outside the range is
+    /// reported back inside it rather than overwritten.
+    public var holdInForce: Int {
+        LidClosedHold.bounded(lidClosedHoldSecondsStorage)
+    }
+
+    /// What the hold control's readout SAYS, ready to render.
+    ///
+    /// A finished STRING rather than an `Int`, following `floorReadout`: the
+    /// view is then left no number to pick the wrong one of, which is precisely
+    /// the defect issue #68 shipped when a call site handed the formatter the
+    /// stored setting instead of the bounded one.
+    ///
+    /// HOURS AND MINUTES, not raw seconds. The stored unit is seconds because
+    /// that is what `--ttl` takes, and "28800" beside a slider is a number a
+    /// reader has to do arithmetic on before it means anything. Singular and
+    /// plural are both spelled because "1 hours" beside a settings control reads
+    /// as a bug in the product.
+    ///
+    /// It reads `holdInForce`, never the storage. `theFloorReadoutNamesTheDefault…`
+    /// records what the equivalent mistake cost on the floor, and
+    /// `aHoldOutsideThePermittedRangeIsReadOutBoundedAndPrintedBounded` goes red
+    /// on this one.
+    public var holdReadout: String {
+        Self.holdLabel(for: holdInForce)
+    }
+
+    /// `seconds` as a phrase a person reads.
+    ///
+    /// `static` and taking its number as a parameter, for the reason
+    /// `floorLabel(for:)` is: it FORMATS a duration and chooses none. Which
+    /// duration the readout shows is `holdReadout`'s business, and a formatter
+    /// that picked its own number would be a second place the hold is decided.
+    ///
+    /// Whole minutes, because `LidClosedHold.step` is half an hour and every
+    /// position the control can take is a whole number of them. A hold with
+    /// seconds in it can only arrive from `defaults write`, and it is bounded
+    /// before it reaches here; the remainder is dropped rather than rendered,
+    /// because "8 hours 0 minutes 30 seconds" answers a question nobody asked
+    /// of a settings window.
+    nonisolated static func holdLabel(for seconds: Int) -> String {
+        let hours = seconds / 3600
+        let minutes = (seconds % 3600) / 60
+        var parts: [String] = []
+        if hours > 0 { parts.append("\(hours) hour" + (hours == 1 ? "" : "s")) }
+        if minutes > 0 { parts.append("\(minutes) minute" + (minutes == 1 ? "" : "s")) }
+        // Only reachable for a sub-minute hold, which `LidClosedHold.bounded`
+        // rules out on every path that reaches this. Spelled anyway: a readout
+        // that renders as the empty string is a control with a blank beside it
+        // and no way to tell that from a layout fault.
+        return parts.isEmpty ? "\(seconds) seconds" : parts.joined(separator: " ")
+    }
 
     /// Bound to the panel's fourth control. Whether coffee-bar puts the
     /// processes the user named into darwin background state while an agent

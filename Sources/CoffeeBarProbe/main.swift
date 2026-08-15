@@ -46,7 +46,11 @@ private func parse(_ arguments: [String]) -> Invocation {
         switch argument {
         case "--json":
             invocation.wantsJSON = true
-        case "--ttl":
+        // The SYMBOL, never the literal it used to be. `ServingModel` prints
+        // this same flag into the command the Preferences window hands the
+        // user, and `parse()` ignores unknown flags — so two spellings do not
+        // error, they silently discard the hold the user chose (#74).
+        case ProbeVerb.ttlFlag:
             index += 1
             if index < arguments.endIndex, let seconds = Int(arguments[index]) {
                 invocation.ttlSeconds = seconds

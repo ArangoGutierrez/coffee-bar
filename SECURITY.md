@@ -242,8 +242,8 @@ policy:
   taken from an argument. Accepting one turned `sudo coffee-bar-probe arm` into
   a one-line root persistence primitive, measured, and the shipped interface
   cannot express it at all.
-- Every state-mutating verb takes a TTL. `ProbeVerb.defaultTTLSeconds` gives 30
-  minutes when you name none, and `JournalRecord.maxTTLSeconds` caps it at 8
+- Every state-mutating verb takes a TTL. `ProbeVerb.defaultTTLSeconds` gives 8
+  hours when you name none, and `JournalRecord.maxTTLSeconds` caps it at 24
   hours however much you ask for. A root process still holding a setting after
   whatever armed it has gone is the failure the watchdog exists to prevent.
 - **That cap is counted in elapsed time, not on the clock you can set.** The
@@ -269,21 +269,41 @@ policy:
   behind is refused rather than judged against a reference it never recorded.
 - Supervision is **TTL-only**. There is no heartbeat channel, because there is
   no channel at all. Nothing cuts a hold short when the work finishes early, so
-  the 30-minute default is deliberately the worst case rather than the cap.
+  the hold you ask for is what a machine you have walked away from will spend —
+  8 hours if you named no `--ttl`.
 - The daemon uses the built-in battery floor of 15% and **does not read your
   `batteryFloorPercent` setting**. A root process reading an unprivileged user's
   preferences is a new data flow into a privileged process, and it deserves its
   own review before it exists rather than after.
-- **This TTL model is scheduled to change (#74).** The intended default is a hold
-  that ends at the battery floor while on battery and continues indefinitely on
-  AC. Two things must move together when it does. The battery-floor check in
-  `WatchdogDecision.decide` is guarded by `inputs.onBattery`, so it cannot end an
-  AC-powered hold at all. And `LidClosedSession`'s `lastHeartbeat ?? now`
-  substitution is justified in place by the TTL being tested first, so removing
-  the TTL removes that justification with it. Until both are answered, an
-  AC-powered hold has only a thermal abort or a reboot left to end it. The
-  hazardous case — a closed machine in a bag — runs on battery, where the floor
-  still applies.
+- **What ends a hold, stated rather than implied (#74).** On battery it is the
+  floor above. That check is guarded by `inputs.onBattery` and sits at rung 5 of
+  `WatchdogDecision.decide`, one rung ABOVE the TTL, so it ends a hold whatever
+  the TTL says — the hazardous case, a closed machine in a bag, runs on battery
+  and is bounded by charge rather than by time. On AC it is the TTL, and
+  nothing else in the ordinary course; a thermal abort and a reboot remain.
+  This section used to say the model was *scheduled* to change, toward a hold
+  that continued indefinitely on AC. It does not do that. An unbounded hold on
+  a privileged process is a bound this document could not state, so the hold
+  stays bounded and the bound became yours to choose: the Preferences window
+  offers any length up to `JournalRecord.maxTTLSeconds`, which is 24 hours.
+- **The length you choose never reaches this process.** coffee-bar renders it
+  into the `--ttl` of the command it prints and you run that command yourself,
+  so the value arrives as an argument you typed rather than as a preferences
+  file a root daemon went looking for. That is the same refusal the bullet above
+  makes for `batteryFloorPercent`, and the reason it costs nothing here is that
+  arming is already a thing you do by hand.
+- **The heartbeat rung cannot fire on the daemon path, by construction.**
+  `decide()` reverts with `.heartbeatLost` when it is handed no heartbeat, which
+  is right when a channel exists and has gone quiet. There is no channel here,
+  so `LidClosedSession` substitutes the current time — and that substitution can
+  only ever make the rung PASS, which means it never ends a hold on this path.
+  It is kept rather than deleted because `decide()` is not daemon-only and
+  because the TTL is tested BEFORE it: no heartbeat, absent, substituted or
+  forged, buys a second past the TTL. Raising the ceiling to 24 hours does not
+  weaken that ordering — it is the same ladder, one rung longer.
+  `aForgedFutureHeartbeatCannotOutliveTheTTL` pins the ordering and
+  `anACHoldRunsTheWholeConfiguredCapAndOnlyTheCapEndsIt` pins that the rung
+  stays inert across the whole of that ceiling with no heartbeat anywhere.
 - **A thermal or battery abort restores the setting you had, not a safe one.**
   The revert writes the journal's recorded `priorValue`, which is deliberate:
   the daemon undoes what it did and never overrides a choice it did not make.
