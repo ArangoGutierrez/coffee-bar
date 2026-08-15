@@ -2288,8 +2288,8 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
                              "the app layer no longer compiles a PanelView.swift")
     let code = swiftCodeWithoutComments(try String(contentsOf: panel, encoding: .utf8))
 
-    #expect(code.contains("SettingsLink"), """
-        PanelView.swift offers no SettingsLink, so the panel has no route to the \
+    #expect(code.contains("openSettings("), """
+        PanelView.swift calls no openSettings(, so the panel has no route to the \
         Preferences window. The scene can be declared and the view built with \
         every check green while the only affordance the product ships is gone.
         """)
@@ -2299,8 +2299,23 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // for this window has changed spelling across macOS releases, so
     // `NSApp.sendAction(Selector(("showSettingsWindow:")))` is a string that
     // always builds and sometimes works — a silent failure on exactly the
-    // machines the maintainer is not sitting at. `SettingsLink` is the typed
-    // equivalent and needs macOS 14, which is already this package's target.
+    // machines the maintainer is not sitting at. `@Environment(\.openSettings)`
+    // is the typed equivalent and needs macOS 14, which is already this
+    // package's target.
+    //
+    // IT USED TO BE `SettingsLink`, and this guard named it until issue #63.
+    // Both are typed and both open the same window; the difference is that a
+    // link is not a closure, so nothing can run on the click. The #50 fix
+    // therefore had to live on the Settings scene's `onAppear`, which fires when
+    // the window is CREATED — and clicking Preferences with the window already
+    // open re-presents it, so the app never came forward. Measured at 54f0058:
+    // `before = [coffee-bar Settings] -> after = Finder`. The route is now a
+    // `Button` whose action runs on every click.
+    //
+    // This is still a PRESENCE tripwire and deliberately no more: it says the
+    // panel names the route in code. What that action must actually DO —
+    // dismiss the panel, take the foreground, and in that order — is held by
+    // `PanelView_test.swift`, which reads the action block itself.
     //
     // THE COMMENT STRIPPING IS LOAD-BEARING HERE, NOT STYLISTIC. Read this
     // before changing `swiftCodeWithoutComments` out of the line above.

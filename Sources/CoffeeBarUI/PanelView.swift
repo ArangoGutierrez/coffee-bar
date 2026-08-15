@@ -35,6 +35,18 @@ public struct PanelView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
+    // The typed way to raise the Settings scene, and the reason the Preferences
+    // control below is a `Button` rather than a `SettingsLink`. Both open the
+    // same window; only this one lets code run on the SAME click, which is the
+    // whole of issue #63. macOS 14, already this package's deployment target.
+    @Environment(\.openSettings) private var openSettings
+
+    // Dismisses the panel this view is rendered in. `MenuBarExtra(.window)`
+    // presents it, so the request goes through the Environment rather than to
+    // the `NSWindow` behind SwiftUI's back — see the Preferences action below,
+    // where two window-level spellings were built and rejected.
+    @Environment(\.dismiss) private var dismiss
+
     private func brand(_ role: ColorRole) -> Color {
         BrandPalette.color(role, scheme: colorScheme, contrast: colorSchemeContrast)
     }
@@ -361,19 +373,57 @@ public struct PanelView: View {
             // because swapping the stripped read for a raw one turns the guard
             // RED instead of quietly widening it.
             //
-            // `SettingsLink` rather than a `Button` that sends an action:
-            // AppKit's selector for this has changed spelling across releases,
-            // so `NSApp.sendAction(Selector(("showSettingsWindow:")))` is a
-            // string that compiles on every OS and works on some. This is the
-            // typed equivalent, and it needs macOS 14 — which is already this
-            // package's deployment target.
+            // A `Button` calling `openSettings()`, and neither of the two
+            // spellings this file used before. AppKit's selector has changed
+            // across releases, so
+            // `NSApp.sendAction(Selector(("showSettingsWindow:")))` is a string
+            // that compiles on every OS and works on some;
+            // `@Environment(\.openSettings)` is the typed equivalent and needs
+            // macOS 14, already this package's deployment target.
             //
-            // `SettingsLink` OPENS the window and does not ACTIVATE the app,
-            // and for an `LSUIElement` process those are different things —
-            // measured, see `PreferencesView.swift`, which is where the fix
-            // lives. NOTHING may be hung off this link to do it: a
-            // `simultaneousGesture` attached here was measured never to fire.
-            SettingsLink {
+            // `SettingsLink` WAS here and is the tidier spelling. It was
+            // replaced because a link is not a closure, and issue #63 needs code
+            // to run on the click. OPENING the window and ACTIVATING the app are
+            // different things for an `LSUIElement` process, and nothing could
+            // be hung off the link to do the second: a `simultaneousGesture`
+            // attached to `SettingsLink` was measured never to fire.
+            //
+            // So #50 put the activation on `PreferencesView.onAppear` instead,
+            // which fires when the window is CREATED. Measured at 54f0058 with
+            // the window already open, clicking Preferences a second time:
+            //     before = [coffee-bar Settings]  ->  after = Finder
+            // The window came forward and the app did not — issue #63. Doing it
+            // HERE does it on every click, so re-presenting an existing window
+            // activates exactly like creating one.
+            //
+            // The dismissal is the same click's job and lives here for the same
+            // reason: the panel drew over the window it had just opened, and
+            // there is no other moment that knows both that a click happened and
+            // that the panel is still up.
+            Button {
+                // `dismiss()` and NOT a close on the window, and the two
+                // rejected spellings are recorded because both LOOK right and
+                // both reach past SwiftUI to the window it is managing:
+                // `NSApp.keyWindow?.close()` and `NSApp.keyWindow?.orderOut(nil)`
+                // were each built and measured. Both dismiss the panel, so both
+                // pass the criterion on a single run; neither tells SwiftUI, and
+                // `MenuBarExtra` owns this window's presentation. `close()` in
+                // particular can release the window a `MenuBarExtra` intends to
+                // present again. `dismiss()` is the same request made through the
+                // Environment, which is what the panel is presented by.
+                dismiss()
+
+                // Policy, then window, then foreground, and the ORDER is the
+                // fix. macOS 14 made activation cooperative, so an `.accessory`
+                // app asking for the foreground is declined — the policy change
+                // is what makes the ask legal. `PreferencesView` does the same
+                // pair in `.onAppear`, which fires only when the window is
+                // CREATED; measured, a second click on an existing window left
+                // Finder frontmost. Running it HERE runs it on every click.
+                NSApp.setActivationPolicy(.regular)
+                openSettings()
+                NSApp.activate(ignoringOtherApps: true)
+            } label: {
                 Text("Preferences…")
             }
 
