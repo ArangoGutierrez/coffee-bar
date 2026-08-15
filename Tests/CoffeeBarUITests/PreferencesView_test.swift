@@ -369,6 +369,15 @@ private let versionSurfaces = [(file: "PanelView.swift", type: "PanelView"),
     let allowedNesting = [
         (needle: "$model.holdDisplayAwake", braces: 0, control: "the Display picker", enclosing: "nothing"),
         (needle: "Slider(", braces: 1, control: "the Battery floor slider", enclosing: "its HStack row"),
+        // Issue #74's control, and its needle is the POLICY rather than
+        // `Slider(` because `braceDepth(atFirst:)` takes the first match and the
+        // battery floor's slider is spelled first. `LidClosedHold.permitted`
+        // sits in the `in:` argument, which is one brace — the `HStack` row —
+        // below the heading, exactly where the floor's `Slider(` sits. A
+        // `if false { Slider(… in: LidClosedHold.permitted …) }` in the VStack
+        // lands one brace deeper and turns this red.
+        (needle: "LidClosedHold.permitted", braces: 1, control: "the Lid-closed hold slider",
+         enclosing: "its HStack row"),
         (needle: "$model.quietEverythingElse", braces: 0, control: "the Quiet everything else toggle", enclosing: "nothing"),
         // Issue #51's control, and the two braces are its row rather than a
         // condition: the `ForEach` closure over `AgentTool.allCases`, then the
