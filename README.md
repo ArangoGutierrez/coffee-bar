@@ -34,6 +34,10 @@ exist; it reads session state from agent hooks and from nothing else.
 
 - Under `Auto`, holds `PreventUserIdleSystemSleep`, bound to live agent session
   state.
+- Asks macOS for `NetworkClientActive` alongside it, so a held Mac is not left
+  awake with its network clients dropped. **Awake but unreachable is the failure
+  this exists to prevent.** It is a request and not a promise: macOS may decline
+  it on battery or under thermal pressure.
 - **Holds no display assertion by default.** Your screen sleeps normally while
   the work continues. A Display control in the Preferences window opts in when
   you do want the screen kept on.

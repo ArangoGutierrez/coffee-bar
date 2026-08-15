@@ -66,6 +66,23 @@ struct AssertionHolderTests {
         liveAssertionTypes().filter { $0 == type }.count
     }
 
+    /// Every assertion this process owns of one TYPE, with its properties.
+    ///
+    /// `liveAssertions(named:)` filters by name and so cannot answer "what is
+    /// this assertion CALLED", which is the question the network checks below
+    /// ask: they read the name back off the assertion IOKit actually recorded
+    /// rather than off a constant the implementation also uses.
+    private func liveAssertions(ofType type: String) -> [[String: Any]] {
+        var unmanaged: Unmanaged<CFDictionary>?
+        guard IOPMCopyAssertionsByProcess(&unmanaged) == kIOReturnSuccess,
+            let byProcess = unmanaged?.takeRetainedValue() as? [NSNumber: [[String: Any]]]
+        else {
+            return []
+        }
+        let pid = NSNumber(value: ProcessInfo.processInfo.processIdentifier)
+        return (byProcess[pid] ?? []).filter { $0["AssertType"] as? String == type }
+    }
+
     /// The type string `pmset -g assertions` prints for the display hold.
     ///
     /// The documented literal, spelled out rather than taken from
@@ -74,6 +91,18 @@ struct AssertionHolderTests {
     /// raised the wrong type under the right constant would satisfy a check
     /// written against that constant.
     private let displayType = "PreventUserIdleDisplaySleep"
+
+    /// The type string `pmset -g assertions` prints for the network hold.
+    ///
+    /// Spelled out for the same reason `displayType` is, and here the reason is
+    /// sharper. Apple's header is INCONSISTENT: the sleep assertions are
+    /// `kIOPMAssertionTypePreventUserIdleSystemSleep`, but this one is
+    /// `kIOPMAssertNetworkClientActive` — `Assert`, no `ionType`. A check
+    /// written against the constant would therefore be a check against whichever
+    /// spelling the implementation happened to compile, which is precisely the
+    /// thing in doubt. `"NetworkClientActive"` is the value IOKit records and
+    /// `pmset` prints, and it is what this file asserts on.
+    private let networkType = "NetworkClientActive"
 
     // MARK: - Naming
 
@@ -360,5 +389,152 @@ struct AssertionHolderTests {
         // strictly worse than the stranded system assertion this mirrors: it
         // burns the battery visibly and the panel reports nothing held.
         #expect(liveCount(ofType: displayType) == 0)
+    }
+
+    // MARK: - The network assertion (issue #60)
+    //
+    // `PreventUserIdleSystemSleep` keeps the CPU running; it does not keep the
+    // machine answering. A Mac holding only that assertion can still drop its
+    // network clients, and an agent reached over SSH or a forwarded port is then
+    // being served by a machine that is awake and unreachable — awake for
+    // nobody. `NetworkClientActive` is the documented assertion for "this
+    // machine is serving remote clients", and coffee-bar's whole claim is that
+    // it is serving.
+    //
+    // What these checks CAN prove is the lifecycle: that the holder takes the
+    // assertion, takes exactly one, keeps it for as long as the machine is held
+    // whatever the display setting says, and strands none. What no unit test can
+    // prove is the ROUTE — that a packet actually arrives. Apple documents this
+    // assertion as a suggestion the system may decline under battery or thermal
+    // pressure, so the runtime half is proved separately with `pmset -g
+    // assertions` against the built app, and the lid-shut-on-battery round trip
+    // needs a second host and is not proved here at all.
+
+    @Test func acquireRaisesTheNetworkAssertionBesideTheSystemOne() {
+        let holder = AssertionHolder()
+        defer { holder.release() }
+
+        #expect(liveCount(ofType: networkType) == 0)
+
+        #expect(holder.acquire(displaySleep: false) == true)
+
+        let types = liveAssertionTypes()
+
+        // BOTH, and the system one is not optional. Named bug this catches: a
+        // holder that raises the network assertion INSTEAD of the sleep one,
+        // which would leave the machine reachable right up until it idles out
+        // from under the agent — the defect this product exists to prevent,
+        // reintroduced by the fix for a different one.
+        #expect(types.contains("PreventUserIdleSystemSleep"), "live types: \(types)")
+        #expect(types.contains(networkType), "live types: \(types)")
+    }
+
+    @Test func theNetworkAssertionNamesCoffeeBarToPmset() {
+        let holder = AssertionHolder()
+        defer { holder.release() }
+        holder.acquire(displaySleep: false)
+
+        // Read off the assertion IOKit RECORDED, not off a static on the type.
+        // A constant can hold any string; what a user reads in `pmset -g
+        // assertions` is what was actually passed, and those are only the same
+        // thing if the implementation passes the constant it publishes.
+        let names = liveAssertions(ofType: networkType)
+            .compactMap { $0["AssertName"] as? String }
+
+        #expect(names.count == 1, "live network assertions: \(names)")
+
+        // SECURITY.md tells a reader the names are deliberately distinct so a
+        // stranded assertion can be attributed to the code that stranded it.
+        // Named bug this catches: the network assertion raised under
+        // `assertionName`, which prints two identical `pmset` lines and leaves a
+        // user unable to tell which of the two leaked.
+        #expect(names.first?.contains("coffee-bar") == true, "live names: \(names)")
+        #expect(names.first != AssertionHolder.assertionName, "live names: \(names)")
+        #expect(names.first != AssertionHolder.displayAssertionName, "live names: \(names)")
+    }
+
+    @Test func theNetworkAssertionIsHeldWhicheverWayTheDisplaySettingIsSet() {
+        let holder = AssertionHolder()
+        defer { holder.release() }
+
+        // The network hold answers to the MACHINE being held, not to the screen.
+        // Named bug this catches — and it is the likely one, because the display
+        // assertion is the nearest model to copy: the network assertion wired
+        // into the `if displaySleep` branch of `acquire`. Every check that only
+        // ever acquires with the hold ON stays green, and the user who leaves the
+        // display setting off, which is the SHIPPED DEFAULT and so is most users,
+        // silently gets no network assertion at all.
+        holder.acquire(displaySleep: false)
+        #expect(liveCount(ofType: networkType) == 1, "display OFF dropped the network hold")
+
+        holder.acquire(displaySleep: true)
+        #expect(liveCount(ofType: networkType) == 1, "display ON changed the network hold")
+
+        // And back down. `ServingModel.refresh()` calls `acquire` on every tick,
+        // so this is the ordinary path a user walks by unticking the box.
+        holder.acquire(displaySleep: false)
+        #expect(liveCount(ofType: networkType) == 1, "the display downgrade took the network hold with it")
+    }
+
+    @Test func acquiringTwiceLeaksNoSecondNetworkAssertion() {
+        let holder = AssertionHolder()
+        defer { holder.release() }
+
+        holder.acquire(displaySleep: false)
+        holder.acquire(displaySleep: false)
+
+        // `refresh()` runs every 30 seconds and on every hook event, so a holder
+        // that created a fresh assertion each time and overwrote its stored id
+        // would show 2 here and strand one after the single release below —
+        // once per tick, for the life of the process.
+        #expect(liveCount(ofType: networkType) == 1)
+
+        holder.release()
+        #expect(liveCount(ofType: networkType) == 0)
+    }
+
+    @Test func releaseRetiresTheNetworkAssertionToo() {
+        let holder = AssertionHolder()
+
+        holder.acquire(displaySleep: false)
+        #expect(liveCount(ofType: networkType) == 1)
+
+        holder.release()
+
+        // Named bug this catches: a `release()` that retires the two sleep
+        // assertions and forgets the third. The panel then reports nothing held
+        // while this process still tells the system it is serving remote
+        // clients, and nothing but quitting the app will retire it.
+        #expect(holder.isHeld == false)
+        #expect(liveCount(ofType: networkType) == 0)
+    }
+
+    @Test func acquireAfterReleaseRaisesTheNetworkAssertionAgain() {
+        let holder = AssertionHolder()
+        defer { holder.release() }
+
+        holder.acquire(displaySleep: false)
+        holder.release()
+
+        // Named bug this catches: an id cleared on release but a `nil` check
+        // that no longer reaches the create, so the SECOND serving stretch of a
+        // session runs without the network hold. Under `Auto` a machine acquires
+        // and releases many times a day, so all but the first would be silent.
+        #expect(holder.acquire(displaySleep: false) == true)
+        #expect(liveCount(ofType: networkType) == 1)
+    }
+
+    @Test func deinitReleasesAStillHeldNetworkAssertion() {
+        var holder: AssertionHolder? = AssertionHolder()
+        holder?.acquire(displaySleep: false)
+        #expect(liveCount(ofType: networkType) == 1)
+
+        holder = nil
+
+        // A stranded network assertion outlives the object and keeps telling the
+        // system this process is serving remote clients until the process exits,
+        // with nothing left to release it — invisible to the user, because the
+        // panel reports nothing held.
+        #expect(liveCount(ofType: networkType) == 0)
     }
 }

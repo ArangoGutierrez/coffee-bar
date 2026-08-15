@@ -244,11 +244,12 @@ Then confirm the assertion behaves:
 
     pmset -g assertions | grep coffee-bar
 
-While an agent is working you should see `PreventUserIdleSystemSleep` named
-`"coffee-bar is serving"`. With the Display control in the Preferences window on
-its default position you should see **no** display assertion from coffee-bar.
-Move that control to the other position and a second line appears while an agent
-works:
+While an agent is working you should see two lines: `PreventUserIdleSystemSleep`
+named `"coffee-bar is serving"`, and `NetworkClientActive` named
+`"coffee-bar is keeping the network up"`. With the Display control in the
+Preferences window on its default position you should see **no** display
+assertion from coffee-bar. Move that control to the other position and a third
+line appears while an agent works:
 `PreventUserIdleDisplaySleep`, named
 `"coffee-bar is keeping the display awake"`.
 

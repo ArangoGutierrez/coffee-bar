@@ -5,8 +5,30 @@ import Foundation
 import IOKit.pwr_mgt
 
 /// Holds a `PreventUserIdleSystemSleep` power assertion for as long as
-/// coffee-bar is serving, and a `PreventUserIdleDisplaySleep` beside it while
-/// the user has opted in.
+/// coffee-bar is serving, a `NetworkClientActive` beside it for exactly as
+/// long, and a `PreventUserIdleDisplaySleep` as well while the user has opted
+/// in.
+///
+/// ## Why the network assertion is not a setting
+///
+/// `PreventUserIdleSystemSleep` keeps the CPU running; it does not keep the
+/// machine answering. A Mac holding only that assertion may still drop its
+/// network clients, and an agent reached over SSH or a forwarded port is then
+/// being served by a machine that is awake and unreachable — awake for nobody
+/// (issue #60). `NetworkClientActive` is the documented assertion for "this
+/// machine is serving remote clients", and serving is precisely what this type
+/// is asserting.
+///
+/// So it takes no opt-in: it costs the user nothing visible, unlike the screen,
+/// and there is no state in which coffee-bar should hold the machine awake for
+/// an agent while letting it stop answering. It is tied to the SYSTEM
+/// assertion's lifetime and to no setting.
+///
+/// What it does NOT do is prove reachability. Apple documents it as a
+/// suggestion the system may decline under battery or thermal pressure, and it
+/// asks for nothing about the network's state. coffee-bar does not probe: no
+/// file linked into the app may name an address-shaped API, which
+/// `noLinkedTargetCanReachTheNetworkByAddress` enforces.
 ///
 /// ## Why the display assertion is a setting
 ///
@@ -47,6 +69,17 @@ public final class AssertionHolder: @unchecked Sendable {
     /// a duplicate rather than a second thing they turned on.
     public static let displayAssertionName = "coffee-bar is keeping the display awake"
 
+    /// The same again, for the network hold. A THIRD distinct sentence, for the
+    /// reason `SECURITY.md` gives: distinct names are how a stranded assertion
+    /// is attributed to the code that stranded it.
+    ///
+    /// It says what the MACHINE is doing, not what coffee-bar is. "coffee-bar
+    /// is reachable" would have claimed something this assertion does not ask
+    /// for and cannot know — whether anything can actually get here — and a
+    /// user reading it in `pmset -g assertions` would take it as a reachability
+    /// report rather than a hold.
+    public static let networkAssertionName = "coffee-bar is keeping the network up"
+
     private let lock = NSLock()
 
     /// The live system assertion, or `nil` when nothing is held. This doubles
@@ -59,6 +92,15 @@ public final class AssertionHolder: @unchecked Sendable {
     /// lifetimes: the setting can go off while the machine is still held, and a
     /// single id could not release one without releasing both.
     private var displayAssertionID: IOPMAssertionID?
+
+    /// The live network assertion, or `nil` when nothing is held.
+    ///
+    /// A separate id again, though this one shares the SYSTEM assertion's
+    /// lifetime rather than the display assertion's — it is taken and retired
+    /// with the machine hold, and no setting governs it. Kept separate anyway
+    /// because IOKit hands back one id per assertion and only a stored id can
+    /// ever be released.
+    private var networkAssertionID: IOPMAssertionID?
 
     public init() {}
 
@@ -77,8 +119,9 @@ public final class AssertionHolder: @unchecked Sendable {
         return assertionID != nil
     }
 
-    /// Brings IOKit in line with the state asked for: the system assertion
-    /// held, and the display assertion held only while `displaySleep` is true.
+    /// Brings IOKit in line with the state asked for: the system and network
+    /// assertions held, and the display assertion held only while
+    /// `displaySleep` is true.
     ///
     /// RECONCILING and not merely additive. `ServingModel.refresh()` calls this
     /// on every tick and on every hook event, and it never calls `release()`
@@ -94,8 +137,9 @@ public final class AssertionHolder: @unchecked Sendable {
     ///   Never a setting read here — `PowerBroker` already weighed the off
     ///   switch and the battery floor against it.
     /// - Returns: `true` if the MACHINE is held once the call returns. A
-    ///   display assertion IOKit refuses does not make this `false`: the hold
-    ///   this product exists for is up, and `isServing` states that honestly.
+    ///   display or network assertion IOKit refuses does not make this `false`:
+    ///   the hold this product exists for is up, and `isServing` states that
+    ///   honestly.
     @discardableResult
     public func acquire(displaySleep: Bool) -> Bool {
         lock.lock()
@@ -116,6 +160,34 @@ public final class AssertionHolder: @unchecked Sendable {
             assertionID = newID
         }
 
+        // Alongside the machine hold, and governed by no setting: a machine
+        // held awake for an agent someone reaches over SSH is being held for
+        // nothing if it stops answering. Deliberately NOT inside the
+        // `displaySleep` branch below — the screen and the network are
+        // unrelated, and the shipped default has the display hold OFF.
+        //
+        // Its own `nil` check rather than a place inside the block above, so a
+        // create IOKit refused once is retried on the next `refresh()` tick
+        // instead of being lost for the rest of the serving stretch.
+        //
+        // Unreached when the system create failed, because that path returns
+        // above: a machine free to sleep must not advertise itself as serving
+        // remote clients.
+        if networkAssertionID == nil {
+            var newID = IOPMAssertionID(0)
+            let result = IOPMAssertionCreateWithName(
+                kIOPMAssertNetworkClientActive as CFString,
+                IOPMAssertionLevel(kIOPMAssertionLevelOn),
+                Self.networkAssertionName as CFString,
+                &newID)
+            // A refusal here does not make the call `false`, for the same
+            // reason the display assertion's does not: the hold this product
+            // exists for is up. Apple documents this assertion as a suggestion
+            // the system may decline under battery or thermal pressure, so a
+            // refusal is an expected outcome and not a broken hold.
+            if result == kIOReturnSuccess { networkAssertionID = newID }
+        }
+
         if displaySleep {
             if displayAssertionID == nil {
                 var newID = IOPMAssertionID(0)
@@ -133,14 +205,15 @@ public final class AssertionHolder: @unchecked Sendable {
         return true
     }
 
-    /// Retires both assertions. Safe to call when nothing is held, and safe to
-    /// call repeatedly — each id is cleared before its release so a second call
-    /// cannot hand IOKit an already-released id.
+    /// Retires all three assertions. Safe to call when nothing is held, and
+    /// safe to call repeatedly — each id is cleared before its release so a
+    /// second call cannot hand IOKit an already-released id.
     public func release() {
         lock.lock()
         defer { lock.unlock() }
 
         releaseDisplayAssertion()
+        releaseNetworkAssertion()
 
         guard let id = assertionID else { return }
         assertionID = nil
@@ -155,6 +228,21 @@ public final class AssertionHolder: @unchecked Sendable {
     private func releaseDisplayAssertion() {
         guard let id = displayAssertionID else { return }
         displayAssertionID = nil
+        _ = IOPMAssertionRelease(id)
+    }
+
+    /// Retires the network assertion alone.
+    ///
+    /// Call with `lock` HELD, for the reason `releaseDisplayAssertion` states:
+    /// `NSLock` is not recursive and its caller already holds it.
+    ///
+    /// Unlike the display one this has no caller in `acquire`, because no
+    /// setting can turn it off while the machine is still held. It exists so
+    /// `release()` reads as three symmetrical retirements rather than two and
+    /// an inline special case.
+    private func releaseNetworkAssertion() {
+        guard let id = networkAssertionID else { return }
+        networkAssertionID = nil
         _ = IOPMAssertionRelease(id)
     }
 }

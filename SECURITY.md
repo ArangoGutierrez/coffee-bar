@@ -219,9 +219,11 @@ You can see exactly what it holds, at any time, with:
 pmset -g assertions
 ```
 
-The app's assertion is named `coffee-bar is serving`. The capability probe's is
-named `coffee-bar probe baseline`. The names are deliberately distinct so a
-stranded assertion can be attributed to the code that stranded it.
+The app's assertions are named `coffee-bar is serving` and `coffee-bar is
+keeping the network up`, plus `coffee-bar is keeping the display awake` when you
+have opted in to the display hold. The capability probe's is named
+`coffee-bar probe baseline`. The names are deliberately distinct so a stranded
+assertion can be attributed to the code that stranded it.
 
 ### What the privileged path may do, now that M5 has shipped
 
