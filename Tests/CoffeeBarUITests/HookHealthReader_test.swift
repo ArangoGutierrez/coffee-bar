@@ -570,10 +570,19 @@ let pathReachingTokens = [
     // It is also what stops the widening being undone quietly. Delete the label
     // and the Reveal button and this window drops out of the scan; the equality
     // below then goes RED rather than letting a file leave the loop in silence.
+    // `QuickStartView.swift` joined with issue #52, for the first half of the
+    // reason `PreferencesView.swift` is here and NOT the second: it names
+    // `HookHealth.settingsPath(for:)` to label each tool's row, and it
+    // deliberately offers no Reveal button and no Copy button at all. A
+    // first-run page is where "coffee-bar could just write this for you" is most
+    // tempting and least examined — the user has three unwired files in front of
+    // them and no idea what to do next — so the no-write line is held over this
+    // surface from the day it lands rather than after somebody reaches for it.
     #expect(knowsThePath.sorted() == ["HookHealth.swift",
                                       "HookHealthReader.swift",
                                       "HookSnippet.swift",
                                       "PreferencesView.swift",
+                                      "QuickStartView.swift",
                                       "ServingModel.swift",
                                       "TelemetryRecon.swift"],
             "the set of files that can reach the settings path changed: \(knowsThePath.sorted())")

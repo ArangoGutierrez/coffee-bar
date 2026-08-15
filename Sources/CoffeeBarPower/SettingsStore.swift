@@ -108,6 +108,34 @@ public enum SettingsKey {
     /// `theLidClosedHoldKeyStringNeverChangesAndCollidesWithNothing` holds the
     /// string itself and pins it apart from the other four.
     public static let lidClosedHoldSeconds = "lidClosedHoldSeconds"
+
+    /// Whether the user has been shown the quick start (issue #52).
+    ///
+    /// Absent by default, and absent means NOT YET SHOWN. That direction is the
+    /// whole key: it is the only one under which a user who clears their
+    /// preferences gets the questions back rather than being stranded with the
+    /// three answers reset and nothing left to ask them again.
+    ///
+    /// **It is the ONLY thing the quick start records that is not a settings
+    /// answer, and it is the only thing a dismissal writes.** The three
+    /// questions write `holdDisplayAwake`, `batteryFloorPercent` and
+    /// `agentTools` — the keys above, the ones the Settings window already
+    /// writes — because the wizard binds to the same `ServingModel` properties
+    /// that window binds to. There is no second spelling of any answer, which is
+    /// what stops the wizard's copy of a setting reverting at the next launch.
+    ///
+    /// It lives HERE, in the user's preferences, rather than in a marker file
+    /// beside the journal. A record that outlives `defaults delete` is one a
+    /// user cannot reach: they reset every answer and the page that would ask
+    /// them again never appears, with nothing anywhere saying why.
+    /// `clearingThePreferencesBringsTheQuickStartBack` holds that.
+    ///
+    /// A `Bool` and not a version string. "Shown once" is the requirement, and a
+    /// version would make this a key that re-fires on upgrade — a different
+    /// product decision, and one nobody has asked for.
+    /// `theQuickStartCompletionKeyStringNeverChangesAndCollidesWithNothing`
+    /// holds the string itself.
+    public static let quickStartCompleted = "quickStartCompleted"
 }
 
 /// Where a user preference is kept.
