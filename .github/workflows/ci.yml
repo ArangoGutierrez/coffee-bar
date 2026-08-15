@@ -95,6 +95,100 @@ jobs:
             || { echo "CFBundleShortVersionString is '${got}', expected '${COFFEE_BAR_VERSION}'"; exit 1; }
           echo "bundle ok: ${app} reports ${got}"
 
+      # CI MUST NOT SIGN, and this is the step that proves it did not.
+      #
+      # The step above builds the bundle and asks what it CONTAINS. This one
+      # asks what it IS. `#71a` made signing opt-in after an auto-detecting
+      # `sign-bundle.sh` made `brew install coffee-bar` run `codesign --sign
+      # <the installing user's private key>` over a bundle they were merely
+      # installing. That fix lives in a script, and until now nothing read the
+      # result back off a bundle CI actually produced — so a regression would
+      # travel the Homebrew path (`build-app.sh` IS the formula's build path)
+      # with every check on this workflow still green.
+      #
+      # READ OFF THE ARTIFACT, never inferred from an exit code. `build-app.sh`
+      # exits 0 whether it signed or not — that is precisely what opt-in means —
+      # and its closing line prints "unsigned" from a variable it sets itself,
+      # so believing that line would be believing the thing under test.
+      #
+      # `codesign -d` writes its report to STDERR, so the MERGED stream is what
+      # gets captured. Reading stdout alone returns the empty string and every
+      # assertion below would pass vacuously.
+      #
+      # Captured ONCE into a variable and matched with a herestring, never
+      # `codesign … | grep -q`. `grep -q` exits at the first match, `codesign`
+      # then dies of SIGPIPE at status 141, and the pipeline reports failure for
+      # a bundle that was perfectly correct. `sign-bundle.sh` carries the same
+      # measurement, from the same bite.
+      #
+      # Measured 2026-08-15 on a cold worktree with COFFEE_BAR_VERSION=0.0.0-ci
+      # and no SIGN_IDENTITY — the exact environment of the step above:
+      #   Signature=adhoc
+      #   TeamIdentifier=not set
+      #   flags=0x20002(adhoc,linker-signed)
+      # `docs/BUILDING.md` documents that triple, and `SECURITY.md` publishes
+      # the middle line as a promise to everyone who installs from Homebrew.
+      #
+      # THREE assertions, each red for a different regression:
+      #   adhoc       the linker signature is still there at all. A build that
+      #               emitted an unsigned Mach-O reports "not signed at all".
+      #   no team     nothing signed this with a Developer ID. This is the
+      #               literal sentence SECURITY.md publishes.
+      #   no runtime  nobody ran `codesign --sign` here, ad hoc or otherwise.
+      #               The hardened-runtime flag is the discriminator
+      #               `BundleSigning_test.swift` settled on: the linker never
+      #               sets it and every deliberate signature in this repository
+      #               passes `--options runtime`. It is the ONLY one of the
+      #               three that catches `SIGN_IDENTITY: '-'` being added to
+      #               this workflow, because an ad-hoc `codesign` run leaves
+      #               both lines above reading exactly as they do now.
+      #
+      # The flags check asserts the line EXISTS before asserting what it lacks.
+      # A bare "does not contain runtime" is green when the whole report is
+      # empty, which is the vacuous-absence trap `scripts/verify/t2-panel-version.sh`
+      # records: assert presence positively, then discriminate.
+      #
+      # `|| true` ON THE CAPTURE, and it is not sloppiness. `codesign -d` exits
+      # NON-ZERO for a bundle carrying no signature — exactly the regression the
+      # first assertion exists to catch — and `report="$(…)"` takes the exit
+      # status of the substitution, so under the `bash -e` GitHub wraps `run:`
+      # in, the shell died at this line. Measured 2026-08-15 against a bundle
+      # stripped with `codesign --remove-signature`: the step exited 1 having
+      # printed NOTHING, because the explanation was sitting captured in
+      # `${report}` and the `echo` below it never ran. Red for the right reason
+      # and unreadable is still a bad guard.
+      #
+      # EVERY assertion runs, and the failures are COLLECTED rather than exiting
+      # at the first. Measured on the same date with a stand-in `codesign` on
+      # PATH reporting a Developer ID: exiting early meant `Signature=adhoc`
+      # fired and the TeamIdentifier assertion — the one that guards the
+      # sentence SECURITY.md actually publishes — never executed at all. An
+      # assertion that cannot be observed failing is one nobody can trust, so
+      # this collects and reports all of them.
+      - name: Confirm CI did not sign the bundle
+        run: |
+          app="build/CoffeeBar.app"
+          report="$(codesign -dv --verbose=4 "${app}" 2>&1 || true)"
+          echo "${report}"
+
+          fail=0
+          note() { echo "FAIL: $*"; fail=1; }
+
+          grep -q '^Signature=adhoc$' <<<"${report}" \
+            || note "${app} is not ad-hoc signed; SECURITY.md promises Signature=adhoc"
+
+          grep -q '^TeamIdentifier=not set$' <<<"${report}" \
+            || note "${app} does not report TeamIdentifier=not set; a bundle CI built must name no team"
+
+          flags="$(grep -o 'flags=0x[0-9a-f]*([^)]*)' <<<"${report}" | head -1)"
+          case "${flags}" in
+            "")        note "no CodeDirectory flags line in the codesign report; this check cannot run and will not pretend it passed" ;;
+            *runtime*) note "${flags} carries the hardened runtime, so something ran codesign --sign; CI must not sign" ;;
+          esac
+
+          [ "${fail}" -eq 0 ] || exit 1
+          echo "signature ok: ad-hoc, no team, ${flags}"
+
   # A SEPARATE job, on ubuntu, deliberately. The policy bench and the art guards
   # are pure logic with no macOS dependency, and the comment above records that
   # macOS runners bill at 10x. This runs at 1x and in parallel with the Swift
