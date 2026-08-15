@@ -46,6 +46,17 @@ public enum HookSnippet {
     /// cost — `docs/QUICKSTART.md` published this line WITHOUT `-o /dev/null`
     /// while this function emitted it with, and nothing compared the two.
     ///
+    /// **That guard holds the two sides to EACH OTHER, not to a behaviour.** It
+    /// catches the page and this function drifting apart, which is the whole of
+    /// issue #67; an edit taking `-o /dev/null` off both at once passes it. No
+    /// executing test covers the gap either, and that is measured rather than
+    /// assumed: every answer `POST /event` gives — 204, 400, 413 alike — carries
+    /// a zero-length body by design (`everyAnswerTheEventPathGivesCarriesNoBody`),
+    /// so running the command with and without the redirect against those exact
+    /// bytes prints nothing either way. A stdout-silence test would pass over
+    /// the flag's own removal. What the redirect protects is the day that
+    /// channel gains a body, so treat it as unguarded and leave it alone.
+    ///
     /// **`$HOME` stays UNEXPANDED.** This type resolves no home directory
     /// (design §8), and an expanded path is correct on exactly one machine.
     ///

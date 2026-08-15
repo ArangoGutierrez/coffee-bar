@@ -229,10 +229,20 @@ private func occurrences(of flag: String, in command: String) -> Int {
 
 @Test(arguments: AgentTool.allCases)
 func everyCommandWouldActuallyDeliverAnEvent(_ tool: AgentTool) throws {
-    // **The job here is to prove the command would DELIVER AN EVENT** — not that
-    // it starts with the right word. An earlier version of this test pinned the
-    // HEAD of the command, and three separate edits defeated it while staying
-    // green: each left `curl` at the front and broke the request behind it.
+    // **This reads the command as TEXT, and text cannot answer whether it
+    // works.** That is a stated limit and not a defect to be patched: five
+    // known-broken commands are green here — `--abstract-unix-socket`
+    // appended, `.old` glued outside the quoted path, `-G` before the body
+    // flag, `@-x` for `@-`, a second `-d` beside `--data-binary @-`. Each
+    // leaves `curl` at the front, the socket path present exactly once and
+    // `--data-binary @-` intact, and each delivers nothing.
+    //
+    // `everyCommandTheSnippetPastesDeliversItsEvent`, in
+    // `Tests/CoffeeBarIngestTests/HookSnippetDelivery_test.swift`, RUNS the
+    // command against a real listener and is what catches all five. What is
+    // left here is a cheap structural check in the target that owns the
+    // generator — `CoffeeBarCore` holds no socket and does no I/O (design §8),
+    // which is why the executing guard cannot live beside its subject.
     //
     // **`HookHealth` cannot be relied on for any of this, and that is the point.**
     // `HookHealth.commandMarkers` accepts `shimCommandName` as well as the socket
@@ -264,9 +274,17 @@ func everyCommandWouldActuallyDeliverAnEvent(_ tool: AgentTool) throws {
                 would report .wired over a command the user cannot run.
                 """)
 
-        // Counted WITHOUT the trailing space so `--unix-socket=/other.sock`, a
-        // spelling curl accepts, is caught too. A spaced-only count would not
-        // see it at all.
+        // Counted WITHOUT the trailing space, which makes it a superset of the
+        // spaced count and costs nothing.
+        //
+        // It used to say this catches `--unix-socket=/other.sock`, "a spelling
+        // curl accepts". IT IS NOT ONE. Measured against curl 8.7.1: `option
+        // --unix-socket=/other.sock: is unknown`, exit 2. curl has no
+        // `--opt=value` form for long options at all, so that string is not a
+        // second socket argument — it is a command that refuses to start. The
+        // guard is unaffected, because the wider count holds either way; the
+        // rationale was the part that was wrong, sitting two lines from a
+        // correctly measured one.
         #expect(occurrences(of: "--unix-socket", in: command) == 1,
                 """
                 \(tool) command carries \(occurrences(of: "--unix-socket", in: command)) \
