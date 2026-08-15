@@ -425,6 +425,53 @@ struct SettingsStoreTests {
         #expect(store.selectedAgentTools() == nil)
     }
 
+    // MARK: - The quick start (issue #52)
+
+    @Test func theQuickStartCompletionKeyStringNeverChangesAndCollidesWithNothing() {
+        // Held for the reason every other key is, pointed the opposite way. A
+        // rename here does not lose an answer — it loses the RECORD that the
+        // questions were asked, so every existing user meets the first-run page
+        // again on the launch after the rename, with their settings intact and
+        // no explanation for the interruption.
+        //
+        // A collision is worse than for any other key in this enum, because this
+        // one is the only `Bool` that GATES a page rather than configuring
+        // behaviour. Sharing a string with `holdDisplayAwake` would mean a user
+        // who asks coffee-bar to hold the display has thereby dismissed the
+        // quick start, and a user who dismisses it has thereby asked for the
+        // display hold — two settings, one storage slot, and both silently
+        // wrong.
+        #expect(SettingsKey.quickStartCompleted == "quickStartCompleted")
+        #expect(SettingsKey.quickStartCompleted != SettingsKey.holdDisplayAwake)
+        #expect(SettingsKey.quickStartCompleted != SettingsKey.batteryFloorPercent)
+        #expect(SettingsKey.quickStartCompleted != SettingsKey.demotableProcessNames)
+        #expect(SettingsKey.quickStartCompleted != SettingsKey.quietEverythingElse)
+        #expect(SettingsKey.quickStartCompleted != SettingsKey.agentTools)
+        #expect(SettingsKey.quickStartCompleted != SettingsKey.lidClosedHoldSeconds)
+    }
+
+    @Test func anUnshownQuickStartReadsAsAbsentRatherThanAsAlreadyShown() throws {
+        // THE DIRECTION IS THE WHOLE KEY. `UserDefaults.bool(forKey:)` answers
+        // `false` for a key nobody wrote, and this store answers `nil` — but
+        // both of those have to mean NOT YET SHOWN, and a reader that treated
+        // absent as "already shown" would ship a wizard no user ever sees, with
+        // every check about what it asks still green.
+        //
+        // It is also the recovery path, and the only one. A user who clears
+        // their preferences resets the three answers; this key going with them
+        // is what brings back the page that asks for them again.
+        let suite = try throwawaySuite()
+        defer { suite.defaults.removePersistentDomain(forName: suite.name) }
+        let store = UserDefaultsSettingsStore(defaults: suite.defaults)
+
+        #expect(store.bool(forKey: SettingsKey.quickStartCompleted) == nil)
+
+        // The discriminating half. Without it a store that answered `nil` for
+        // everything would pass the line above.
+        store.setBool(true, forKey: SettingsKey.quickStartCompleted)
+        #expect(store.bool(forKey: SettingsKey.quickStartCompleted) == true)
+    }
+
     // MARK: - The documented way to set it
 
     @Test func theDocumentedDefaultsCommandNamesTheRealDomainAndTheRealKey() throws {
