@@ -41,10 +41,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>How coffee-bar works</title>
-<meta name="description" content="What Off, Auto and On do, what the Display control covers, the Battery floor control and where it ships, and the two IOKit power assertions coffee-bar holds on your Mac.">
+<meta name="description" content="What Off, Auto and On do, what the Display control covers, the Battery floor control and where it ships, and the three IOKit power assertions coffee-bar holds on your Mac.">
 <link rel="canonical" href="https://arangogutierrez.github.io/coffee-bar/docs.html">
 <meta property="og:title" content="How coffee-bar works">
-<meta property="og:description" content="What Off, Auto and On do, what the Display control covers, the Battery floor control and where it ships, and the two IOKit power assertions coffee-bar holds on your Mac.">
+<meta property="og:description" content="What Off, Auto and On do, what the Display control covers, the Battery floor control and where it ships, and the three IOKit power assertions coffee-bar holds on your Mac.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://arangogutierrez.github.io/coffee-bar/docs.html">
 <meta property="og:image" content="https://arangogutierrez.github.io/coffee-bar/social-preview-1280x640.png">
@@ -211,14 +211,15 @@ reaches this rule.</p>
 
 <h2 class="eyebrow">What coffee-bar asks macOS for</h2>
 
-<p>coffee-bar asks macOS for two IOKit power assertions and nothing else. It holds PreventUserIdleSystemSleep whenever it is serving, and PreventUserIdleDisplaySleep beside it only under Stays on.</p>
+<p>coffee-bar asks macOS for three IOKit power assertions and nothing else. It holds PreventUserIdleSystemSleep and NetworkClientActive whenever it is serving, and PreventUserIdleDisplaySleep beside them only under Stays on.</p>
 
-<p>Both are named, so <code>pmset -g assertions</code> tells you who is keeping
+<p>All three are named, so <code>pmset -g assertions</code> tells you who is keeping
 your Mac awake:</p>
 
 <ul class="does">
 <li><code>PreventUserIdleSystemSleep</code>, named <code>coffee-bar is serving</code>.</li>
-<li><code>PreventUserIdleDisplaySleep</code>, named <code>coffee-bar is keeping the display awake</code>. It carries a different sentence on purpose, so that a second line reads as a second thing rather than as a duplicate of the first.</li>
+<li><code>NetworkClientActive</code>, named <code>coffee-bar is keeping the network up</code>. It is a request and not a promise: macOS may decline it on battery or under thermal pressure.</li>
+<li><code>PreventUserIdleDisplaySleep</code>, named <code>coffee-bar is keeping the display awake</code>. It carries a different sentence on purpose, so that each line reads as its own thing rather than as a duplicate of another.</li>
 </ul>
 
 <p>These are the same mechanism <code>caffeinate</code> uses. The app needs no root, no password and no kernel extension, and it writes nothing to your power
@@ -385,7 +386,7 @@ two answers never merge into one.</p>
       "name": "What does coffee-bar set on my Mac?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "coffee-bar asks macOS for two IOKit power assertions and nothing else. It holds PreventUserIdleSystemSleep whenever it is serving, and PreventUserIdleDisplaySleep beside it only under Stays on."
+        "text": "coffee-bar asks macOS for three IOKit power assertions and nothing else. It holds PreventUserIdleSystemSleep and NetworkClientActive whenever it is serving, and PreventUserIdleDisplaySleep beside them only under Stays on."
       }
     },
     {
