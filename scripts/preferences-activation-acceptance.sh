@@ -198,6 +198,19 @@ OSA
 # clicking the status item again, and the Settings window closes by its own close
 # button. Two windows, two mechanisms, and neither is Escape.
 #
+# A SHEET IS THE THIRD THING, and Escape IS its mechanism — which is why the rule
+# above is stated about the popover rather than about Escape. Issue #125 puts the
+# first-run quick start on the Settings window as a `.sheet`, and a modal sheet
+# blocks the close button underneath it: measured here as a passing run that
+# ended `NOTE: could not close the windows this run opened`, leaving a window
+# open and the NEXT run refusing at the preflight. The harness is only
+# re-runnable if it can clear that.
+#
+# Escape maps to `deferQuickStart()` — "not now", recorded nowhere — so this
+# dismisses the page without answering it and without writing the user's
+# settings. `set frontmost to true` first, because a key code goes to whichever
+# application is active and not to the process named in the enclosing tell.
+#
 # This is also what makes the script RE-RUNNABLE. It opens a Settings window
 # every time it passes, so a version that did not clean up could only ever be run
 # once between manual closes.
@@ -211,7 +224,12 @@ tell application "System Events"
 	tell process "${APP_NAME}"
 		set w to window 1
 		if (name of w) is "${WINDOW_NAME}" then
-			click (first button of w whose subrole is "AXCloseButton")
+			if (count of sheets of w) is greater than 0 then
+				set frontmost to true
+				key code 53
+			else
+				click (first button of w whose subrole is "AXCloseButton")
+			end if
 		else
 			click menu bar item 1 of menu bar 2
 		end if
@@ -367,8 +385,15 @@ reset_windows \
     || refuse "cannot get ${APP_NAME} back to no open windows — $(open_window_count) remain. Close them and run again."
 
 # A foreign app must own the foreground, or "did it come forward" is unaskable.
+#
+# TWO SECONDS, and the extra one is `reset_windows`' fault rather than padding.
+# Clearing a quick-start sheet means sending Escape, which means making
+# coffee-bar frontmost first — so the cleanup this preflight just ran can still
+# be settling when the sampler starts. Measured: a run refused with `the
+# foreground moved from 'Finder' to 'coffee-bar'`, which is this script tripping
+# over its own cleanup rather than a desktop in use.
 osascript -e 'tell application "Finder" to activate' >/dev/null 2>&1
-sleep 1
+sleep 2
 
 # ...and it must KEEP it. See the header: a popover dismisses itself when its app
 # resigns active, so somebody using this Mac makes every reading below a reading
@@ -513,6 +538,26 @@ invocation() {
     # message says which defect that is.
     pgrep -f "CoffeeBar.app/Contents/MacOS/coffee-bar" >/dev/null 2>&1 \
         || fail "coffee-bar is no longer running — the click reached Quit. The button resolution above is wrong; do not re-run until it is fixed."
+
+    # A THIRD APP TOOK THE FOREGROUND, so there is nothing to conclude. This is a
+    # REFUSAL and not a failure, and the distinction was measured rather than
+    # reasoned: a run reported
+    #     after : frontmost=Google Chrome settingsWindow=0 panel=0 windows=
+    #     FAIL: no window named 'coffee-bar Settings' — Preferences did not open
+    # on a build whose fix was working, because Chrome came forward between the
+    # pre-click guard and the click. The popover dismisses when coffee-bar
+    # resigns active, so the click landed in Chrome's window and the Preferences
+    # button was never pressed. Reporting that as a FAILING CRITERION is a wrong
+    # verdict on the product, which is worse than measuring nothing.
+    #
+    # It does NOT weaken the check. A fix that is genuinely broken leaves the
+    # foreground where it was — AFTER_FRONT equals the app that held it before
+    # — and that still fails below. Only a THIRD name, one that is neither
+    # coffee-bar nor the app this invocation started against, reaches this.
+    [ "${AFTER_FRONT}" = "${APP_NAME}" ] || [ "${AFTER_FRONT}" = "${BEFORE_FRONT}" ] || {
+        reset_windows
+        refuse "'${AFTER_FRONT}' took the foreground during this invocation — it held '${BEFORE_FRONT}' before the click. The panel dismisses when ${APP_NAME} resigns active, so the click did not reach Preferences and nothing here is about the fix. The desktop is in use."
+    }
 
     # The one failure that stops the sequence. Everything after this reads a
     # window that is not there, and the second invocation premise — a Settings
