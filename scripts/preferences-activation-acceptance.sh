@@ -375,11 +375,11 @@ sleep 1
 # of a panel that is no longer there.
 STABLE_REF=""
 for ((sample = 1; sample <= FOREGROUND_STABLE_SAMPLES; sample++)); do
-    seen_app="$(frontmost_app)"
+    SEEN_APP="$(frontmost_app)"
     if [ -z "${STABLE_REF}" ]; then
-        STABLE_REF="${seen_app}"
-    elif [ "${seen_app}" != "${STABLE_REF}" ]; then
-        refuse "the desktop is in use — the foreground moved from '${STABLE_REF}' to '${seen_app}' while this script was starting up. A MenuBarExtra popover dismisses itself when coffee-bar resigns active, so nothing measured here would be about the panel. Run this on a Mac nobody is touching."
+        STABLE_REF="${SEEN_APP}"
+    elif [ "${SEEN_APP}" != "${STABLE_REF}" ]; then
+        refuse "the desktop is in use — the foreground moved from '${STABLE_REF}' to '${SEEN_APP}' while this script was starting up. A MenuBarExtra popover dismisses itself when coffee-bar resigns active, so nothing measured here would be about the panel. Run this on a Mac nobody is touching."
     fi
     sleep 1
 done
@@ -404,8 +404,8 @@ done
 # fix for #50 fired on window creation, so it did nothing when the window already
 # existed.
 invocation() {
-    local label="$1" expect_settings_before="$2"
-    local failures_at_entry=${#FAILURES[@]}
+    local label="$1" EXPECT_SETTINGS_BEFORE="$2"
+    local FAILURES_AT_ENTRY=${#FAILURES[@]}
     echo
     echo "--- ${label} ---"
 
@@ -415,19 +415,19 @@ invocation() {
     osascript -e 'tell application "Finder" to activate' >/dev/null 2>&1
     sleep 1
 
-    local before_snap before_front before_settings before_panel
-    before_snap="$(snapshot)"
-    before_front=$(printf '%s' "${before_snap}" | cut -d'|' -f1)
-    before_settings=$(printf '%s' "${before_snap}" | cut -d'|' -f2)
-    before_panel=$(printf '%s' "${before_snap}" | cut -d'|' -f3)
-    echo "before: frontmost=${before_front} settingsWindow=${before_settings} panel=${before_panel} windows=$(printf '%s' "${before_snap}" | cut -d'|' -f4)"
+    local BEFORE_SNAP BEFORE_FRONT BEFORE_SETTINGS BEFORE_PANEL
+    BEFORE_SNAP="$(snapshot)"
+    BEFORE_FRONT=$(printf '%s' "${BEFORE_SNAP}" | cut -d'|' -f1)
+    BEFORE_SETTINGS=$(printf '%s' "${BEFORE_SNAP}" | cut -d'|' -f2)
+    BEFORE_PANEL=$(printf '%s' "${BEFORE_SNAP}" | cut -d'|' -f3)
+    echo "before: frontmost=${BEFORE_FRONT} settingsWindow=${BEFORE_SETTINGS} panel=${BEFORE_PANEL} windows=$(printf '%s' "${BEFORE_SNAP}" | cut -d'|' -f4)"
 
     # A FOREIGN app, not Finder specifically — see the preflight check.
-    [ "${before_front}" != "${APP_NAME}" ] \
+    [ "${BEFORE_FRONT}" != "${APP_NAME}" ] \
         || refuse "${APP_NAME} is already frontmost before this invocation, so 'did it come forward' has no content"
-    [ "${before_settings}" = "${expect_settings_before}" ] \
-        || refuse "expected settingsWindow=${expect_settings_before} before this invocation, got ${before_settings}. The previous phase did not leave the state this one reads."
-    [ "${before_panel}" = "0" ] \
+    [ "${BEFORE_SETTINGS}" = "${EXPECT_SETTINGS_BEFORE}" ] \
+        || refuse "expected settingsWindow=${EXPECT_SETTINGS_BEFORE} before this invocation, got ${BEFORE_SETTINGS}. The previous phase did not leave the state this one reads."
+    [ "${BEFORE_PANEL}" = "0" ] \
         || refuse "a popover is already open before this invocation; every reading below would be ambiguous"
 
     local probe status
@@ -447,17 +447,17 @@ invocation() {
             refuse "cannot locate Preferences safely: unreadable probe [${probe}]" ;;
     esac
 
-    local buttons click_x click_y top_y other_y panel_w panel_h panel_y
+    local buttons CLICK_X CLICK_Y TOP_Y OTHER_Y PANEL_W PANEL_H PANEL_Y
     buttons=$(printf '%s' "${probe}" | cut -d'|' -f2)
-    click_x=$(printf '%s' "${probe}" | cut -d'|' -f3)
-    click_y=$(printf '%s' "${probe}" | cut -d'|' -f4)
-    top_y=$(printf '%s' "${probe}" | cut -d'|' -f5)
-    other_y=$(printf '%s' "${probe}" | cut -d'|' -f6)
-    panel_w=$(printf '%s' "${probe}" | cut -d'|' -f7)
-    panel_h=$(printf '%s' "${probe}" | cut -d'|' -f8)
-    panel_y=$(printf '%s' "${probe}" | cut -d'|' -f9)
+    CLICK_X=$(printf '%s' "${probe}" | cut -d'|' -f3)
+    CLICK_Y=$(printf '%s' "${probe}" | cut -d'|' -f4)
+    TOP_Y=$(printf '%s' "${probe}" | cut -d'|' -f5)
+    OTHER_Y=$(printf '%s' "${probe}" | cut -d'|' -f6)
+    PANEL_W=$(printf '%s' "${probe}" | cut -d'|' -f7)
+    PANEL_H=$(printf '%s' "${probe}" | cut -d'|' -f8)
+    PANEL_Y=$(printf '%s' "${probe}" | cut -d'|' -f9)
 
-    echo "panel=${panel_w}x${panel_h}@y${panel_y} buttons=${buttons} preferences@${click_x},${click_y}"
+    echo "panel=${PANEL_W}x${PANEL_H}@y${PANEL_Y} buttons=${buttons} preferences@${CLICK_X},${CLICK_Y}"
 
     # --- The refusals. Every one of them happens BEFORE any click. ------------
 
@@ -466,7 +466,7 @@ invocation() {
         refuse "cannot locate Preferences safely: the panel has ${buttons} buttons and this script knows how to read ${EXPECTED_PANEL_BUTTONS}. Topmost-of-two is no longer a rule that identifies Preferences"
     }
 
-    local gap=$(( other_y - top_y ))
+    local gap=$(( OTHER_Y - TOP_Y ))
     [ "${gap}" -ge "${MINIMUM_BUTTON_GAP}" ] || {
         reset_windows
         refuse "cannot locate Preferences safely: the two buttons are ${gap} points apart, under the ${MINIMUM_BUTTON_GAP} this script requires to tell them apart"
@@ -477,36 +477,36 @@ invocation() {
     # height. This is the check the fixed offset never had: it is what turns a
     # panel of an unexpected size into a refusal instead of a click on whatever
     # is there.
-    local panel_bottom=$(( panel_y + panel_h ))
-    [ "${click_y}" -gt "${panel_y}" ] && [ "${click_y}" -lt "${panel_bottom}" ] || {
+    local PANEL_BOTTOM=$(( PANEL_Y + PANEL_H ))
+    [ "${CLICK_Y}" -gt "${PANEL_Y}" ] && [ "${CLICK_Y}" -lt "${PANEL_BOTTOM}" ] || {
         reset_windows
-        refuse "cannot locate Preferences safely: the resolved point y=${click_y} is outside the panel, which runs from y=${panel_y} to y=${panel_bottom}"
+        refuse "cannot locate Preferences safely: the resolved point y=${CLICK_Y} is outside the panel, which runs from y=${PANEL_Y} to y=${PANEL_BOTTOM}"
     }
 
     # LAST LOOK BEFORE THE CLICK. Everything above describes a panel that was
     # there when it was read. If the desktop moved in the meantime the panel is
     # gone and the resolved point now belongs to somebody else window — this is
     # the check that keeps a synthesised click out of it.
-    local guard_snap guard_panel
-    guard_snap="$(snapshot)"
-    guard_panel=$(printf '%s' "${guard_snap}" | cut -d'|' -f3)
-    [ "${guard_panel}" = "1" ] || {
+    local GUARD_SNAP GUARD_PANEL
+    GUARD_SNAP="$(snapshot)"
+    GUARD_PANEL=$(printf '%s' "${GUARD_SNAP}" | cut -d'|' -f3)
+    [ "${GUARD_PANEL}" = "1" ] || {
         reset_windows
-        refuse "the panel vanished between resolving it and clicking it — the desktop is in use. Nothing was clicked at ${click_x},${click_y}."
+        refuse "the panel vanished between resolving it and clicking it — the desktop is in use. Nothing was clicked at ${CLICK_X},${CLICK_Y}."
     }
 
     # --- Click, and only now. -------------------------------------------------
-    osascript -e "tell application \"System Events\" to click at {${click_x}, ${click_y}}" >/dev/null 2>&1
+    osascript -e "tell application \"System Events\" to click at {${CLICK_X}, ${CLICK_Y}}" >/dev/null 2>&1
     sleep 3
 
-    local after_snap after_front after_settings after_panel after_names
-    after_snap="$(snapshot)"
-    after_front=$(printf '%s' "${after_snap}" | cut -d'|' -f1)
-    after_settings=$(printf '%s' "${after_snap}" | cut -d'|' -f2)
-    after_panel=$(printf '%s' "${after_snap}" | cut -d'|' -f3)
-    after_names=$(printf '%s' "${after_snap}" | cut -d'|' -f4)
+    local AFTER_SNAP AFTER_FRONT AFTER_SETTINGS AFTER_PANEL AFTER_NAMES
+    AFTER_SNAP="$(snapshot)"
+    AFTER_FRONT=$(printf '%s' "${AFTER_SNAP}" | cut -d'|' -f1)
+    AFTER_SETTINGS=$(printf '%s' "${AFTER_SNAP}" | cut -d'|' -f2)
+    AFTER_PANEL=$(printf '%s' "${AFTER_SNAP}" | cut -d'|' -f3)
+    AFTER_NAMES=$(printf '%s' "${AFTER_SNAP}" | cut -d'|' -f4)
 
-    echo "after : frontmost=${after_front} settingsWindow=${after_settings} panel=${after_panel} windows=${after_names}"
+    echo "after : frontmost=${AFTER_FRONT} settingsWindow=${AFTER_SETTINGS} panel=${AFTER_PANEL} windows=${AFTER_NAMES}"
 
     # The app surviving its own acceptance check is an assertion rather than a
     # hope. A click that reached Quit shows up here as a dead process, and the
@@ -517,8 +517,8 @@ invocation() {
     # The one failure that stops the sequence. Everything after this reads a
     # window that is not there, and the second invocation premise — a Settings
     # window already open — cannot be set up at all.
-    [ "${after_settings}" = "1" ] || {
-        note_failure "no window named '${WINDOW_NAME}' — Preferences did not open at all [${after_names}]"
+    [ "${AFTER_SETTINGS}" = "1" ] || {
+        note_failure "no window named '${WINDOW_NAME}' — Preferences did not open at all [${AFTER_NAMES}]"
         return 1
     }
 
@@ -526,8 +526,8 @@ invocation() {
     # until something closes it. Asserted, not left to the eye: the popover is an
     # unnamed window in this process accessibility tree, which is the same
     # reading the button was resolved through.
-    [ "${after_panel}" = "0" ] \
-        || note_failure "${label}: the Preferences window opened but THE PANEL IS STILL OPEN [${after_names}]. It draws over the window it just opened. Whatever opens the window has to dismiss the popover in the same action."
+    [ "${AFTER_PANEL}" = "0" ] \
+        || note_failure "${label}: the Preferences window opened but THE PANEL IS STILL OPEN [${AFTER_NAMES}]. It draws over the window it just opened. Whatever opens the window has to dismiss the popover in the same action."
 
     # RESIDUAL 2 (issue #63) on the second invocation, and the original #50
     # defect on the first.
@@ -540,15 +540,15 @@ invocation() {
     # were measured dead too, and PreferencesView.swift records all three.
     # Sending the next reader down the route that was already tried is worse than
     # saying nothing.
-    [ "${after_front}" = "${APP_NAME}" ] \
-        || note_failure "${label}: window opened but '${APP_NAME}' is not frontmost (got '${after_front}'). The window is inactive: grey title bar, keyboard input goes elsewhere. setActivationPolicy(.regular) and THEN activate is what works under .accessory — but it has to run on THIS click. Hanging it off the Settings scene onAppear fixes only the invocation that CREATES the window, which is issue #63."
+    [ "${AFTER_FRONT}" = "${APP_NAME}" ] \
+        || note_failure "${label}: window opened but '${APP_NAME}' is not frontmost (got '${AFTER_FRONT}'). The window is inactive: grey title bar, keyboard input goes elsewhere. setActivationPolicy(.regular) and THEN activate is what works under .accessory — but it has to run on THIS click. Hanging it off the Settings scene onAppear fixes only the invocation that CREATES the window, which is issue #63."
 
     # Leave the next invocation a state it can read. See dismiss_panel_if_open:
     # the panel staying open is already recorded above, so this hides nothing.
     dismiss_panel_if_open \
         || refuse "could not dismiss the panel left open by ${label}, so the next invocation cannot be read"
 
-    [ ${#FAILURES[@]} -eq "${failures_at_entry}" ] && echo "OK: ${label}"
+    [ ${#FAILURES[@]} -eq "${FAILURES_AT_ENTRY}" ] && echo "OK: ${label}"
     return 0
 }
 
