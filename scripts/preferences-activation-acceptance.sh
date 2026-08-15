@@ -384,8 +384,17 @@ for ((sample = 1; sample <= FOREGROUND_STABLE_SAMPLES; sample++)); do
     sleep 1
 done
 
-[ "${STABLE_REF}" = "Finder" ] \
-    || refuse "expected Finder to hold the foreground before the first click, got '${STABLE_REF}'"
+# ANY foreign app will do, and requiring Finder specifically was measured wrong.
+# The criterion is "coffee-bar was not frontmost and then was", so what it needs
+# is that somebody else owns the foreground — not that it is Finder. On a machine
+# whose terminal reclaims focus a second after Finder is activated, insisting on
+# Finder refuses a run that could have been measured perfectly well: observed
+# here as `expected Finder frontmost before this invocation, got 'cmux'` on a
+# desktop that was otherwise idle. Finder is still ASKED for above, because a
+# known foreign app is the tidiest state to start from; it is simply not required
+# to have stuck.
+[ "${STABLE_REF}" != "${APP_NAME}" ] \
+    || refuse "${APP_NAME} already holds the foreground, so 'did it come forward' has no content. Click something else and run again."
 
 # --- The two invocations ------------------------------------------------------
 #
@@ -413,8 +422,9 @@ invocation() {
     before_panel=$(printf '%s' "${before_snap}" | cut -d'|' -f3)
     echo "before: frontmost=${before_front} settingsWindow=${before_settings} panel=${before_panel} windows=$(printf '%s' "${before_snap}" | cut -d'|' -f4)"
 
-    [ "${before_front}" = "Finder" ] \
-        || refuse "expected Finder frontmost before this invocation, got '${before_front}'"
+    # A FOREIGN app, not Finder specifically — see the preflight check.
+    [ "${before_front}" != "${APP_NAME}" ] \
+        || refuse "${APP_NAME} is already frontmost before this invocation, so 'did it come forward' has no content"
     [ "${before_settings}" = "${expect_settings_before}" ] \
         || refuse "expected settingsWindow=${expect_settings_before} before this invocation, got ${before_settings}. The previous phase did not leave the state this one reads."
     [ "${before_panel}" = "0" ] \
