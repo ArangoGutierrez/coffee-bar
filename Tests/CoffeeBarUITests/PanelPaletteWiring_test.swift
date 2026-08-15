@@ -470,15 +470,52 @@ private func warningPaints(in code: String) -> [String] {
 /// again with every assertion below still green, because each one would be
 /// reading whichever declaration it found first.
 private func advisoryRowDeclarations() throws -> Int {
+    try filesUnderCoffeeBarUI(naming: "struct AdvisoryRow: View").count
+}
+
+/// The files under `Sources/CoffeeBarUI` whose CODE contains `needle`.
+///
+/// Comment-stripped through `uiSource`, so the prose in `AdvisoryRow.swift` that
+/// explains the treatment cannot answer for the treatment.
+private func filesUnderCoffeeBarUI(naming needle: String) throws -> [String] {
     let names = try FileManager.default
         .contentsOfDirectory(atPath: uiSourceDirectory().path)
         .filter { $0.hasSuffix(".swift") }
         .sorted()
-    var found = 0
-    for name in names {
-        found += try uiSource(name).components(separatedBy: "struct AdvisoryRow: View").count - 1
-    }
-    return found
+    return try names.filter { try uiSource($0).contains(needle) }
+}
+
+@Test("one advisory treatment exists in the module, and no surface keeps its own")
+func exactlyOneSurfaceDeclaresTheAdvisoryTreatment() throws {
+    // THE LEFTOVER, which is a real state this branch passed through rather
+    // than a hypothetical. Lifting `advisoryRow` out of `PanelView` and
+    // forgetting to delete the original leaves the module with TWO treatments:
+    // `AdvisoryRow.swift` and a private copy on the panel. Every other check in
+    // this file stays green through that — `advisoryRowDeclarations()` counts
+    // `struct AdvisoryRow: View` and a leftover `func advisoryRow(` is not one,
+    // and the per-advisory checks pass the moment the call sites are repointed.
+    //
+    // Two treatments is the precondition for the drift issue #30 shipped: the
+    // panel's four advisories and the window's one rendered from different
+    // declarations, so a change to either reached only half the product.
+    let privateCopies = try filesUnderCoffeeBarUI(naming: "func advisoryRow(")
+    #expect(privateCopies.isEmpty, """
+        \(privateCopies) still declare their own func advisoryRow(. The \
+        treatment lives in AdvisoryRow.swift; a surface that keeps a private \
+        copy is how the advisories drifted apart in the first place, and \
+        repointing the call sites does not remove it.
+        """)
+
+    // THE SYMBOL, module-wide, which catches the same leftover under any other
+    // name. A duplicate treatment called `warningRow(` or written inline at a
+    // call site walks straight past the check above, and the one thing it
+    // cannot do without is the mark that replaced the colour.
+    let symbolSites = try filesUnderCoffeeBarUI(naming: "exclamationmark.triangle")
+    #expect(symbolSites == ["AdvisoryRow.swift"], """
+        the warning symbol is rendered by \(symbolSites). It belongs to exactly \
+        one file: every advisory on every surface draws it through AdvisoryRow, \
+        so a second file naming it is a second treatment whatever it is called.
+        """)
 }
 
 @Test("on every surface, each advisory carries the warning symbol and no colour")

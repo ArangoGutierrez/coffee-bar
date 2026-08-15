@@ -162,6 +162,7 @@ private let expectedAppLayerEntries = [
     "Sources/CoffeeBarApp/main.swift",
     "Sources/CoffeeBarIngest/HTTPRequestFramer.swift",
     "Sources/CoffeeBarIngest/IngestListener.swift",
+    "Sources/CoffeeBarUI/AdvisoryRow.swift",
     "Sources/CoffeeBarUI/AppVersion.swift",
     "Sources/CoffeeBarUI/AttentionListView.swift",
     "Sources/CoffeeBarUI/BrandPalette.swift",
