@@ -136,6 +136,34 @@ public enum SettingsKey {
     /// `theQuickStartCompletionKeyStringNeverChangesAndCollidesWithNothing`
     /// holds the string itself.
     public static let quickStartCompleted = "quickStartCompleted"
+
+    /// When coffee-bar last looked for a newer version (issue #29).
+    ///
+    /// Seconds since the epoch, as an `Int`. A `Date` would need the store to
+    /// grow a fourth type for one setting, and the epoch second is what
+    /// `defaults read` shows a user who goes looking — a `Date` in a plist
+    /// prints in whichever format that tool feels like.
+    ///
+    /// **It is the only thing that bounds the one outbound request this
+    /// application makes**, which makes it different in kind from the six keys
+    /// above. Those decide what coffee-bar does on this machine; this one
+    /// decides how often it speaks off it. A rename reads as "never checked" at
+    /// every launch, so coffee-bar would post a request at every start while the
+    /// Preferences window carried on stating that it looks once a day —
+    /// silently, with nothing anywhere reporting the difference.
+    ///
+    /// Absent by default, and absent means NEVER CHECKED rather than "checked
+    /// at the epoch". Both readings make the first check due, so the difference
+    /// only shows in the window: the wrong one tells a user who has never
+    /// checked that coffee-bar last checked in 1970. See `SettingsStoring` for
+    /// why the read answers `Int?`.
+    ///
+    /// It collides most dangerously with `batteryFloorPercent` and
+    /// `lidClosedHoldSeconds`, because all three are `Int` and a collision
+    /// between two `Int` keys is the one case a type mismatch does not catch.
+    /// `theLastUpdateCheckKeyStringNeverChangesAndCollidesWithNothing` holds the
+    /// string itself and pins it apart from every other key here.
+    public static let lastUpdateCheck = "lastUpdateCheck"
 }
 
 /// Where a user preference is kept.

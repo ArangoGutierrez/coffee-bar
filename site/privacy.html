@@ -113,10 +113,29 @@ lives in the filesystem and has no address, no port, and no route off this
 machine.</p>
 
 <h2 class="eyebrow">What may change, named in advance</h2>
-<p>A future release adds a check for updates. That check will be the first
-request coffee-bar makes that leaves your Mac. When it ships, this page will say
-what it sends before the release goes out. Any further outbound request will be
-opt-in, off by default, and named here first.</p>
+<p>The check for updates named here is now built and will ship in the next
+release. This page says what it sends before that release goes out, which is
+what the previous version of this paragraph promised.</p>
+<p>It fetches one static file from this site,
+arangogutierrez.github.io/coffee-bar/latest.json, which says which version is
+current. There is no query string on that address and there is no identifier of
+any kind in the request: no install ID, no machine ID, no user name, no host
+name, no custom user agent, no cookie and no body.</p>
+<p>What it does carry is the handful of headers macOS puts on every request any
+application makes, which coffee-bar neither chooses nor changes. Two of them say
+anything at all: the user agent, which names the application, its version and
+your OS build and is the same string for every copy of the same build; and
+Accept-Language, which carries the language you have set. That second one is the
+only line in the request that is about you rather than about the software, and
+it is named here because a promise to say what is sent has to cover all of it.
+SECURITY.md prints the whole request as measured.</p>
+<p>It happens at most once a day, and only while the Preferences window is open,
+so a coffee-bar left in the menu bar all week makes no request at all. That
+window states the interval and shows when the last check happened. The check
+tells you and installs nothing: no update is downloaded, and coffee-bar never
+replaces itself.</p>
+<p>Any further outbound request will be opt-in, off by default, and named here
+first.</p>
 
 <h2 class="eyebrow">Downloading is a separate thing</h2>
 <p>Getting coffee-bar is a normal web request. GitHub serves the download and

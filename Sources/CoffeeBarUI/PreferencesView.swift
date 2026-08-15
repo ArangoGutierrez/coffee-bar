@@ -401,6 +401,81 @@ public struct PreferencesView: View {
                     }
                 }
 
+                // Issue #29, and the section that spends this application's one
+                // outbound request.
+                //
+                // ITS OWN SECTION, directly above the version line, because the
+                // two answer halves of one question: which build is this, and
+                // is there a newer one. A reader who has just been told the
+                // version is the reader who wants the answer.
+                //
+                // NO CONTROL THAT INSTALLS ANYTHING, and that is the design
+                // rather than an unfinished first cut. coffee-bar is installed
+                // four different ways and Homebrew is one of them — an app that
+                // replaced its own bundle inside the Homebrew prefix would
+                // desynchronise Homebrew's manifest and the next `brew upgrade`
+                // would fight it. Same posture as the lid-closed paragraph above
+                // and the Agent tools section below: coffee-bar says what is
+                // true and leaves the doing to the user.
+                //
+                // THE PANEL HAS NO COPY OF THIS YET. Issue #29 asks for a Check
+                // now button there too, and that is deferred rather than
+                // forgotten — `PanelView.swift` is being changed elsewhere this
+                // wave, and both surfaces would read the same two model
+                // properties, so the follow-up is additive.
+                Text("Updates").font(.headline)
+
+                // WHAT THE INTERVAL IS, and it is on the window rather than in a
+                // commit message because `docs/ROADMAP.md` requires it: a period
+                // the user cannot see, cannot change and did not ask for is a
+                // hidden duration, and this one governs the only request
+                // coffee-bar makes off this machine.
+                //
+                // Rendered verbatim from `UpdateCheck` with no text built here,
+                // for the reason every other sentence on this page is: design
+                // §5.4 forbids asserting on rendered AppKit text, so a sentence
+                // composed in this file is a sentence no check reads —
+                // `theIntervalIsTheOneStatedInTheWindow` holds the seam against
+                // the constant the code actually runs on, and could not if the
+                // words lived here.
+                Text(UpdateCheck.intervalNote)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                // WHAT THE LAST CHECK CONCLUDED. Unconditional, like the scope
+                // note above and unlike the advisories: there is always
+                // something true to say here, including before any check has
+                // run, and "nothing has happened yet" is the sentence a user
+                // most needs at first launch. An `if` around this would hide
+                // exactly the state that a silently broken check leaves behind.
+                Text(model.updateStatusLine)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                // THE MANUAL CHECK, beside the time of the last one.
+                //
+                // The two share a row because they are read together: a user
+                // presses the button to make the stamp beside it move. A button
+                // whose only visible effect is a sentence somewhere else on the
+                // page reads as doing nothing.
+                //
+                // `checkForUpdates()` and not `checkForUpdatesIfDue()` — the
+                // press IS the ask, and honouring the interval here would make
+                // the button do nothing for a user who pressed it twice.
+                HStack {
+                    Button("Check now") {
+                        Task { await model.checkForUpdates() }
+                    }
+
+                    Text(model.lastUpdateCheckLine)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+                }
+
                 Text(PanelView.versionLine(from: Bundle.main.infoDictionary))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -554,6 +629,39 @@ public struct PreferencesView: View {
         .onAppear {
             NSApp.setActivationPolicy(.regular)
             NSApp.activate(ignoringOtherApps: true)
+
+            // THE ONE PLACE the automatic update check is driven from, and the
+            // only outbound request this application makes.
+            //
+            // HERE rather than in `main.swift`'s `App.init`, which is where the
+            // ticker and the listener are started and where this would
+            // ordinarily go. Two reasons, and the second is the product one:
+            //
+            //   1. `main.swift` is top-level code no test target can import, so
+            //      a trigger there is held only by a source scan. This block is
+            //      read by `thisWindowIsWhatDrivesTheAutomaticUpdateCheck` the
+            //      same way, but the surrounding behaviour — the interval, the
+            //      stamp, the refusal to post from an unstamped build — is
+            //      driven through the model by real checks.
+            //   2. THE RESULT IS ONLY VISIBLE HERE. This wave puts the update
+            //      section in this window and nowhere else, so a check made at
+            //      launch would post a request whose answer the user has no
+            //      surface to read. Asking when the window opens means the
+            //      request happens while somebody is looking at the sentence it
+            //      produces, and a coffee-bar left in the menu bar for a week
+            //      posts nothing at all.
+            //
+            // WHEN THE PANEL GAINS ITS OWN COPY (the deferred half of issue
+            // #29) this moves to `App.init`, because the answer will then be
+            // visible without opening anything. Until it is, moving it early
+            // would be egress with no reader.
+            //
+            // `IfDue` and never `checkForUpdates()`: opening this window four
+            // times in an afternoon must post once, or the "once a day" two
+            // sections above is false. The interval is enforced against a
+            // stored stamp, so it survives a relaunch — this process holds no
+            // timer for it.
+            Task { await model.checkForUpdatesIfDue() }
         }
         .onDisappear { NSApp.setActivationPolicy(.accessory) }
     }

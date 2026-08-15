@@ -71,10 +71,66 @@ route to token counts is rejected by design.
 If you find code that reads transcript content, that is a vulnerability under
 this policy. Report it.
 
-### It makes no network egress
+### It makes exactly one outbound request, and this section says what it is
 
-The shipped code resolves no host, opens no network connection, and sends
-nothing anywhere. No telemetry, no crash reporting, no analytics, no update ping.
+No telemetry, no crash reporting, no analytics. **One** outbound request exists
+in the shipped code and it is the update check: a `GET` of a static JSON file on
+this project's own site, which answers "which version is current" and nothing
+else.
+
+**It tells you. It does not update itself.** Nothing is downloaded but that
+file, no bundle is replaced, and no installer runs. The whole outcome of a check
+is a sentence in the Preferences window. That is why the Sparkle appcast this
+section used to hold on record was narrowed away rather than built: `brew
+install coffee-bar` puts the app inside the Homebrew prefix, so an app that
+replaced its own bundle would desynchronise Homebrew's manifest and the next
+`brew upgrade` would fight it — and an updater framework would be the first
+third-party code ever linked into this binary, sitting in the update path, which
+is the highest-trust path in the application.
+
+**What the request carries, in full.** coffee-bar adds **no identifier of any
+kind**: no install ID, no machine ID, no user name, no host name, no custom
+`User-Agent`, no cookie and no body. The address is
+`https://arangogutierrez.github.io/coffee-bar/latest.json` with no query string
+and no fragment, the method is `GET`, and the session is ephemeral, refuses
+cookies, keeps no cache and queues nothing for later.
+
+That leaves the headers macOS puts on every request an application makes, which
+coffee-bar does not choose and does not modify. They are listed here rather
+than left for you to find with a proxy. Measured on this machine by pointing the
+shipped session configuration at a loopback listener and printing what arrived:
+
+```
+GET /coffee-bar/latest.json HTTP/1.1
+Host: …
+Cache-Control: no-cache
+Accept: */*
+User-Agent: <application>/<version> CFNetwork/3860.600.21 Darwin/25.5.0
+Accept-Language: en-US,en;q=0.9
+Accept-Encoding: gzip, deflate
+Connection: keep-alive
+```
+
+Two of those say something about the machine and neither identifies an install.
+The `User-Agent` names the application, its version and the OS build; every copy
+of the same build on the same OS sends the same string. **`Accept-Language`
+carries the language you have set**, which is the only line here that is about
+you rather than about the software, and it is stated because "in full" has to
+mean in full — the first draft of this section listed the `User-Agent` alone and
+was corrected by the measurement above rather than by reading the code.
+Overriding it would mean setting a header, and setting headers is the thing
+`theOneFileThatReachesTheNetworkSendsNoIdentifier` refuses outright; a rule that
+allows one header is a rule that has to judge each one.
+
+**How often, and how to see it.** At most once a day, and only when you open the
+Preferences window. There is no timer: a coffee-bar sitting in the menu bar all
+week makes no request at all. That window states the interval, shows the time of
+the last check, and carries a Check now button that makes one on demand. The
+"no hidden durations" rule in `docs/ROADMAP.md` is why both the period and the
+timestamp are on the surface rather than only in this file.
+
+If you find a second outbound request, or an identifier on this one, that is a
+vulnerability under this policy. Report it.
 
 **It does open one socket, and it is not a network socket.** Ingest listens on a
 **unix domain socket** at `~/Library/Application Support/coffee-bar/ingest.sock`,
@@ -86,34 +142,48 @@ once, to tell a stale socket file from one a live instance is still serving —
 without that probe a second app instance would delete the running instance's
 socket and kill ingest silently.
 
-Three facts back the network claim, all checkable from a clone:
+Four facts back the network claim, all checkable from a clone:
 
-- `Sources/` reaches the network stack in exactly one place, and binds it to a
-  filesystem path. `IngestListener.swift` imports `Network` and builds an
-  `NWListener`, then sets `parameters.requiredLocalEndpoint = .unix(path: path)`
-  before starting it, so the listener answers on a unix socket and never on an
-  IP endpoint. `URLSession`, `NSURL`, `CFNetwork`, `getaddrinfo` and
-  `NWConnection(host:` all return zero hits across the tree. Grep for that
-  assignment rather than for a line number: this paragraph used to name one, and
-  the next edit above it made the citation point at unrelated code.
-- The only `connect(` in `Sources/` is `IngestListener.swift`, on
-  `sockaddr_un` — a filesystem path, never an IP address or a hostname.
+- **One file reaches the network, and it is named.** `UpdateChecker.swift` is
+  the only file in `Sources/` allowed to name `URLSession`, and it names none of
+  the other address-shaped APIs. The guard that holds this is
+  `noLinkedTargetCanReachTheNetworkByAddress` in
+  `Tests/CoffeeBarUITests/AppLayerBoundary_test.swift`: it bans `URLSession`,
+  `URLRequest`, `NSURL`, `CFNetwork`, `getaddrinfo`, `gethostbyname`,
+  `NWConnection(host:`, `NWEndpoint.hostPort`, `AF_INET`, `sockaddr_in`,
+  `inet_pton` and `inet_addr` across every target the `coffee-bar` binary links,
+  and relieves that one file of `URLSession` alone. `URLRequest` staying banned
+  there is what leaves no request object on which a header could be set, which
+  is the structural half of the no-identifier promise above.
+- **One host, pinned.** `theOnlyEntitledFileReachesOnlyThePinnedHost` reads
+  every `https://` address out of that same set of files and refuses one naming
+  anywhere but `arangogutierrez.github.io`, and
+  `theOneFileThatReachesTheNetworkSendsNoIdentifier` reads the entitled file for
+  the vocabulary of identity. Grep for the guards by name rather than for a line
+  number: this section used to cite one, and the next edit above it made the
+  citation point at unrelated code.
+- **The listener is bound to the filesystem, not to a port.**
+  `IngestListener.swift` imports `Network` and builds an `NWListener`, then sets
+  `parameters.requiredLocalEndpoint = .unix(path: path)` before starting it, so
+  it answers on a unix socket and never on an IP endpoint. The only `connect(`
+  in `Sources/` is in that same file, on `sockaddr_un` — a filesystem path,
+  never an IP address or a host name.
 - `Package.swift` declares no external package dependencies, so no third-party
   code is fetched or linked, and none of it can open a socket on coffee-bar's
-  behalf.
+  behalf. That is unchanged by the update check, which is why it was built out
+  of `Foundation` rather than out of an updater framework.
 
 This section previously read "opens no socket … `connect(` returns zero hits".
 That became false when ingest landed, and a security policy that fails its own
-grep is worse than no policy. The claim is now narrower and true.
+grep is worse than no policy. It then read "makes no network egress … no update
+ping", and that became false when the update check landed. Both are recorded
+rather than quietly overwritten, because this file promised that the day an
+outbound request existed it would say so explicitly.
 
-One deliberate future exception is on record: an update check through a Sparkle
-appcast. It is not implemented and no code for it exists today. When it lands it
-will be the first outbound request in the app, and this section will describe
-what it sends. Any further outbound request is opt-in, off by default, and named
-here before the release that carries it.
-
-This paragraph grants no permission to add telemetry. It records that the
-question is open and states the process any answer must follow.
+Any FURTHER outbound request is opt-in, off by default, and named here before
+the release that carries it. This paragraph grants no permission to add
+telemetry, and the update check is not a precedent for one: it sends nothing
+about you, which is the whole reason it was allowed.
 
 `TelemetryRecon` is the one component whose name suggests otherwise. It reads
 three local files — the Claude Code managed settings, the user settings, and the
@@ -183,7 +253,8 @@ rather than of how it is currently called:
   can already reach the socket: as §4.1 of the design says, any process running
   as you can post to it, and any process running as you can read from it.
 - **It opens nothing new.** Same socket, same bind, no second endpoint. The
-  no-egress commitment above is untouched.
+  commitment above is untouched: this channel is the unix socket, and the one
+  outbound request named there is the update check and nothing else.
 
 If a future release lets an agent change anything through this socket, that is a
 new commitment and it is written here first.

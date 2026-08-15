@@ -25,6 +25,18 @@ public final class ServingModel {
     private let helper: any PrivilegedHelperStateProviding
     private let listener: any IngestListening
     private let settings: any SettingsStoring
+    /// Where the published version manifest comes from (issue #29).
+    ///
+    /// A SEAM and not a call, for the reason every other dependency here is one:
+    /// the real implementation reaches the project site, and a check that took
+    /// it would post a request from whichever machine runs the suite — from a
+    /// build server, from an aeroplane, from a laptop that never asked to.
+    ///
+    /// The model holds the protocol and never the fetcher's type, so this file
+    /// stays out of the one place in this application allowed to name
+    /// `URLSession`. `thePreferencesWindowNeverReachesTheNetworkItself` holds
+    /// the same line one layer up.
+    private let updates: any ReleaseManifestFetching
     private let policy: StalePolicy
     private let now: @Sendable () -> Date
     private var controller = HoldController()
@@ -1169,7 +1181,8 @@ public final class ServingModel {
                 listener: any IngestListening = UnixSocketIngestListener(),
                 policy: StalePolicy = .standard,
                 now: @escaping @Sendable () -> Date = { Date() },
-                governance: ProcessGovernance? = nil) {
+                governance: ProcessGovernance? = nil,
+                updates: any ReleaseManifestFetching = PublishedManifestFetcher()) {
         self.holder = holder
         self.reader = reader
         self.health = health
@@ -1179,6 +1192,7 @@ public final class ServingModel {
         self.policy = policy
         self.now = now
         self.governance = governance
+        self.updates = updates
         self.reading = reader.read()
         // Read ONCE, here, and never again. `refresh()` runs every 30 seconds
         // and on every hook event; re-reading the store on each of those would
@@ -1246,6 +1260,13 @@ public final class ServingModel {
         // floor into 15% for a user who did nothing but click through.
         self.quickStartCompletedStorage =
             settings.bool(forKey: SettingsKey.quickStartCompleted) ?? false
+        // Read once, here, for the reason above, and NO `??`: an absent key is
+        // a machine that has never checked, and reading it as the epoch would
+        // put "Last checked: 1970-01-01 00:00" in the window for every new
+        // user. Both readings make the first check due; only one of them tells
+        // the truth on the surface.
+        self.lastUpdateCheck = settings.integer(forKey: SettingsKey.lastUpdateCheck)
+            .map { Date(timeIntervalSince1970: TimeInterval($0)) }
     }
 
     // There is deliberately NO `deinit` here, and none may be added.
@@ -1694,6 +1715,102 @@ public final class ServingModel {
     /// button that defers is a label that lies about which of the two exits the
     /// user pressed.
     static let quickStartDeferLabel = "Ask me later"
+
+    // MARK: - Is there a newer coffee-bar? (issue #29)
+
+    /// What the last check concluded, or `nil` when none has run.
+    ///
+    /// **`nil` is not "up to date"**, and keeping the two apart is the whole of
+    /// the state. A window that said "up to date" before any check had run would
+    /// be stating a fact nobody had established — and it would keep saying it
+    /// for a user whose checks have been failing since the day they installed.
+    public private(set) var updateVerdict: UpdateVerdict?
+
+    /// When coffee-bar last ASKED, whatever came back.
+    ///
+    /// The ATTEMPT and not the last success, deliberately. It is what bounds the
+    /// one outbound request this application makes, so a run of failures must
+    /// not turn into a request on every tick. `updateStatusLine` says what the
+    /// attempt concluded, separately and beside it, so the pair cannot read as a
+    /// check that worked.
+    public private(set) var lastUpdateCheck: Date?
+
+    /// What the window says about the last check.
+    public var updateStatusLine: String {
+        guard let updateVerdict else { return UpdateCheck.neverCheckedLine }
+        return UpdateCheck.sentence(for: updateVerdict)
+    }
+
+    /// When the window says that was.
+    public var lastUpdateCheckLine: String { UpdateCheck.lastCheckLine(lastUpdateCheck) }
+
+    /// Looks for a newer published version, whatever the interval says.
+    ///
+    /// This is the Check now button. It ignores `UpdateCheck.interval` on
+    /// purpose: the user asked, and a press that silently did nothing because
+    /// the last check was an hour ago is a button lying about having a job.
+    ///
+    /// **A build with no usable stamp does not post at all.** The request is the
+    /// thing this feature spends, and there is nothing to learn from an answer
+    /// that cannot be compared to anything — so the refusal happens BEFORE the
+    /// fetch rather than after it. `anUnstampedBuildNeverPostsAtAll` measures
+    /// that on the fetcher's own call count, because a model that fetched and
+    /// then declined to compare would look identical in the window.
+    ///
+    /// `version` is a parameter with the bundle read at its DEFAULT, which is
+    /// the same split `startMonitoring(version:)` uses: the model stays pure and
+    /// a check can hand in a stamp of its own.
+    ///
+    /// **It replaces the bundle with nothing and downloads no release.** The
+    /// entire effect is `updateVerdict` and `lastUpdateCheck`.
+    public func checkForUpdates(
+        version: String = AppVersion.display(from: Bundle.main.infoDictionary)
+    ) async {
+        guard UpdateCheck.releaseCore(of: version) != nil else {
+            updateVerdict = .cannotCompare(UpdateCheck.unstampedLine)
+            return
+        }
+
+        // Stamped BEFORE the request rather than after it, so a check that
+        // takes the whole timeout records when it started. The alternative
+        // drifts the interval outward by however long the network took.
+        let attempted = now()
+
+        do {
+            let fetched = try await updates.fetch()
+            switch UpdateCheck.manifest(from: fetched.body, statusCode: fetched.statusCode) {
+            case .success(let manifest):
+                updateVerdict = UpdateCheck.compare(running: version,
+                                                    published: manifest.version)
+            case .failure(let refusal):
+                updateVerdict = .cannotCompare(UpdateCheck.sentence(for: refusal))
+            }
+        } catch {
+            // Every transport failure reads the same to a user: it did not
+            // happen. The error's own text is a `URLError` code that names a
+            // library rather than a thing to do about it.
+            updateVerdict = .cannotCompare(UpdateCheck.unreachableLine)
+        }
+
+        lastUpdateCheck = attempted
+        settings.setInteger(Int(attempted.timeIntervalSince1970),
+                            forKey: SettingsKey.lastUpdateCheck)
+    }
+
+    /// Looks for a newer published version only if the stated interval has run
+    /// out.
+    ///
+    /// This is the automatic half, and `main.swift` calls it once at launch.
+    /// There is no timer: a check that fires while the app sits in the menu bar
+    /// for a week is a request the user is not present for, and the interval is
+    /// enforced across launches by the stored stamp rather than by a ticker this
+    /// process holds.
+    public func checkForUpdatesIfDue(
+        version: String = AppVersion.display(from: Bundle.main.infoDictionary)
+    ) async {
+        guard UpdateCheck.isDue(lastChecked: lastUpdateCheck, now: now()) else { return }
+        await checkForUpdates(version: version)
+    }
 
     /// Undoes every demotion the journal records. Call it at launch and on a
     /// clean exit.
