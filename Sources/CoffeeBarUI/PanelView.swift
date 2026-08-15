@@ -117,68 +117,17 @@ public struct PanelView: View {
         URL(string: "https://arangogutierrez.github.io/coffee-bar/terms.html")!
     }
 
-    /// One advisory: a warning symbol, then the sentence the model published.
-    ///
-    /// SHAPE, NOT COLOUR, and that is issue #30. All four advisory lines took
-    /// SwiftUI's semantic orange as their foreground style — systemOrange, the
-    /// same pigment the brand doc calls `action`. As caption TEXT it measures
-    /// 1.75:1 to 2.31:1 on the light backdrops this panel draws on, where WCAG
-    /// asks 4.5:1 below ~18pt. The pigment is named nowhere in this file now,
-    /// not even in this note: a literal written in prose is what a guard
-    /// reading raw source counts, and issue #30's acceptance greps for it.
-    /// The dark appearance was never the problem: it clears 7.62:1. Darkening
-    /// the orange until it passes on light reaches roughly `#8C5200`, which is
-    /// the roast `state` colour — so the fix that keeps the colour deletes the
-    /// hue separation the panel depends on, where roast means coffee-bar is
-    /// acting and orange means attention. Moving the pigment onto an icon does
-    /// not rescue it either; systemOrange fails even the 3:1 non-text floor on
-    /// a light backdrop.
-    ///
-    /// So the meaning moves to a symbol, which no appearance and no contrast
-    /// setting can wash out, and `assets/art/README.md` line 22 gets its own
-    /// rule back: neither accent carries body text.
-    ///
-    /// The KNOWN COST, in issue #30's words: the warnings get quieter, and the
-    /// dead-socket line is the one users most need to notice. Three things pay
-    /// it, none of them a colour:
-    ///
-    ///   - the filled triangle rather than the outline, because a 1pt stroke at
-    ///     caption size is nearly nothing;
-    ///   - `.imageScale(.large)`, so the symbol reads as a mark beside the text
-    ///     rather than as a character in it;
-    ///   - `.primary` and `.semibold` on the sentence, against the `.secondary`
-    ///     of the serving summary directly above. An advisory now draws DARKER
-    ///     than the neutral line it interrupts, which is the one axis left once
-    ///     hue is spent — and it is the axis that survives Increase Contrast,
-    ///     Differentiate Without Color and a greyscale display.
-    ///
-    /// Placement is unchanged and deliberately so. Each advisory already sits
-    /// directly beneath the control it explains rather than in a footer, which
-    /// is the placement half of the compensation; moving them would separate
-    /// each sentence from the thing it is about.
-    ///
-    /// The symbol is `accessibilityHidden`, exactly as the serving indicator's
-    /// is: it restates what the sentence beside it already says, and VoiceOver
-    /// reading "warning triangle" before every advisory is noise, not access.
-    /// The sentence is the accessible carrier and always was — colour never
-    /// reached that route at all.
-    ///
-    /// A shared row rather than the treatment written out four times. The four
-    /// advisories are one class of thing, and the guard
-    /// `advisoriesCarryShapeRatherThanColour` reads them through this one
-    /// declaration, so they cannot drift apart a site at a time.
-    private func advisoryRow(_ line: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 5) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .imageScale(.large)
-                .accessibilityHidden(true)
-            Text(line)
-                .fontWeight(.semibold)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .font(.caption)
-        .foregroundStyle(.primary)
-    }
+    // The advisory treatment is `AdvisoryRow`, in its own file, and the reasons
+    // it moved there are on the type. It was private to this view, which is
+    // exactly why issue #30 shipped with a fifth advisory still painted: the
+    // Preferences window renders the same `staleHelperAdvisory` sentence, could
+    // not reach this treatment, and wrote its own in the pigment #30 removed.
+    //
+    // PLACEMENT stays here and deliberately so. Each advisory sits directly
+    // beneath the control it explains rather than in a footer, which is the
+    // placement half of the compensation for the lost colour; moving them would
+    // separate each sentence from the thing it is about. What was lifted is the
+    // treatment, not the layout.
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -255,7 +204,7 @@ public struct PanelView: View {
             // both situations now live on `ServingModel.suppressionAdvisory`
             // and are asserted there.
             if let line = model.suppressionAdvisory {
-                advisoryRow(line)
+                AdvisoryRow(line: line)
             }
 
             // Beside the serving state rather than in a footer, because under
@@ -274,7 +223,7 @@ public struct PanelView: View {
             // settings file and cannot see an event arrive, so the panel has no
             // evidence for a healthy line and does not print one.
             if let line = model.hookAdvisory {
-                advisoryRow(line)
+                AdvisoryRow(line: line)
             }
 
             // A SECOND line, beside the one above and never merged into it.
@@ -287,7 +236,7 @@ public struct PanelView: View {
             // Both are silent when there is nothing to report, so the usual
             // panel carries neither.
             if let line = model.ingestAdvisory {
-                advisoryRow(line)
+                AdvisoryRow(line: line)
             }
 
             // A THIRD advisory, and issue #81 is why it is on this surface at
@@ -316,12 +265,14 @@ public struct PanelView: View {
             if let line = model.staleHelperAdvisory(
                 probeAt: ServingModel.probePath(
                     besideExecutable: Bundle.main.executableURL)) {
-                advisoryRow(line)
+                AdvisoryRow(line: line)
                     // The one advisory whose sentence carries a command meant to
                     // be pasted into a root shell. Chained here rather than put
-                    // in `advisoryRow` because the other three carry nothing
+                    // in `AdvisoryRow` because the other three carry nothing
                     // worth selecting; `.textSelection` reaches the Text through
-                    // the Environment.
+                    // the Environment. The Preferences window's copy of this
+                    // line does the same, at its own call site, for the same
+                    // reason.
                     .textSelection(.enabled)
             }
 

@@ -42,15 +42,33 @@ import CoffeeBarTestSupport
 /// `indicatorComesFromTheModel`, which is the blind direction, where a comment
 /// naming `ServingModel.indicator(` would satisfy it while the call was gone.
 /// The hex-literal check stops matching hex inside prose as a bonus.
-private func panelSource() throws -> String {
-    let root = URL(fileURLWithPath: #filePath)
+///
+/// TAKES A FILE NAME, and that parameter is issue #30's remainder in one line.
+/// This read was hard-wired to `PanelView.swift`, and the advisory guard below
+/// was trusted for a rule that spans the whole UI module — so a FIFTH advisory,
+/// the same sentence in the same pigment, sat in `PreferencesView.swift` and
+/// survived the change whose entire purpose was removing it. The guard did not
+/// miss it; the guard could not see the file it was in, and reported green.
+private func uiSource(_ fileName: String) throws -> String {
+    swiftCodeWithoutComments(try String(
+        contentsOf: uiSourceDirectory().appendingPathComponent(fileName),
+        encoding: .utf8))
+}
+
+/// `Sources/CoffeeBarUI`, anchored to THIS source file.
+///
+/// `#filePath` and never a working directory or a bundle path, for the reason
+/// `uiSource` states: it pins the lookup to the tree under test, so the guard
+/// cannot green-light an installed or deployed copy.
+private func uiSourceDirectory() -> URL {
+    URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()   // CoffeeBarUITests
         .deletingLastPathComponent()   // Tests
         .deletingLastPathComponent()   // repo root
-    return swiftCodeWithoutComments(try String(
-        contentsOf: root.appendingPathComponent("Sources/CoffeeBarUI/PanelView.swift"),
-        encoding: .utf8))
+        .appendingPathComponent("Sources/CoffeeBarUI")
 }
+
+private func panelSource() throws -> String { try uiSource("PanelView.swift") }
 
 /// The modifier chain that follows a view expression, as one string.
 ///
@@ -326,20 +344,47 @@ func indicatorComesFromTheModel() throws {
             "the indicator must come from ServingModel.indicator(isServing:)")
 }
 
-/// The four model values that drive an advisory line, spelled as
-/// `PanelView.swift` reads them.
+/// EVERY surface that renders an advisory, and the model values each one reads.
+///
+/// TWO FILES, and that is the whole of issue #30's remainder. The list this
+/// replaces was one flat array read against `PanelView.swift` alone, so the
+/// identical `staleHelperAdvisory` sentence in `PreferencesView.swift` — same
+/// model value, same systemOrange — was never looked at. Issue #30 closed with
+/// four sites fixed, a fifth shipping the defect, and this guard green.
 ///
 /// `staleHelperAdvisory(` keeps its parenthesis because that one is a CALL
-/// taking the probe path while the other three are properties, and the shorter
+/// taking the probe path while the others are properties, and the shorter
 /// needle would also match the `ServingModel` mention in a neighbouring
-/// expression. All four are named here rather than counted, so an advisory
-/// DELETED from the panel fails the guard below instead of shrinking a total
-/// that still balances.
-private let advisoryValues = [
-    "model.suppressionAdvisory",
-    "model.hookAdvisory",
-    "model.ingestAdvisory",
-    "model.staleHelperAdvisory(",
+/// expression. Every value is NAMED rather than counted, so an advisory DELETED
+/// from a surface fails the guard instead of shrinking a total that still
+/// balances.
+///
+/// The split between the two lists is a DESIGN DECISION, not a convenience.
+///
+///   `throughTheRow` — the advisories that carried systemOrange and now carry
+///   the symbol instead. They must render through `AdvisoryRow`, so the four in
+///   the panel and the one in the window cannot drift apart a site at a time.
+///
+///   `neutralOnly` — advisories that never carried the pigment and are
+///   deliberately QUIETER than the panel's copy of the same sentence.
+///   `PreferencesView.swift` states the reason on its `hookAdvisory`: the panel
+///   is where the user notices the problem and this window is where they act on
+///   it, so the window restates it in `.secondary` rather than shouting it
+///   twice. They are still held to the no-pigment half — that rule is about
+///   contrast and admits no exceptions — but not to the symbol.
+///
+/// BOTH lists require the value to be PRESENT. A surface that stops rendering an
+/// advisory named here fails; it does not quietly drop out of the loop.
+private let advisorySurfaces: [(file: String, throughTheRow: [String], neutralOnly: [String])] = [
+    (file: "PanelView.swift",
+     throughTheRow: ["model.suppressionAdvisory",
+                     "model.hookAdvisory",
+                     "model.ingestAdvisory",
+                     "model.staleHelperAdvisory("],
+     neutralOnly: []),
+    (file: "PreferencesView.swift",
+     throughTheRow: ["model.staleHelperAdvisory("],
+     neutralOnly: ["model.hookAdvisory"]),
 ]
 
 /// The two foreground styles that carry NO pigment.
@@ -382,10 +427,99 @@ private func pigments(in code: String) -> [String] {
     paints(in: code).filter { neutralForegrounds.contains($0) == false }
 }
 
-@Test("each advisory carries the warning symbol, and no advisory carries a colour")
-func advisoriesCarryShapeRatherThanColour() throws {
-    let source = try panelSource()
+/// The paints on a surface that neither name a neutral semantic nor ask
+/// `BrandPalette` for a role.
+///
+/// The `brand(` prefix is what makes this an allowlist: every colour on these
+/// surfaces asks the palette for a role, which is the route that lets a test
+/// read the value. A hex or a system colour named in the view is refused
+/// whatever it is.
+private func unroutedPaints(in code: String) -> [String] {
+    paints(in: code).filter {
+        neutralForegrounds.contains($0) == false && $0.hasPrefix("brand(") == false
+    }
+}
 
+/// The paints that reach systemOrange THROUGH the palette.
+///
+/// `unroutedPaints` accepts any `brand(` call as routed, and that is not by
+/// itself evidence of a legible colour: `BrandPalette.rgb` returns `nil` for
+/// `.warning` and `color(_:scheme:contrast:)` falls through to `.orange` for it,
+/// so `brand(.warning)` puts the EXACT pigment issue #30 removed back on the
+/// screen while satisfying the allowlist. Measured, not reasoned: `.warning` is
+/// the one role with no hex, and `.orange` is the literal returned in its place.
+///
+/// This is a hole in the allowlist rather than in the advisory checks —
+/// `pigments` already refuses `brand(.warning` on an advisory, because the
+/// argument arrives truncated at the first `)` and truncated is never `.primary`
+/// — so what it closes is the "and nowhere else on this surface" half: a heading
+/// or a button free to take the pigment the advisories just gave up.
+///
+/// `.warning` still has no production caller. This keeps it that way in the two
+/// files that used to spend the colour, rather than trusting a comment to.
+private func warningPaints(in code: String) -> [String] {
+    paints(in: code).filter { $0.contains(".warning") }
+}
+
+/// How many files under `Sources/CoffeeBarUI` declare the advisory treatment.
+///
+/// MODULE-WIDE, and the breadth is the point. The count this replaces read one
+/// file, so a second declaration in a sibling file was invisible to it — which
+/// is the same blindness, in the same guard, that let the fifth advisory ship.
+/// Two treatments named `AdvisoryRow` is exactly how the surfaces drift apart
+/// again with every assertion below still green, because each one would be
+/// reading whichever declaration it found first.
+private func advisoryRowDeclarations() throws -> Int {
+    try filesUnderCoffeeBarUI(naming: "struct AdvisoryRow: View").count
+}
+
+/// The files under `Sources/CoffeeBarUI` whose CODE contains `needle`.
+///
+/// Comment-stripped through `uiSource`, so the prose in `AdvisoryRow.swift` that
+/// explains the treatment cannot answer for the treatment.
+private func filesUnderCoffeeBarUI(naming needle: String) throws -> [String] {
+    let names = try FileManager.default
+        .contentsOfDirectory(atPath: uiSourceDirectory().path)
+        .filter { $0.hasSuffix(".swift") }
+        .sorted()
+    return try names.filter { try uiSource($0).contains(needle) }
+}
+
+@Test("one advisory treatment exists in the module, and no surface keeps its own")
+func exactlyOneSurfaceDeclaresTheAdvisoryTreatment() throws {
+    // THE LEFTOVER, which is a real state this branch passed through rather
+    // than a hypothetical. Lifting `advisoryRow` out of `PanelView` and
+    // forgetting to delete the original leaves the module with TWO treatments:
+    // `AdvisoryRow.swift` and a private copy on the panel. Every other check in
+    // this file stays green through that — `advisoryRowDeclarations()` counts
+    // `struct AdvisoryRow: View` and a leftover `func advisoryRow(` is not one,
+    // and the per-advisory checks pass the moment the call sites are repointed.
+    //
+    // Two treatments is the precondition for the drift issue #30 shipped: the
+    // panel's four advisories and the window's one rendered from different
+    // declarations, so a change to either reached only half the product.
+    let privateCopies = try filesUnderCoffeeBarUI(naming: "func advisoryRow(")
+    #expect(privateCopies.isEmpty, """
+        \(privateCopies) still declare their own func advisoryRow(. The \
+        treatment lives in AdvisoryRow.swift; a surface that keeps a private \
+        copy is how the advisories drifted apart in the first place, and \
+        repointing the call sites does not remove it.
+        """)
+
+    // THE SYMBOL, module-wide, which catches the same leftover under any other
+    // name. A duplicate treatment called `warningRow(` or written inline at a
+    // call site walks straight past the check above, and the one thing it
+    // cannot do without is the mark that replaced the colour.
+    let symbolSites = try filesUnderCoffeeBarUI(naming: "exclamationmark.triangle")
+    #expect(symbolSites == ["AdvisoryRow.swift"], """
+        the warning symbol is rendered by \(symbolSites). It belongs to exactly \
+        one file: every advisory on every surface draws it through AdvisoryRow, \
+        so a second file naming it is a second treatment whatever it is called.
+        """)
+}
+
+@Test("on every surface, each advisory carries the warning symbol and no colour")
+func advisoriesCarryShapeRatherThanColour() throws {
     // REPLACES a count of `.foregroundStyle(.orange)` that asserted exactly
     // four. That guard pinned the defect issue #30 is about: systemOrange as
     // caption TEXT reaches 1.75:1 to 2.31:1 on the light backdrops this panel
@@ -408,20 +542,34 @@ func advisoriesCarryShapeRatherThanColour() throws {
     // refuses. `BrandPalette.swift` carries the other half, on the `ColorRole`
     // declaration, and its note about a count of four is what this replaces.
 
-    // ONE treatment. The count is load-bearing: the checks below reach all four
-    // advisories through `advisoryRow(`, so a second declaration of that name
-    // would let two of them drift apart while both halves of this guard stayed
-    // green.
-    let declarations = source.components(separatedBy: "func advisoryRow(").count - 1
-    #expect(declarations == 1, """
-        PanelView.swift declares func advisoryRow( \(declarations) times. This \
-        guard reads ONE treatment and requires all four advisories to route \
-        through it; at any other count it is measuring something else.
+    // BOTH SURFACES, asserted rather than assumed. The defect this guard now
+    // exists to catch is not "an advisory went orange" — it is "an advisory went
+    // orange somewhere this guard does not read". Shrinking the table back to
+    // one file is that defect, and it would otherwise be a silent edit.
+    #expect(advisorySurfaces.map(\.file).sorted() == ["PanelView.swift", "PreferencesView.swift"], """
+        this guard reads \(advisorySurfaces.map(\.file).sorted()). Issue #30's \
+        remainder was a FIFTH orange advisory in PreferencesView.swift that \
+        survived a change whose whole purpose was removing them, because the \
+        guard read PanelView.swift and nothing else. A surface dropped from \
+        this table is a surface no check reads.
         """)
 
-    let treatment = try #require(braceBlock(after: "func advisoryRow(", in: source)?.block, """
-        PanelView.swift names advisoryRow( but opens no balanced block after it, \
-        so this guard cannot tell what an advisory renders.
+    // ONE treatment, MODULE-WIDE. The count is load-bearing: every check below
+    // reaches the advisories through `AdvisoryRow`, so a second declaration of
+    // that name would let the surfaces drift apart while this guard stayed
+    // green, each half reading whichever declaration it happened to find.
+    let declarations = try advisoryRowDeclarations()
+    #expect(declarations == 1, """
+        Sources/CoffeeBarUI declares struct AdvisoryRow: View \(declarations) \
+        times. This guard reads ONE treatment and requires every advisory on \
+        every surface to route through it; at any other count it is measuring \
+        something else.
+        """)
+
+    let treatment = try #require(braceBlock(after: "var body: some View",
+                                            in: try uiSource("AdvisoryRow.swift"))?.block, """
+        AdvisoryRow.swift opens no balanced body block, so this guard cannot \
+        tell what an advisory renders.
         """)
 
     // THE SYMBOL, which is what carries the meaning now that the colour is
@@ -430,7 +578,7 @@ func advisoriesCarryShapeRatherThanColour() throws {
     // advisory is an unremarkable caption in a column of captions — the exact
     // cost this change accepted and undertook to pay in shape instead.
     #expect(treatment.contains("exclamationmark.triangle"), """
-        the advisory treatment in PanelView.swift renders no \
+        the advisory treatment in AdvisoryRow.swift renders no \
         exclamationmark.triangle. With the orange gone the symbol is the ONLY \
         thing separating a warning from the ordinary caption above it.
         """)
@@ -438,7 +586,7 @@ func advisoriesCarryShapeRatherThanColour() throws {
     // ANTI-VACUITY for the check above: a treatment that draws a symbol and no
     // sentence would satisfy it while telling the user nothing.
     #expect(treatment.contains("Text(line)"), """
-        the advisory treatment in PanelView.swift draws no Text(line), so \
+        the advisory treatment in AdvisoryRow.swift draws no Text(line), so \
         whatever the model published reaches the user nowhere.
         """)
 
@@ -447,64 +595,95 @@ func advisoriesCarryShapeRatherThanColour() throws {
     // already `.secondary`, and an advisory that reads lighter than the neutral
     // sentence above it is quieter than the thing it interrupts.
     #expect(paints(in: treatment).contains(".primary"), """
-        the advisory treatment in PanelView.swift states no .primary foreground, \
-        so the advisory takes whatever the enclosing stack happens to set — \
-        including .secondary, which draws a warning fainter than the neutral \
-        line beside it.
+        the advisory treatment in AdvisoryRow.swift states no .primary \
+        foreground, so the advisory takes whatever the enclosing stack happens \
+        to set — including .secondary, which draws a warning fainter than the \
+        neutral line beside it.
         """)
-
-    // Every advisory routes through that one treatment, and paints nothing.
-    for value in advisoryValues {
-        let block = try #require(braceBlock(after: value, in: source)?.block, """
-            PanelView.swift does not open a balanced block after \(value), so \
-            this guard cannot read what that advisory renders. Issue #30 covers \
-            FOUR advisory lines; a missing one is a failure, not a skip.
-            """)
-
-        #expect(block.contains("advisoryRow("), """
-            the advisory driven by \(value) does not render through \
-            advisoryRow(, so it carries neither the symbol nor the foreground \
-            the other three do. A second treatment written out at one site is \
-            how the four drift apart.
-            """)
-
-        #expect(pigments(in: block).isEmpty, """
-            the advisory driven by \(value) paints \(pigments(in: block)). \
-            Advisory text carries no pigment at all: assets/art/README.md line \
-            22 states the rule — "Neither accent carries body text" — and issue \
-            #30 measured why systemOrange in particular cannot, at 1.75:1 to \
-            2.31:1 on a light backdrop against a 4.5:1 floor.
-            """)
-    }
 
     #expect(pigments(in: treatment).isEmpty, """
-        the advisory treatment in PanelView.swift paints \
+        the advisory treatment in AdvisoryRow.swift paints \
         \(pigments(in: treatment)). Painting it once, in the shared treatment, \
-        colours all four advisories at a stroke.
+        colours every advisory on every surface at a stroke.
         """)
 
-    // AND NOWHERE ELSE IN THE PANEL. The guard this replaces said "orange is
-    // spent on exactly the four advisory lines", so it also held the rest of
-    // the file; dropping that half would leave the panel free to paint the Quit
-    // button or a heading with the pigment the advisories just gave up.
-    //
-    // An allowlist again, and `brand(` is what makes it one: every remaining
-    // paint in this file asks `BrandPalette` for a role, which is the route
-    // `BrandPalette` exists to force. A hex or a system colour named directly
-    // is refused whatever it is.
-    let panelPaints = paints(in: source)
-    #expect(panelPaints.isEmpty == false, """
-        this guard found no foreground style at all in PanelView.swift, which \
-        means it is reading something other than the panel.
-        """)
-    let unrouted = panelPaints.filter {
-        neutralForegrounds.contains($0) == false && $0.hasPrefix("brand(") == false
+    // Every advisory on every surface, and the loop is what makes this guard
+    // span the module rather than one file.
+    for surface in advisorySurfaces {
+        let source = try uiSource(surface.file)
+
+        for value in surface.throughTheRow {
+            let block = try #require(braceBlock(after: value, in: source)?.block, """
+                \(surface.file) does not open a balanced block after \(value), \
+                so this guard cannot read what that advisory renders. A missing \
+                advisory is a failure, not a skip.
+                """)
+
+            #expect(block.contains("AdvisoryRow("), """
+                the advisory driven by \(value) in \(surface.file) does not \
+                render through AdvisoryRow(, so it carries neither the symbol \
+                nor the foreground the others do. A treatment written out at \
+                one site is how the surfaces drift apart.
+                """)
+
+            #expect(pigments(in: block).isEmpty, """
+                the advisory driven by \(value) in \(surface.file) paints \
+                \(pigments(in: block)). Advisory text carries no pigment at \
+                all: assets/art/README.md line 22 states the rule — "Neither \
+                accent carries body text" — and issue #30 measured why \
+                systemOrange in particular cannot, at 1.75:1 to 2.31:1 on a \
+                light backdrop against a 4.5:1 floor.
+                """)
+        }
+
+        // The no-pigment half ALONE for these, and the asymmetry is deliberate:
+        // see `advisorySurfaces`. They never carried the colour and are meant
+        // to read quieter than the panel's copy of the same sentence, so the
+        // symbol would be a change issue #30 never asked for. The contrast rule
+        // still binds them, because that one is about legibility.
+        for value in surface.neutralOnly {
+            let block = try #require(braceBlock(after: value, in: source)?.block, """
+                \(surface.file) does not open a balanced block after \(value), \
+                so this guard cannot read what that advisory renders. A missing \
+                advisory is a failure, not a skip.
+                """)
+
+            #expect(pigments(in: block).isEmpty, """
+                the advisory driven by \(value) in \(surface.file) paints \
+                \(pigments(in: block)). An advisory carries no pigment on any \
+                surface — this one is exempt from the SYMBOL, never from the \
+                colour rule.
+                """)
+        }
+
+        // AND NOWHERE ELSE ON THIS SURFACE. The guard this replaces said
+        // "orange is spent on exactly the four advisory lines", so it also held
+        // the rest of the file; dropping that half would leave a surface free
+        // to paint a heading or a button with the pigment the advisories just
+        // gave up.
+        let surfacePaints = paints(in: source)
+        #expect(surfacePaints.isEmpty == false, """
+            this guard found no foreground style at all in \(surface.file), \
+            which means it is reading something other than that surface.
+            """)
+
+        #expect(unroutedPaints(in: source).isEmpty, """
+            \(surface.file) paints \(unroutedPaints(in: source)) directly. \
+            Colour on this surface comes from brand(_:) — so a test can read \
+            the value — or it is one of the neutral semantics. A colour named \
+            in the view is a colour no check reads.
+            """)
+
+        // The allowlist above admits ANY brand( call, and one of the roles is
+        // the pigment this whole issue is about. See `warningPaints`.
+        #expect(warningPaints(in: source).isEmpty, """
+            \(surface.file) paints \(warningPaints(in: source)). brand(.warning) \
+            resolves to SwiftUI .orange — BrandPalette.rgb returns nil for that \
+            role and color(_:scheme:contrast:) falls through to the literal — so \
+            it puts back the exact systemOrange issue #30 removed while \
+            satisfying the brand( allowlist above.
+            """)
     }
-    #expect(unrouted.isEmpty, """
-        PanelView.swift paints \(unrouted) directly. Colour in this panel comes \
-        from brand(_:) — so a test can read the value — or it is one of the \
-        neutral semantics. A colour named in the view is a colour no check reads.
-        """)
 }
 
 @Test("the advisory guard refuses every spelling of a pigment, not just the one that shipped")
@@ -516,7 +695,7 @@ func theAdvisoryGuardRefusesEverySpellingOfAPigment() throws {
     for spelling in [".orange", "Color.orange", "brand(.warning)", ".red"] {
         let painted = """
             if let line = model.hookAdvisory {
-                advisoryRow(line)
+                AdvisoryRow(line: line)
                     .foregroundStyle(\(spelling))
             }
             """
@@ -532,8 +711,33 @@ func theAdvisoryGuardRefusesEverySpellingOfAPigment() throws {
 
     // `.tint` descends through the Environment, so one on the container above
     // an advisory paints it without ever naming it.
-    #expect(pigments(in: "VStack { advisoryRow(line) }.tint(.orange)").isEmpty == false,
+    #expect(pigments(in: "VStack { AdvisoryRow(line: line) }.tint(.orange)").isEmpty == false,
             "a .tint above an advisory must be refused")
+
+    // THE HOLE IN THE OTHER HALF, and this pair is the whole argument for
+    // `warningPaints` existing at all.
+    //
+    // `unroutedPaints` is the "and nowhere else on this surface" check, and it
+    // treats any `brand(` call as routed — which is right for `.state` and
+    // `.rest`, and wrong for exactly one role. The first assertion PROVES the
+    // hole rather than describing it: the allowlist really does wave
+    // `brand(.warning)` through. The second is what closes it.
+    let throughThePalette = "Text(line).foregroundStyle(brand(.warning))"
+    #expect(unroutedPaints(in: throughThePalette).isEmpty, """
+        the brand( allowlist is supposed to admit this spelling — that is the \
+        hole warningPaints closes. If this line ever fails, the allowlist \
+        changed and warningPaints may now be dead weight.
+        """)
+    #expect(warningPaints(in: throughThePalette).isEmpty == false,
+            "brand(.warning) resolves to systemOrange and must be refused")
+
+    // THE POSITIVE CONTROL for that second reader. Without it, a `warningPaints`
+    // that answers non-empty for every input passes the line above while turning
+    // the two shipped surfaces red for their legitimate roast colour.
+    for legible in ["brand(.state)", "brand(spec.role)", ".secondary"] {
+        #expect(warningPaints(in: "Text(x).foregroundStyle(\(legible))").isEmpty,
+                "\(legible) does not resolve to systemOrange and must pass")
+    }
 
     // THE POSITIVE CONTROL. Without it every assertion above is satisfied by a
     // `pigments` that answers non-empty for any input at all — including the
