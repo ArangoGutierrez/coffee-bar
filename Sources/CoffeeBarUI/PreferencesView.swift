@@ -143,6 +143,41 @@ public struct PreferencesView: View {
                         .monospacedDigit()
                 }
 
+                // WHICH HOLDS THE TWO SLIDERS ABOVE GOVERN, and issue #73 is
+                // why it had to be said out loud. The battery floor sits in the
+                // product's settings window, so it reads as governing every hold
+                // coffee-bar is involved in; it governs none of the lid-closed
+                // one, which runs under a root daemon that never reads this
+                // process's preferences. Nothing on any surface said so, and a
+                // user had no route to discover it short of watching a machine
+                // in a bag die at 15%.
+                //
+                // UNDER BOTH CONTROLS, which is placement rather than the end of
+                // a list. The lid-closed paragraph below states the rule: a
+                // paragraph above a slider reads as instructions for that
+                // slider. Between the two sliders this sentence would scope the
+                // lid-closed one alone — the exact reading #74 made likely by
+                // putting a "Lid-closed hold" label directly under "Battery
+                // floor" — so it goes beneath both, where it can address them
+                // together.
+                //
+                // ABOVE the lid-closed paragraph, because it says "the root
+                // command below" and that paragraph is where the command is.
+                // `theScopeNoteIsRenderedUnconditionallyUnderBothPowerControls`
+                // holds both halves of the ordering, and the reachability the
+                // page has already lost once: `if false { … }` around a control
+                // here left every `contains` guard in the package green while
+                // the window shipped without it.
+                //
+                // Rendered verbatim from the model with no text built here, for
+                // the reason the paragraph below gives — M1 design §5.4 forbids
+                // asserting on rendered AppKit text, and an unread sentence is
+                // how this window came to promise a scope nobody had checked.
+                Text(ServingModel.powerScopeNote)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
                 // Lid-closed mode: the third power question, and the only one
                 // with no control anywhere in this window.
                 //
