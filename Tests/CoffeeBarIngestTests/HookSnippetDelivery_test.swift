@@ -78,8 +78,12 @@ private struct HomeSandbox {
 /// Every command string in `tool`'s snippet, whichever shape the tool's file
 /// takes.
 ///
-/// A second copy of the walker in `HookSnippet_test.swift`. SwiftPM gives two
-/// test targets no way to share code, and that file is in `CoffeeBarCoreTests`.
+/// A second copy of the walker in `HookSnippet_test.swift`, which is in
+/// `CoffeeBarCoreTests`. NOT because test targets cannot share code — they can,
+/// and two already do: `CoffeeBarTestSupport` is a plain target under `Tests/`
+/// that both `CoffeeBarCoreTests` and `CoffeeBarUITests` take as a dependency.
+/// `CoffeeBarIngestTests` does not, so unifying the two walkers means editing
+/// `Package.swift`, which is outside what this change was asked to touch.
 /// Both walk BOTH nestings, so a snippet that silently changed shape yields its
 /// commands anyway rather than yielding an empty list a caller reads as nothing
 /// to check.
