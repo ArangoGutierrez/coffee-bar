@@ -172,6 +172,7 @@ private let expectedAppLayerEntries = [
     "Sources/CoffeeBarUI/PreferencesView.swift",
     "Sources/CoffeeBarUI/PrivilegedHelperReader.swift",
     "Sources/CoffeeBarUI/ProcessGovernance.swift",
+    "Sources/CoffeeBarUI/QuickStartView.swift",
     "Sources/CoffeeBarUI/ServingModel.swift",
 ]
 

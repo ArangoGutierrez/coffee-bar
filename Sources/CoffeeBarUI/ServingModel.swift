@@ -1233,6 +1233,19 @@ public final class ServingModel {
         // indistinguishable from a choice a second later, and issue #52's wizard
         // has to tell those apart to know whom it is for.
         self.selectedAgentTools = settings.selectedAgentTools()
+        // Read once, here, for the reason above, and `?? false` is the direction
+        // the whole of issue #52 rests on: a key nobody wrote means NOT YET
+        // SHOWN. The other way round ships a quick start no user ever sees, with
+        // every check about what it asks still green.
+        //
+        // **This init READS the store and writes nothing to it, and that is the
+        // acceptance bullet rather than a style note.** Everything the quick
+        // start shows is pre-filled from the five reads above — the user's own
+        // floor, their own display answer, their own tool selection — and a
+        // sixth line here seeding any of them back would turn a deliberate 40%
+        // floor into 15% for a user who did nothing but click through.
+        self.quickStartCompletedStorage =
+            settings.bool(forKey: SettingsKey.quickStartCompleted) ?? false
     }
 
     // There is deliberately NO `deinit` here, and none may be added.
@@ -1540,6 +1553,147 @@ public final class ServingModel {
     /// opt-in and the panel renders it as a toggle, so a second label would be a
     /// label nothing draws.
     static let quietOthersLabel = "Quiet everything else"
+
+    // MARK: - The quick start (issue #52)
+
+    /// Whether the quick start still has to be shown.
+    ///
+    /// **It is not a first-run flag, and the difference is the product
+    /// decision.** The obvious gate — "this user has no settings yet" — skips
+    /// everybody who has ever opened Preferences, and this page is also the
+    /// UPGRADE experience: it is shown once to EVERYONE, with the answers they
+    /// already have pre-filled. `theQuickStartIsShownToAnUpgradingUserAndNotOnlyToAnEmptyOne`
+    /// drives a store holding three configured settings, which is exactly the
+    /// state a has-settings gate reads as "already sorted".
+    ///
+    /// TWO conditions, and only one of them outlives the process.
+    /// `completeQuickStart()` records the answer for good; `deferQuickStart()`
+    /// puts the page away for this window only. That is what separates "not
+    /// now" from "never" — see the two methods below.
+    ///
+    /// **Reading this writes nothing**, and that is the whole of the acceptance
+    /// bullet this feature is most likely to fail. A default seeded on the way
+    /// in is indistinguishable from a choice a second later, and for
+    /// `SettingsKey.agentTools` the difference is not recoverable afterwards:
+    /// absent is a user who has never been asked, and any written value is a
+    /// user who answered. `theQuickStartWritesNothingWhateverOnTheWayIn` holds
+    /// it against a store that logs writes rather than values, because a seed
+    /// that happens to write back the value already there is invisible to a
+    /// value assertion and has still destroyed the distinction.
+    public var quickStartPending: Bool {
+        !quickStartCompletedStorage && !quickStartDeferred
+    }
+
+    /// The backing store for the recorded half, seeded from the settings in
+    /// `init`. Private, for the reason `holdDisplayAwakeStorage` is.
+    private var quickStartCompletedStorage: Bool
+
+    /// The session-only half, which is deliberately NOT a setting.
+    ///
+    /// It resets when the process does, and that IS the behaviour: a user who
+    /// chose "not now" is asking to be asked again, not to be left with no route
+    /// back short of clearing their preferences.
+    private var quickStartDeferred = false
+
+    /// Records that the user has been shown the quick start.
+    ///
+    /// **It writes the completion record and NOTHING else.** Every answer was
+    /// already written as the user gave it — the page binds to
+    /// `holdDisplayAwake`, `batteryFloorPercent` and `setAdvises(_:for:)`, the
+    /// same properties the Settings window binds to — so there is nothing left
+    /// to apply here. A Done button that "applied" the pre-filled answers would
+    /// be the overwrite this feature exists to avoid, arriving through the exit
+    /// rather than the entrance, and it is the likelier of the two because it
+    /// reads as obviously correct.
+    /// `finishingTheQuickStartRecordsOnlyThatItWasShown` asserts the write log
+    /// is exactly one key long.
+    ///
+    /// No `refresh()`. Nothing coffee-bar is currently doing changes when the
+    /// page closes; the setters that DID change something reconciled at the
+    /// moment they were touched.
+    public func completeQuickStart() {
+        quickStartCompletedStorage = true
+        settings.setBool(true, forKey: SettingsKey.quickStartCompleted)
+    }
+
+    /// Puts the quick start away for this session without recording anything.
+    ///
+    /// **"Not now", and it must not become "never".** Writing the completion
+    /// record here is one line and reads as harmless; it leaves a user who meant
+    /// to answer later with no route back except clearing their preferences.
+    /// `dismissingTheQuickStartWritesNothingAndBringsItBackNextLaunch` drives a
+    /// second model over the same store, which is what a relaunch is.
+    ///
+    /// Nothing else is written either, so a dismissal leaves the app exactly as
+    /// it was: per issue #51 the three keys stay unset, an unset `agentTools` is
+    /// a user who has not been asked rather than a broken state, and the panel
+    /// says what it said before the page appeared.
+    public func deferQuickStart() {
+        quickStartDeferred = true
+    }
+
+    /// What the page says it is for, above the three questions.
+    ///
+    /// Here rather than in the view, for the reason `quietOthersLabel` is:
+    /// design §5.4 rules out asserting on rendered AppKit text, so a sentence
+    /// composed in the view is a sentence no check reads — which is how this
+    /// window came to promise a scope nobody had checked (issue #73).
+    ///
+    /// It promises the answers can be changed later, because they can: every one
+    /// of them is a control in this same window once the page is done with.
+    static let quickStartIntro = """
+        Three questions, and coffee-bar is set up. Every answer is a setting in \
+        this window, so anything here can be changed later.
+        """
+
+    /// The display question.
+    ///
+    /// It names the DEFAULT rather than recommending an answer. coffee-bar lets
+    /// the screen sleep unless the user says otherwise — that is the product's
+    /// difference from the blunt tools — and a first-run page that talked a user
+    /// into the display hold would be selling the behaviour it exists to avoid.
+    static let quickStartDisplayQuestion = """
+        While an agent is working, should the screen stay on? coffee-bar lets it \
+        sleep unless you say otherwise.
+        """
+
+    /// The battery-floor question.
+    ///
+    /// It says what the number DOES, because "battery floor" names a concept
+    /// this user has not met yet. The wording is the scope the two power
+    /// controls share; `powerScopeNote` states the lid-closed exception where
+    /// that control lives, and repeating it here would put an exception in front
+    /// of a user who has not been told the rule.
+    static let quickStartFloorQuestion = """
+        How much battery may a hold spend? Below this charge coffee-bar stops \
+        holding the machine awake and lets it sleep.
+        """
+
+    /// The agent-tools question.
+    ///
+    /// It NAMES NO TOOL, for the reason `agentToolsLabel` names none:
+    /// `AgentTool.allCases` is the one place that list lives, and a sentence
+    /// spelling it out would still say three when a fourth arrived, with nothing
+    /// able to see it.
+    ///
+    /// It promises no installation. Design §6 is print-never-touch for every one
+    /// of those files, and answering this question writes nothing but the
+    /// selection itself.
+    static let quickStartToolsQuestion = """
+        Which agent tools do you run? coffee-bar reports hook health for the ones \
+        you pick, and installs nothing.
+        """
+
+    /// The label on the exit that records the page as shown.
+    static let quickStartFinishLabel = "Done"
+
+    /// The label on the exit that records nothing.
+    ///
+    /// It says LATER rather than "Cancel" or "Skip", because that is what it
+    /// does: the page comes back next launch. A label promising dismissal on a
+    /// button that defers is a label that lies about which of the two exits the
+    /// user pressed.
+    static let quickStartDeferLabel = "Ask me later"
 
     /// Undoes every demotion the journal records. Call it at launch and on a
     /// clean exit.

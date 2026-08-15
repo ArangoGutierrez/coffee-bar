@@ -476,6 +476,42 @@ public struct PreferencesView: View {
         // SwiftUI answer and it does NOT work here; `main.swift` records both
         // builds. This line does, and `AXSize.settable=true` with it.
         .background(HostWindowReader { $0.styleMask.insert(.resizable) })
+        // THE FIRST-RUN QUICK START (issue #52), over this window's content.
+        //
+        // WHY HERE, recorded because the issue says otherwise and the issue is
+        // out of date. It was filed when the app declared a single
+        // `MenuBarExtra` scene and concluded there was no window to host a
+        // wizard in. #50 added the `Settings` scene `main.swift` now declares,
+        // and this file is that window: an `LSUIElement` app still has no Dock
+        // icon and no menu bar of its own, but it does have exactly one window,
+        // and the panel already links to it with `SettingsLink`.
+        //
+        // A SHEET rather than a page swapped into `body`. Two reasons, and the
+        // second is not aesthetic:
+        //
+        //   1. It is modal over the settings the questions are about, so a user
+        //      who wants to look before answering can see them behind it.
+        //   2. Swapping the page in would put every control in this file inside
+        //      an `else`, one brace deeper than the section headings —
+        //      `everyMovedControlIsRenderedAsUnconditionallyAsTheHeadingsAboveIt`
+        //      pins those depths absolutely, and it is right to: an added
+        //      enclosure is exactly how three controls once shipped unreachable
+        //      with the suite green.
+        //
+        // THE MODEL OWNS THE GATE and there is no second condition here.
+        // `quickStartPending` is what every check drives, and a flag of this
+        // view's own would be a second place the page can be switched off that
+        // nothing reads.
+        //
+        // The `set` half is the ESC key and the sheet's own dismissal, and it
+        // maps to "not now" rather than to "done" deliberately: a user who
+        // presses escape has answered nothing, so nothing is recorded and the
+        // page returns next launch.
+        .sheet(isPresented: Binding(
+            get: { model.quickStartPending },
+            set: { presented in if !presented { model.deferQuickStart() } })) {
+            QuickStartView(model: model)
+        }
         // TAKE THE FOREGROUND. Opening a window and becoming the active app are
         // different things, and for an `LSUIElement` process the second does not
         // follow from the first. Measured at 0.1.1-31-g7949c51: the window
