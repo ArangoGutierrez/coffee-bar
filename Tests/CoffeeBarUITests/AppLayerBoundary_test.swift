@@ -1645,6 +1645,24 @@ private func httpsAddresses(in code: String) -> [String] {
         "installID",
     ]
 
+    // THE PRESSURE THIS LIST WILL COME UNDER, recorded at the site so the next
+    // reader meets the argument before the edit.
+    //
+    // Measured, not assumed: pointing the shipped session configuration at a
+    // loopback listener shows macOS adds `Accept-Language` — the user's own
+    // language — to every request any application makes. Somebody will
+    // reasonably want to strip it, and the only way to strip a header is to set
+    // one, which needs `URLRequest`, which the ban above keeps refused EVEN IN
+    // THE ENTITLED FILE.
+    //
+    // That refusal is the whole structure. With no request object in that file
+    // there is nowhere to put a header, so "no custom User-Agent, no install
+    // ID" holds by construction rather than by review. Relaxing this to allow
+    // one well-meant header converts a structural guarantee into a judgement
+    // call about every header that follows it, and `Accept-Language` identifies
+    // no install — it is not what this guard is for. `SECURITY.md` carries the
+    // argument and discloses the header instead. The answer is no.
+
     for name in identifying {
         #expect(!code.contains(name), """
             \(networkEntitlement.file) names \(name) in CODE. The update check \

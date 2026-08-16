@@ -118,9 +118,24 @@ carries the language you have set**, which is the only line here that is about
 you rather than about the software, and it is stated because "in full" has to
 mean in full — the first draft of this section listed the `User-Agent` alone and
 was corrected by the measurement above rather than by reading the code.
-Overriding it would mean setting a header, and setting headers is the thing
-`theOneFileThatReachesTheNetworkSendsNoIdentifier` refuses outright; a rule that
-allows one header is a rule that has to judge each one.
+
+**Why `Accept-Language` is disclosed rather than removed, so that nobody
+"fixes" it by weakening the guard.** Every header in that block is supplied by
+the operating system for every `URLSession` request any application makes.
+coffee-bar sets none of them, and none is what this policy means by an
+identifier: an identifier is something the APP adds that tells one install from
+another, which is what the no-identifier promise above rules out.
+
+Removing `Accept-Language` would mean setting a header, and setting a header
+needs `URLRequest` — the request-construction API that
+`noLinkedTargetCanReachTheNetworkByAddress` **deliberately keeps banned even in
+the one file entitled to reach the network**. That ban is exactly what makes
+"there is no request object here on which a header could be set" a structural
+fact rather than a promise somebody has to keep. Trading that structure away to
+drop a locale string would be a bad bargain, and a rule that permits one header
+is a rule that has to adjudicate every future one. If you are reading this
+because you want to strip the header: the answer is no, and this paragraph is
+the reason.
 
 **How often, and how to see it.** At most once a day, and only when you open the
 Preferences window. There is no timer: a coffee-bar sitting in the menu bar all

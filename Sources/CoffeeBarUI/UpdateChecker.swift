@@ -99,6 +99,23 @@ public struct PublishedManifestFetcher: ReleaseManifestFetching {
     /// this file asserting it — a file that set headers to an empty dictionary
     /// would read as more careful and would be the same thing with a place to
     /// add one later.
+    ///
+    /// **WHAT THE REQUEST ACTUALLY SENDS, measured rather than inferred.** The
+    /// configuration above was pointed at a loopback listener and the request
+    /// head printed. `httpAdditionalHeaders` really is `nil`, and there is no
+    /// cookie and no body — and macOS adds `Accept-Language`, carrying the
+    /// user's language, on top of `Accept`, `Accept-Encoding`, `User-Agent`,
+    /// `Cache-Control` and `Connection`. `SECURITY.md` prints that head in full,
+    /// because a policy promising "the whole request" written from reading this
+    /// file alone would have been false.
+    ///
+    /// **DO NOT "FIX" `Accept-Language` BY SETTING IT.** It is OS-supplied for
+    /// every application and identifies no install, so it is not what the
+    /// no-identifier rule is about. Overriding it needs `URLRequest`, which the
+    /// egress guard keeps banned in THIS FILE precisely so that there is no
+    /// request object here on which any header could be set. That ban is the
+    /// structure behind the promise; a locale string is not worth trading it
+    /// for. `SECURITY.md` carries the whole argument.
     static func sessionConfiguration(timeout: TimeInterval) -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
