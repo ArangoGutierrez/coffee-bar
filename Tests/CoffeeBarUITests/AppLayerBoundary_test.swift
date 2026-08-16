@@ -1340,9 +1340,9 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // Carlos's M5 decision, made structural. It is a SECURITY property, not a
     // preference.
     //
-    // SECURITY.md "It cannot pin a peer" requires an XPC helper to pin its peer with
-    // `setCodeSigningRequirement` and to reject any peer that does not match
-    // the app's Team ID and bundle ID.
+    // SECURITY.md "every peer on it is pinned" requires an XPC helper to pin its
+    // peer with `setCodeSigningRequirement` and to reject any peer that does not
+    // match the app's Team ID and bundle ID.
     //
     // **That pin is now IMPLEMENTED, and issue #71 is the change that built
     // it.** It stopped being impossible at v0.2.0 — measured 2026-08-10 against

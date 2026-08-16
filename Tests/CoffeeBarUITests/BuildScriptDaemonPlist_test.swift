@@ -4,6 +4,7 @@
 import Foundation
 import Testing
 import CoffeeBarCore
+import CoffeeBarPower
 
 /// The half of issue #71 that lives in the build rather than in Swift.
 ///
@@ -64,8 +65,11 @@ func theDaemonPlistAgreesWithTheAppOnEveryName() throws {
     #expect(code.contains(PrivilegedHelperIdentity.daemonPlistName), """
         build-app.sh writes no file named \(PrivilegedHelperIdentity.daemonPlistName)
         """)
-    #expect(code.contains("<string>\(PrivilegedHelperIdentity.helperLabel)</string>"), """
-        the plist's Label must be \(PrivilegedHelperIdentity.helperLabel)
+    #expect(code.contains("HELPER_LABEL=\"\(PrivilegedHelperIdentity.helperLabel)\""), """
+        build-app.sh sets no HELPER_LABEL of \(PrivilegedHelperIdentity.helperLabel)
+        """)
+    #expect(code.contains("<string>${HELPER_LABEL}</string>"), """
+        the plist's Label must be the HELPER_LABEL the script sets
         """)
     #expect(code.contains("<key>MachServices</key>"),
             "the daemon publishes no Mach endpoint, so nothing can dial it")
