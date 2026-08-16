@@ -170,12 +170,46 @@ private let expectedAppLayerEntries = [
     "Sources/CoffeeBarUI/MenuBarGlyphs.swift",
     "Sources/CoffeeBarUI/PanelView.swift",
     "Sources/CoffeeBarUI/PreferencesView.swift",
+    "Sources/CoffeeBarUI/PrivilegedHelperClient.swift",
     "Sources/CoffeeBarUI/PrivilegedHelperReader.swift",
     "Sources/CoffeeBarUI/ProcessGovernance.swift",
     "Sources/CoffeeBarUI/QuickStartView.swift",
     "Sources/CoffeeBarUI/ServingModel.swift",
     "Sources/CoffeeBarUI/UpdateCheck.swift",
     "Sources/CoffeeBarUI/UpdateChecker.swift",
+]
+
+/// The files entitled to speak XPC, and the exact names each one may say.
+///
+/// **Issue #71 NARROWED this rule and did not delete it**, which is the shape
+/// `networkEntitlement` already set for issue #29. Every other file in the
+/// linked closure and on the privileged path stays under the whole six-name
+/// ban; these two are relieved of a disjoint slice each, and `SMJobBless` is
+/// relieved for NOBODY — it is the deprecated path `SECURITY.md` rules out and
+/// nothing here has ever needed it.
+///
+/// The split is deliberate and is the reason there are two entries rather than
+/// one blanket pass. `PrivilegedHelperPeerGate.swift` is the ONLY file in this
+/// package that may create, accept or configure a connection, so every peer pin
+/// in the product is in one file a reviewer can read end to end. It may not
+/// name `SMAppService`. `PrivilegedHelperClient.swift` registers the daemon and
+/// may name nothing else — it holds no connection object, because the gate
+/// hands it an opaque channel, so there is nowhere in it to resume one unpinned.
+///
+/// `theEntitledChannelFilePinsEveryPeerItOpens` bounds what the exemption
+/// bought, exactly as `theOnlyEntitledFileReachesOnlyThePinnedHost` does for the
+/// network one. An entitlement with no bounding check is a deletion with extra
+/// steps.
+private let privilegedHelperEntitlement: [String: [String]] = [
+    "PrivilegedHelperPeerGate.swift": [
+        "NSXPCListener",
+        "NSXPCConnection",
+        "setCodeSigningRequirement",
+        "machServiceName",
+    ],
+    "PrivilegedHelperClient.swift": [
+        "SMAppService",
+    ],
 ]
 
 /// The ONE file entitled to reach the network, and the ONE host it may reach.
@@ -1310,33 +1344,27 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // `setCodeSigningRequirement` and to reject any peer that does not match
     // the app's Team ID and bundle ID.
     //
-    // **That pin is UNIMPLEMENTED, and since v0.2.0 it is no longer
-    // impossible.** Measured 2026-08-10 against the shipped app:
-    // `codesign -R='anchor apple generic'` exits 0, `TeamIdentifier=85FN4Z37V8`,
-    // authority `Developer ID Application`. An earlier version of this comment
-    // recorded an ad-hoc signature, no Team ID and rc=1, and was CORRECT when
-    // it was written: the only build shipping then was the one the Homebrew
-    // formula makes from source. It stopped being true at v0.2.0 and nobody
-    // moved it — issue #86.
+    // **That pin is now IMPLEMENTED, and issue #71 is the change that built
+    // it.** It stopped being impossible at v0.2.0 — measured 2026-08-10 against
+    // the shipped app, `codesign -R='anchor apple generic'` exits 0,
+    // `TeamIdentifier=85FN4Z37V8`, authority `Developer ID Application`. An
+    // earlier version of this comment recorded an ad-hoc signature, no Team ID
+    // and rc=1, and was CORRECT when it was written: the only build shipping
+    // then was the one the Homebrew formula makes from source (issue #86).
     //
-    // **The argument that rested on it has lapsed with it, and no replacement
-    // is invented here.** This block used to conclude that an XPC listener's
-    // peer check could not be satisfied on the one channel that exists, so such
-    // a listener would be an unauthenticated root service rather than a weaker
-    // helper. With a real Team ID shipping, that reasoning no longer holds as
-    // written, and this comment does not manufacture another one to put in its
-    // place. What is true today is narrower: M5 shipped as a root CLI plus a
-    // launchd watchdog, nothing has re-opened that decision, and neither the
-    // peer pin nor `SMAppService` has been designed, written or tested here.
-    // Whether to act on the unblocking is issue #71's question rather than this
-    // guard's.
+    // So the ban is NARROWED rather than lifted, and this paragraph is the
+    // whole of the change. `privilegedHelperEntitlement` names the two files
+    // that may say these words and the disjoint slice each may say;
+    // `theEntitledChannelFilePinsEveryPeerItOpens` bounds what that bought;
+    // `Tests/CoffeeBarCoreTests/PrivilegedHelperIdentity_test.swift` decides
+    // whether the requirement really pins a team AND a bundle, against the
+    // system evaluator rather than against a reading of the string.
     //
-    // The RULE below is unaffected either way, and keeping the two apart is the
-    // point. Adding an XPC or `SMAppService` route is a design change and has to
-    // arrive as one — reviewed against SECURITY.md, with the peer pin written
-    // and tested — rather than as a construct somebody compiles in. Named bug it
-    // catches: an `NSXPCListener(machServiceName:)` added to the probe or to
-    // the app, which would compile, run, and accept any local peer.
+    // Every OTHER file stays under the whole ban, and that is what this guard
+    // is now for. Named bug it catches: an `NSXPCListener(machServiceName:)`
+    // added to `LidClosedSession.swift` or to the probe's `main.swift` —
+    // outside the one file whose peer pin anybody has reviewed — which would
+    // compile, run, and accept any local peer.
     //
     // `SMJobBless` is here too though nothing has ever used it: it is the
     // deprecated path SECURITY.md already rules out, and a search for "how do I
@@ -1379,21 +1407,81 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
         "machServiceName",
     ]
 
+    // POSITIVE CONTROL on the entitlement itself. A typo in a key of
+    // `privilegedHelperEntitlement` — or a file renamed without it — would
+    // silently relieve NOBODY, which is safe, or would leave the loop below
+    // reading a name no file has, which is vacuous. Both entitled files must be
+    // in the scan for the exemptions to mean anything.
+    for entitled in privilegedHelperEntitlement.keys.sorted() {
+        #expect(files.contains { $0.lastPathComponent == entitled }, """
+            the scan never reached \(entitled), which is entitled to name an \
+            XPC symbol; an entitlement for a file no scan reads is an \
+            exemption nobody is holding to anything
+            """)
+    }
+
     for file in files {
         let code = swiftCodeWithoutComments(try String(contentsOf: file, encoding: .utf8))
-        for name in forbidden {
+        let entitled = privilegedHelperEntitlement[file.lastPathComponent] ?? []
+        for name in forbidden where !entitled.contains(name) {
             #expect(!code.contains(name), """
-                \(file.lastPathComponent) names \(name) in CODE. M5 ships as a \
-                root CLI plus a launchd watchdog, and neither the XPC peer pin \
-                SECURITY.md requires nor SMAppService has been designed or \
-                written here — issue #71. Adding one of these is a design \
-                change and has to arrive as one, with the peer pin written and \
-                tested; until then an XPC service would accept any local peer. \
-                A comment may explain the choice; making the call is what this \
+                \(file.lastPathComponent) names \(name) in CODE, and it is not \
+                entitled to. Exactly two files may speak XPC — see \
+                privilegedHelperEntitlement — so that every peer pin in this \
+                product sits in one file a reviewer can read end to end. An \
+                unpinned connection accepts any local peer and is worse than \
+                the sudo command it replaces, because it looks safe. A comment \
+                may name the API; making the call anywhere else is what this \
                 refuses.
                 """)
         }
     }
+}
+
+@Test func theEntitledChannelFilePinsEveryPeerItOpens() throws {
+    // What `privilegedHelperEntitlement` BOUGHT, bounded — the same job
+    // `theOnlyEntitledFileReachesOnlyThePinnedHost` does for the network
+    // exemption. Relieving a file of the ban and then checking nothing about it
+    // is a deletion with extra steps.
+    //
+    // SECURITY.md requires an XPC peer to be pinned by Team ID AND bundle ID.
+    // Two named bugs, and both compile:
+    //
+    //  1. a connection is created and never pinned at all. The root daemon then
+    //     accepts every local process, which is the outcome M5 refused to ship
+    //     and the reason the CLI exists.
+    //  2. a requirement is pasted INLINE — `"anchor apple generic"` on its own
+    //     is the shape somebody reaches for when the real one will not compile.
+    //     That string is satisfied by every signed Apple-anchored binary on the
+    //     machine, and it reads, at a glance, exactly like a pin.
+    //
+    // So the requirement may only arrive from `PrivilegedHelperIdentity`, whose
+    // two constants are the thing the Core checks actually evaluate. A literal
+    // `anchor` in this file is refused however well-formed it looks.
+    let channelFile = "PrivilegedHelperPeerGate.swift"
+    let targets = try linkedClosure(fromTarget: "CoffeeBarApp").sorted() + probeLayerTargets
+    let files = try sources(ofTargets: targets)
+
+    let gate = try #require(files.first { $0.lastPathComponent == channelFile }, """
+        \(channelFile) is not compiled into anything this guard scans; it read \
+        \(files.count) files across \(targets.count) targets
+        """)
+    let code = swiftCodeWithoutComments(try String(contentsOf: gate, encoding: .utf8))
+
+    #expect(code.contains("setCodeSigningRequirement"), """
+        \(channelFile) opens an XPC channel and never pins its peer
+        """)
+    #expect(code.contains("PrivilegedHelperIdentity.appPeerRequirement"), """
+        \(channelFile) must demand the APP's signature of an inbound caller
+        """)
+    #expect(code.contains("PrivilegedHelperIdentity.helperPeerRequirement"), """
+        \(channelFile) must demand the HELPER's signature of the daemon it dials
+        """)
+    #expect(!code.contains("anchor"), """
+        \(channelFile) spells a code-signing requirement out in a literal. The \
+        requirement is PrivilegedHelperIdentity's, so that one place decides \
+        what a peer must prove and one set of checks evaluates it.
+        """)
 }
 
 @Test func theAppLayerNeverReachesForPrivilegeEscalation() throws {
@@ -1443,7 +1531,8 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
 
     for file in files {
         let code = swiftCodeWithoutComments(try String(contentsOf: file, encoding: .utf8))
-        for name in forbidden {
+        let entitled = privilegedHelperEntitlement[file.lastPathComponent] ?? []
+        for name in forbidden where !entitled.contains(name) {
             #expect(!code.contains(name), """
                 \(file.lastPathComponent) names \(name) in CODE. coffee-bar never \
                 elevates its own privilege: the root path is opt-in and the user \
@@ -1452,6 +1541,32 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
                 """)
         }
     }
+
+    // What issue #71 changed, and the exact size of it.
+    //
+    // `SMAppService` is relieved for ONE file, and the other nine names are
+    // relieved for nobody — `AuthorizationExecuteWithPrivileges`,
+    // `NSAppleScript` and `/usr/bin/sudo` from a `Process` are the routes this
+    // rule was written for and they stay shut. That is not a smaller version of
+    // the same thing: `SMAppService.register()` hands the decision to the
+    // OPERATING SYSTEM, which presents its own authorisation sheet with the
+    // app's name on it and installs the job itself. The refused routes take the
+    // user's password inside coffee-bar's own process, or run an interpreter as
+    // root. coffee-bar still elevates nothing on its own initiative; what
+    // changed is that the user's consent is now collected by macOS rather than
+    // typed into a terminal.
+    //
+    // Named bug this half catches: a second file in the app layer registers a
+    // daemon — a "repair" button in Preferences, say — bypassing the one place
+    // that knows how to pin the channel afterwards.
+    let registrars = try files.filter {
+        swiftCodeWithoutComments(try String(contentsOf: $0, encoding: .utf8))
+            .contains("SMAppService")
+    }
+    #expect(registrars.map(\.lastPathComponent) == ["PrivilegedHelperClient.swift"], """
+        the set of app-layer files that can register a privileged daemon \
+        changed: \(registrars.map(\.lastPathComponent).sorted())
+        """)
 }
 
 // MARK: - Network egress
