@@ -48,6 +48,21 @@ public enum HelperAvailability: Equatable, Sendable {
         return .registrable
     }
 
+    /// What the control is called.
+    ///
+    /// The two cases differ, deliberately. A button that cannot work must not
+    /// look like one that can: on an unsigned build the click has no outcome
+    /// but an error, so the title says what the build can actually do rather
+    /// than inviting a press.
+    public var buttonTitle: String {
+        switch self {
+        case .registrable:
+            return "Arm lid-closed mode"
+        case .unavailable:
+            return "Copy the command instead"
+        }
+    }
+
     /// The sentence the window shows beside the button.
     ///
     /// Composed here rather than in the view, for the reason every other
@@ -78,6 +93,32 @@ public enum HelperArmOutcome: Equatable, Sendable {
     case armed(seconds: Int)
     /// It did not. The sentence is the helper's own, or this layer's.
     case refused(String)
+
+    /// The line the window shows after a click.
+    ///
+    /// **Formatted from the OUTCOME's seconds and never from the slider.** The
+    /// two differ exactly when it matters: `JournalRecord` clamps, so a window
+    /// that printed `model.holdInForce` would promise a hold the daemon is not
+    /// keeping — the same defect `.arm` fixed for the terminal by announcing
+    /// what it read back off the disk.
+    ///
+    /// A refusal is passed through VERBATIM. "Approve the helper in System
+    /// Settings" and "this build is not signed" are the two failures a user can
+    /// act on, and a house sentence like "could not arm" makes them
+    /// indistinguishable from the ones they cannot.
+    ///
+    /// Composed here rather than in the view, for the reason every other
+    /// sentence in this layer is: M1 design §5.4 forbids asserting on rendered
+    /// AppKit text.
+    public var statusLine: String {
+        switch self {
+        case .armed(let seconds):
+            return "Lid-closed mode is armed for \(ServingModel.holdLabel(for: seconds)). "
+                + "coffee-bar's helper is supervising it and will put the setting back."
+        case .refused(let reason):
+            return reason
+        }
+    }
 }
 
 /// Registers the privileged helper and asks it to arm.
