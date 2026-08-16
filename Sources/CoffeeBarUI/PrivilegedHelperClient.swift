@@ -248,6 +248,22 @@ public struct PrivilegedHelperClient: Sendable {
                 try service.register()
                 return nil
             } catch {
+                // THE STATUS IS RE-READ, because macOS answers this question
+                // only after the attempt. A daemon gets no modal prompt: the
+                // registration is refused with a bare `EPERM` and the job moves
+                // to `.requiresApproval` in the same breath, so at the moment
+                // the switch above ran the status was still `.notFound` and the
+                // branch holding the guidance could not be reached. Every new
+                // user's first click lands here.
+                //
+                // The raw error is still what a failure NOT about approval
+                // reports. "Approve it in System Settings" is advice that
+                // cannot work for a bad plist name or a bundle macOS will not
+                // verify, and advice that cannot work is worse than the POSIX
+                // error, because the user spends the afternoon on it.
+                if service.registrationState == .requiresApproval {
+                    return .refused(approvalGuidance)
+                }
                 return .refused("macOS refused to install the helper: \(error.localizedDescription)")
             }
         }
