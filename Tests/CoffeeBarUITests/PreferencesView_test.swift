@@ -685,3 +685,154 @@ private func copyButtonLabel(in body: String) throws -> String {
         "the root command below" with the command already above it.
         """)
 }
+
+@Test func theUpdateSectionStatesItsIntervalAndItsLastCheckUnconditionally() throws {
+    // CONSTRAINT 4 of issue #29, and `docs/ROADMAP.md`'s "no hidden durations"
+    // is what makes it a constraint rather than a nicety: a period the user
+    // cannot see, cannot change and did not ask for is exactly what that
+    // principle forbids. coffee-bar posts one request a day off this machine,
+    // so the sentence saying so has to be on the window rather than in a commit
+    // message — and the time of the last one has to be there beside it, because
+    // an interval nobody can check against anything is a claim, not a fact.
+    //
+    // Named bug this catches: the section shipped behind `if false`, or behind
+    // an `if model.updateVerdict != nil` that hides the interval note from
+    // every user who has not checked yet — which is every user at first launch,
+    // the exact moment the sentence is worth reading.
+    let prefs = try surfaceCode(named: "PreferencesView.swift")
+
+    let anchorDepth = try #require(braceDepth(atFirst: "Text(\"Power\")", in: prefs), """
+        PreferencesView.swift no longer contains Text("Power"), so this guard \
+        has no unconditional neighbour to compare against and measured nothing.
+        """)
+
+    // The heading first, held against the OTHER headings rather than against a
+    // number, so a legitimate container added around the whole page moves all
+    // of them together and this stays green while
+    // `everyMovedControlIsRenderedAsUnconditionallyAsTheHeadingsAboveIt` — which
+    // pins the absolute depth — is the one that reports it.
+    let headingDepth = try #require(braceDepth(atFirst: "Text(\"Updates\")", in: prefs), """
+        PreferencesView.swift no longer contains Text("Updates"), so the window \
+        has no update section at all.
+        """)
+    #expect(headingDepth == anchorDepth, """
+        PreferencesView.swift puts Text("Updates") at brace depth \
+        \(headingDepth) while Text("Power") sits at \(anchorDepth), so the \
+        update section is inside something the other sections are not.
+        """)
+
+    // Each line of the section, and the braces it is ALLOWED. Nought is a
+    // direct child of the `VStack`, beside the headings; the button and the
+    // last-check line share one `HStack` row.
+    //
+    // EQUALITY and not `<=`, for the reason the sibling table gives: an
+    // `if false { … }` inside the VStack lands at exactly the depth an HStack
+    // row does, so an inequality passes over the mutation this exists to catch.
+    let allowedNesting = [
+        (needle: "UpdateCheck.intervalNote", braces: 0,
+         line: "the sentence stating how often coffee-bar checks", enclosing: "nothing"),
+        (needle: "model.updateStatusLine", braces: 0,
+         line: "the sentence stating what the last check concluded", enclosing: "nothing"),
+        (needle: "Button(\"Check now\")", braces: 1,
+         line: "the Check now button", enclosing: "its HStack row"),
+        (needle: "model.lastUpdateCheckLine", braces: 1,
+         line: "the last-checked time", enclosing: "its HStack row"),
+    ]
+
+    for line in allowedNesting {
+        let depth = try #require(braceDepth(atFirst: line.needle, in: prefs), """
+            PreferencesView.swift names \(line.needle) nowhere in code, so \
+            \(line.line) is absent from the window.
+            """)
+        #expect(depth == anchorDepth + line.braces, """
+            PreferencesView.swift renders \(line.line) at brace depth \(depth), \
+            and the only brace between it and the unconditional Text("Power") \
+            at \(anchorDepth) should be \(line.enclosing). It is inside \
+            something the headings are not — an `if`, a `switch`, a closure — \
+            so the user may never see it, and the interval this feature runs on \
+            becomes a hidden duration.
+            """)
+    }
+}
+
+@Test func thePreferencesWindowComposesNoUpdateSentenceOfItsOwn() throws {
+    // M1 design §5.4 forbids asserting on rendered AppKit text, so a sentence
+    // written in this file is a sentence no check reads — which is how this
+    // window came to promise a scope nobody had checked (issue #73). The update
+    // section makes two claims a user will act on: how often coffee-bar reaches
+    // the network, and whether they are running the newest build. Both are
+    // rendered verbatim from a seam that IS checked.
+    //
+    // Named bug this catches: `Text("Checks daily")` written here, beside an
+    // `interval` constant that says something else.
+    let prefs = try surfaceCode(named: "PreferencesView.swift")
+
+    for invented in ["once a day", "installs nothing", "up to date", "Last checked"] {
+        #expect(!prefs.contains(invented), """
+            PreferencesView.swift composes the phrase "\(invented)" itself. The \
+            update sentences live on UpdateCheck and on the model, where \
+            UpdateCheck_test.swift reads them against the constant they \
+            describe; a second spelling here can disagree with the interval the \
+            code enforces and nothing would see it.
+            """)
+    }
+}
+
+@Test func thePreferencesWindowNeverReachesTheNetworkItself() throws {
+    // The window OFFERS the check and does not MAKE it. Issue #29 permits
+    // exactly one file to reach the network, and a view that built its own
+    // session would be a second — reached from a button, which is the shortest
+    // path anyone would take.
+    //
+    // `AppLayerBoundary_test.swift` holds the same line over every linked file
+    // and is the authority. This is stated here as well because this is the
+    // surface where the temptation lives, and a reader of this window's guards
+    // should not have to go and find that out.
+    let prefs = try surfaceCode(named: "PreferencesView.swift")
+
+    for name in ["URLSession", "URLRequest", "PublishedManifestFetcher"] {
+        #expect(!prefs.contains(name), """
+            PreferencesView.swift names \(name) in CODE. The window asks the \
+            model, the model asks the one entitled fetcher, and nothing else in \
+            this application opens a connection.
+            """)
+    }
+}
+
+@Test func thisWindowIsWhatDrivesTheAutomaticUpdateCheck() throws {
+    // WHERE the one automatic outbound request is triggered from, held at the
+    // one surface that can trigger it.
+    //
+    // Named bug this catches: the section renders, the button works, and the
+    // automatic half is wired nowhere — so the sentence beside it promising a
+    // check "once a day" is true of a check nothing ever makes, and the window
+    // says "not looked yet" for ever to every user who never presses the
+    // button.
+    //
+    // `checkForUpdatesIfDue` and NOT `checkForUpdates`, and the difference is
+    // the interval itself: opening this window four times in an afternoon must
+    // post once. A guard that accepted either name would pass the version of
+    // this line that turns a stated daily check into a request per window open.
+    let prefs = try surfaceCode(named: "PreferencesView.swift")
+
+    let appear = try #require(braceBlock(after: ".onAppear", in: prefs), """
+        PreferencesView.swift declares no .onAppear block, so nothing asks \
+        whether a newer version is published unless the user presses the button.
+        """)
+
+    #expect(appear.block.contains("checkForUpdatesIfDue"), """
+        PreferencesView.swift opens without asking whether a newer version is \
+        published. The update section then states an interval that governs \
+        nothing: coffee-bar would look only when the user presses Check now, \
+        and a user who never presses it is never told about a release.
+        """)
+
+    // The interval-respecting call is the ONLY automatic one. An unconditional
+    // `checkForUpdates()` on appear reads almost identically and turns a stated
+    // daily check into one request per window open.
+    #expect(!appear.block.contains("checkForUpdates()"), """
+        PreferencesView.swift checks unconditionally when the window opens, \
+        ignoring the interval it states two lines above. Opening the window \
+        four times in an afternoon would post four requests off this machine.
+        """)
+}

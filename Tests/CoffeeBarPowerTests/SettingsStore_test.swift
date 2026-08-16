@@ -529,4 +529,48 @@ struct SettingsStoreTests {
                     """)
         }
     }
+
+    // MARK: - When the update check last ran (issue #29)
+
+    @Test func theLastUpdateCheckKeyStringNeverChangesAndCollidesWithNothing() {
+        // Held for the reason every other key is, and this one has a
+        // consequence the others do not: it is the ONLY thing that stops the
+        // update check running again. A rename reads as "never checked" on the
+        // next launch, so coffee-bar posts a request off the machine at every
+        // start — the "at most once a day" the Preferences window states would
+        // be false, silently, and nothing anywhere would report it.
+        //
+        // It collides most dangerously with `batteryFloorPercent` and
+        // `lidClosedHoldSeconds`, because all three are `Int` and a collision
+        // between two `Int` keys is the one case the type mismatch does not
+        // catch: they read each other's value cleanly. A floor of 15 read as a
+        // last-check stamp is 1970, which makes every launch due; a stamp read
+        // as a floor is a number no slider position can express.
+        #expect(SettingsKey.lastUpdateCheck == "lastUpdateCheck")
+        #expect(SettingsKey.lastUpdateCheck != SettingsKey.holdDisplayAwake)
+        #expect(SettingsKey.lastUpdateCheck != SettingsKey.batteryFloorPercent)
+        #expect(SettingsKey.lastUpdateCheck != SettingsKey.demotableProcessNames)
+        #expect(SettingsKey.lastUpdateCheck != SettingsKey.quietEverythingElse)
+        #expect(SettingsKey.lastUpdateCheck != SettingsKey.agentTools)
+        #expect(SettingsKey.lastUpdateCheck != SettingsKey.lidClosedHoldSeconds)
+        #expect(SettingsKey.lastUpdateCheck != SettingsKey.quickStartCompleted)
+    }
+
+    @Test func anUnrunUpdateCheckReadsAsAbsentRatherThanAsTheEpoch() throws {
+        // The `Int?` on `integer(forKey:)` earning its keep for a third setting.
+        // `UserDefaults.integer(forKey:)` answers 0 for a key nobody wrote, and
+        // 0 here is 1 January 1970 — a last check the best part of sixty years
+        // ago, which is due, which is the right answer by accident. It stops
+        // being right the moment anybody asks the other question this stamp
+        // answers: the window would tell a user who has never checked that
+        // coffee-bar last checked in 1970.
+        let suite = try throwawaySuite()
+        defer { suite.defaults.removePersistentDomain(forName: suite.name) }
+        let store = UserDefaultsSettingsStore(defaults: suite.defaults)
+
+        #expect(store.integer(forKey: SettingsKey.lastUpdateCheck) == nil)
+
+        store.setInteger(1_786_000_000, forKey: SettingsKey.lastUpdateCheck)
+        #expect(store.integer(forKey: SettingsKey.lastUpdateCheck) == 1_786_000_000)
+    }
 }

@@ -174,7 +174,32 @@ private let expectedAppLayerEntries = [
     "Sources/CoffeeBarUI/ProcessGovernance.swift",
     "Sources/CoffeeBarUI/QuickStartView.swift",
     "Sources/CoffeeBarUI/ServingModel.swift",
+    "Sources/CoffeeBarUI/UpdateCheck.swift",
+    "Sources/CoffeeBarUI/UpdateChecker.swift",
 ]
+
+/// The ONE file entitled to reach the network, and the ONE host it may reach.
+///
+/// Issue #29 is the single pre-authorised exception to this application's
+/// no-egress promise, and `SECURITY.md` names it. The rule below did not get
+/// deleted to make room for it: every other file in the linked closure stays
+/// under the whole twelve-name ban, and this one is relieved of exactly ONE
+/// name.
+///
+/// **`URLSession` and nothing else, which is a structural choice rather than a
+/// minimal-diff one.** `URLRequest` stays banned HERE TOO, so the entitled file
+/// has no object on which to set a header: `URLSession.data(from:)` takes a
+/// bare `URL` and sends the system defaults. A custom `User-Agent` carrying an
+/// install identifier — constraint 3 of the issue, and the one most likely to
+/// rot silently — is then not something a reviewer has to notice, because there
+/// is nowhere in the file to put it.
+///
+/// The HOST is pinned as well as the file, because a file that may reach the
+/// network may reach ANY network. `theOnlyEntitledFileReachesOnlyThePinnedHost`
+/// reads every URL literal out of it and refuses one that names anywhere else.
+private let networkEntitlement = (file: "UpdateChecker.swift",
+                                  allowed: "URLSession",
+                                  host: "arangogutierrez.github.io")
 
 /// How many `.swift` files a correct scan reaches. The content checks assert
 /// this so that neither can pass by reading nothing.
@@ -1444,6 +1469,18 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // can only mean an off-machine peer. `AF_UNIX` and `sockaddr_un` are
     // deliberately absent from it: those ARE the filesystem socket.
     //
+    // **ISSUE #29 NARROWED THIS RULE AND DID NOT DELETE IT.** The update check
+    // is the single pre-authorised outbound request in this application, so one
+    // of the twelve names above had to become reachable — and the answer was
+    // NOT to drop `URLSession` from the list. It stays banned in every file but
+    // one, that one file is named in `networkEntitlement`, and the other eleven
+    // names still apply to it. Two further checks bound what the exemption
+    // bought: `theOnlyEntitledFileReachesOnlyThePinnedHost` pins the
+    // destination, and `theOneFileThatReachesTheNetworkSendsNoIdentifier` pins
+    // what the request may carry. Deleting the ban outright was the shape this
+    // change was most likely to take, and it would have traded a measured
+    // promise for an unmeasured one.
+    //
     // The limit `swiftCodeWithoutComments` carries, stated at this site because
     // the verdict is this site's (issue #54): a bare regex literal is source it
     // cannot tokenise, and rather than answer for one it records an issue and
@@ -1468,17 +1505,181 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
                      "NWEndpoint.hostPort", "AF_INET", "sockaddr_in",
                      "inet_pton", "inet_addr"]
 
+    // Positive control on the EXEMPTION, and it is as load-bearing as the one
+    // above. An exemption naming a file that does not exist is an exemption
+    // nothing is measured against — and worse, it would sit here inviting
+    // somebody to create a file by that name and inherit the pass.
+    let entitled = files.filter { $0.lastPathComponent == networkEntitlement.file }
+    #expect(entitled.count == 1, """
+        \(entitled.count) file(s) in the linked closure are named \
+        \(networkEntitlement.file); the network entitlement names exactly one
+        """)
+
     for file in files {
         let code = swiftCodeWithoutComments(try String(contentsOf: file, encoding: .utf8))
-        for name in forbidden {
+        // The entitled file is relieved of ONE name. Every other name on the
+        // list still applies to it, and every name applies to everything else.
+        let refused = file.lastPathComponent == networkEntitlement.file
+            ? forbidden.filter { $0 != networkEntitlement.allowed }
+            : forbidden
+
+        for name in refused {
             #expect(!code.contains(name), """
                 \(file.lastPathComponent) names \(name) in CODE. coffee-bar \
-                posts nothing off this machine: ingest binds a unix socket and \
-                there is no other network path. SECURITY.md states that to \
-                users, so this is a promise, not a preference.
+                posts nothing off this machine but the update check, which is \
+                \(networkEntitlement.file) and nothing else: ingest binds a \
+                unix socket and there is no other network path. SECURITY.md \
+                states that to users, so this is a promise, not a preference.
                 """)
         }
     }
+
+    // The entitled file DOES reach the network, so the exemption is live rather
+    // than a dead pass sitting open for the next person who wants one. Without
+    // this, deleting the update check would leave a file-shaped hole in the
+    // egress rule that no check would notice.
+    let entitledCode = swiftCodeWithoutComments(
+        try String(contentsOf: try #require(entitled.first), encoding: .utf8))
+    #expect(entitledCode.contains(networkEntitlement.allowed), """
+        \(networkEntitlement.file) no longer names \(networkEntitlement.allowed), \
+        so the one network exemption in this application is unused. Delete the \
+        entitlement rather than leaving it open.
+        """)
+}
+
+/// Every URL literal in `code`, read from `https://` to the end of the literal.
+///
+/// Deliberately keyed on the SCHEME rather than on a variable name, so a second
+/// address assigned to something innocuous is read the same way as the pinned
+/// one. `swiftCodeWithoutComments` keeps string literals, which is what makes
+/// this readable at all, and drops comments — so the sentence in a doc comment
+/// that names a host is not mistaken for an address the code can reach.
+private func httpsAddresses(in code: String) -> [String] {
+    code.components(separatedBy: "https://").dropFirst().map { rest in
+        String(rest.prefix { $0 != "\"" && !$0.isWhitespace })
+    }
+}
+
+@Test func theOnlyEntitledFileReachesOnlyThePinnedHost() throws {
+    // The second half of the narrowed rule above, and the half a name-ban
+    // cannot do. `URLSession` is permitted in one file; that permission says
+    // nothing about WHERE it points. Repointing the constant at another host is
+    // a one-word edit that leaves every name on the forbidden list absent and
+    // `noLinkedTargetCanReachTheNetworkByAddress` green.
+    //
+    // Read over the whole linked closure and not over the entitled file alone,
+    // so an address parked in a neighbouring file — a constant the entitled one
+    // then imports — is judged by the same rule.
+    let linked = try linkedClosure(fromTarget: "CoffeeBarApp").sorted()
+    let files = try sources(ofTargets: linked)
+
+    var seen = 0
+    for file in files {
+        let code = swiftCodeWithoutComments(try String(contentsOf: file, encoding: .utf8))
+        for address in httpsAddresses(in: code) {
+            seen += 1
+            #expect(address.hasPrefix(networkEntitlement.host + "/"), """
+                \(file.lastPathComponent) names the address https://\(address). \
+                One host is named anywhere in this application's own code, \
+                \(networkEntitlement.host) — the update check fetches from it \
+                and the panel's legal line hands a page on it to the browser. \
+                SECURITY.md tells users the update check is the only outbound \
+                request, so a second address is a new commitment and is written \
+                there first.
+                """)
+        }
+    }
+
+    // ANTI-VACUITY. With no address anywhere the loop above never runs and this
+    // guard reports success on an application that might reach anything.
+    #expect(seen >= 1, """
+        no scanned file names an https address at all, so the pinned-host rule \
+        checked nothing. Either the update check is gone — in which case the \
+        entitlement above should go with it — or the target scan no longer \
+        reaches it.
+        """)
+}
+
+@Test func theOneFileThatReachesTheNetworkSendsNoIdentifier() throws {
+    // CONSTRAINT 3 of issue #29: a version check that can count installs is
+    // analytics wearing a check's clothes, and handoff §12 bans analytics
+    // separately from egress. This is the constraint most likely to rot
+    // silently, because every name below reads as harmless on its own and none
+    // of them changes what the feature appears to do.
+    //
+    // WHY HERE and not only in `UpdateChecker_test.swift`: that file asserts the
+    // session object carries no additional header, which is the strongest form
+    // of the check and the one a reviewer should trust. It cannot see an
+    // identifier that reaches the wire another way — a path component built from
+    // a UUID, a hostname folded into the address. This scan reads the source for
+    // the vocabulary of identity, so the two answer different questions.
+    //
+    // The limit `swiftCodeWithoutComments` carries, stated at this site for the
+    // reason the checks above state it: a bare regex literal is source it cannot
+    // tokenise, and rather than answer for one it records an issue and this scan
+    // fails.
+    let linked = try linkedClosure(fromTarget: "CoffeeBarApp").sorted()
+    let files = try sources(ofTargets: linked)
+    let entitled = try #require(files.first { $0.lastPathComponent == networkEntitlement.file },
+                                "the egress scan never reached \(networkEntitlement.file)")
+    let code = swiftCodeWithoutComments(try String(contentsOf: entitled, encoding: .utf8))
+
+    let identifying = [
+        "UUID",                     // and NSUUID, and uuidString
+        "identifierForVendor",
+        "IOPlatformUUID",
+        "IOPlatformSerialNumber",
+        "hostName",                 // ProcessInfo.processInfo.hostName
+        "NSUserName",
+        "NSFullUserName",
+        "User-Agent",
+        "httpAdditionalHeaders",
+        "setValue(",                // the URLRequest header setters, both of
+        "addValue(",                // which need a URLRequest this file may not name
+        "URLQueryItem",
+        "queryItems",
+        "httpBody",
+        "POST",
+        "globallyUniqueString",
+        "machineID",
+        "installID",
+    ]
+
+    // THE PRESSURE THIS LIST WILL COME UNDER, recorded at the site so the next
+    // reader meets the argument before the edit.
+    //
+    // Measured, not assumed: pointing the shipped session configuration at a
+    // loopback listener shows macOS adds `Accept-Language` — the user's own
+    // language — to every request any application makes. Somebody will
+    // reasonably want to strip it, and the only way to strip a header is to set
+    // one, which needs `URLRequest`, which the ban above keeps refused EVEN IN
+    // THE ENTITLED FILE.
+    //
+    // That refusal is the whole structure. With no request object in that file
+    // there is nowhere to put a header, so "no custom User-Agent, no install
+    // ID" holds by construction rather than by review. Relaxing this to allow
+    // one well-meant header converts a structural guarantee into a judgement
+    // call about every header that follows it, and `Accept-Language` identifies
+    // no install — it is not what this guard is for. `SECURITY.md` carries the
+    // argument and discloses the header instead. The answer is no.
+
+    for name in identifying {
+        #expect(!code.contains(name), """
+            \(networkEntitlement.file) names \(name) in CODE. The update check \
+            sends no identifier of any kind: no install ID, no custom \
+            User-Agent, no query parameter, no body. A check that can count \
+            installs is telemetry, which handoff §12 rules out on its own terms \
+            and SECURITY.md promises against.
+            """)
+    }
+
+    // The positive half. A file that named none of the above because it had
+    // stopped making a request would pass every expectation so far.
+    #expect(code.contains(networkEntitlement.host), """
+        \(networkEntitlement.file) no longer names \(networkEntitlement.host), so \
+        this guard read a file that makes no request and proved nothing about \
+        what a request carries.
+        """)
 }
 
 @Test func theOnlyListenerIsPinnedToAFilesystemEndpoint() throws {
