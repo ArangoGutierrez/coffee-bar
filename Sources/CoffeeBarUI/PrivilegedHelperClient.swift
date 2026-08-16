@@ -121,6 +121,49 @@ public enum HelperArmOutcome: Equatable, Sendable {
     }
 }
 
+/// Where a registration stands, as this file needs to know it.
+///
+/// A local enum rather than `SMAppService.Status`, and that is a boundary
+/// decision rather than a taste one. `theAppLayerNeverReachesForPrivilegeEscalation`
+/// holds the set of app-layer files that may name `SMAppService` to exactly
+/// this one, so a status type spelled `SMAppService.Status` could not appear in
+/// a second file — including the check that drives the seam below.
+///
+/// `.other` collapses `.notRegistered`, `.notFound` and anything macOS adds
+/// later, because this file treats all of them the same way: try to register.
+enum HelperRegistrationState: Equatable, Sendable {
+    case enabled
+    case requiresApproval
+    case other
+}
+
+/// The two things this file asks of `SMAppService`, behind a protocol.
+///
+/// The same seam `PinnableConnection` is in the power layer, and for the same
+/// reason: registering a daemon needs a code-signed bundle, an approval the
+/// user grants in System Settings, and a `launchd` that will accept the job —
+/// none of which a check can produce. Approval on the development machine has
+/// already been granted, and taking it away again means `sfltool resetbtm`,
+/// which is system-wide and destructive. So the branch that tells the user to
+/// approve is reachable to a check only through a double.
+///
+/// `SMAppService` already declares `register()` with this exact signature, so
+/// half of the conformance below adds no code and cannot drift.
+protocol HelperRegistering {
+    var registrationState: HelperRegistrationState { get }
+    func register() throws
+}
+
+extension SMAppService: HelperRegistering {
+    var registrationState: HelperRegistrationState {
+        switch status {
+        case .enabled:          return .enabled
+        case .requiresApproval: return .requiresApproval
+        default:                return .other
+        }
+    }
+}
+
 /// Registers the privileged helper and asks it to arm.
 ///
 /// **The ONE file in the app layer entitled to name `SMAppService`**, and
@@ -183,14 +226,24 @@ public struct PrivilegedHelperClient: Sendable {
         guard availability() == .registrable else {
             return .refused(HelperAvailability.unavailable.explanation)
         }
-        let service = SMAppService.daemon(plistName: PrivilegedHelperIdentity.daemonPlistName)
-        switch service.status {
+        return Self.outcome(ofRegistering:
+            SMAppService.daemon(plistName: PrivilegedHelperIdentity.daemonPlistName))
+    }
+
+    /// What a user is told, decided over the registration alone.
+    ///
+    /// Split out from `register()` so a check can drive it. The half above is
+    /// the part no check can reach — `availability()` reads THIS binary's
+    /// signature, and under `swift test` that answer is `nil` — so the branches
+    /// a user actually meets would otherwise be unreachable to everything in
+    /// this package.
+    static func outcome(ofRegistering service: any HelperRegistering) -> HelperArmOutcome? {
+        switch service.registrationState {
         case .enabled:
             return nil                        // already ours; nothing to do
         case .requiresApproval:
-            return .refused("Approve coffee-bar's helper in System Settings › "
-                            + "General › Login Items, then try again.")
-        default:
+            return .refused(approvalGuidance)
+        case .other:
             do {
                 try service.register()
                 return nil
@@ -199,6 +252,14 @@ public struct PrivilegedHelperClient: Sendable {
             }
         }
     }
+
+    /// What to tell a user whose helper is waiting on them.
+    ///
+    /// A constant because more than one branch answers with it, and a sentence
+    /// that drifts between two of them is a user told two different things
+    /// about one state.
+    static let approvalGuidance = "Approve coffee-bar's helper in System Settings › "
+        + "General › Login Items, then try again."
 
     /// Registers if needed, then asks the helper to hold sleep for `seconds`.
     ///
