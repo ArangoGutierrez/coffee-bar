@@ -93,3 +93,41 @@ import CoffeeBarPower
     // point of the button.
     #expect(!HelperAvailability.registrable.explanation.contains("sudo"))
 }
+
+// MARK: - What the button says, before and after a click
+
+@Test func theArmedStatusCarriesTheGRANTEDHoldAndNotTheRequestedOne() throws {
+    // Named bug, and it is the whole reason the reply carries a number at all:
+    // the window formats `model.holdInForce` — the value the SLIDER holds —
+    // instead of the seconds the helper answered with. The journal clamps, so
+    // the two differ exactly when it matters, and the user is shown a hold the
+    // daemon is not keeping.
+    //
+    // Two different payloads must produce two different sentences. A
+    // `statusLine` that ignored its payload would satisfy any single-value
+    // assertion, which is how this defect survives a check written the obvious
+    // way.
+    #expect(HelperArmOutcome.armed(seconds: 3600).statusLine
+            != HelperArmOutcome.armed(seconds: 7200).statusLine)
+    #expect(HelperArmOutcome.armed(seconds: 3600).statusLine
+        .contains(ServingModel.holdLabel(for: 3600)))
+}
+
+@Test func aRefusalShowsTheReasonItWasGiven() throws {
+    // Named bug: the refusal is swallowed and replaced with a house sentence
+    // like "could not arm". The two failures a user can actually act on —
+    // "approve the helper in System Settings" and "this build is not signed" —
+    // become indistinguishable from the ones they cannot, and the only surface
+    // that could have told them says nothing.
+    #expect(HelperArmOutcome.refused("approve it in System Settings").statusLine
+            == "approve it in System Settings")
+}
+
+@Test func theButtonSaysSomethingDifferentOnABuildThatCannotArm() throws {
+    // Named bug: an unsigned build renders the same "Arm lid-closed mode"
+    // title, the user clicks it, and the only thing that happens is an error.
+    // A control that cannot work must not look like one that can.
+    #expect(HelperAvailability.registrable.buttonTitle
+            != HelperAvailability.unavailable.buttonTitle)
+    #expect(!HelperAvailability.registrable.buttonTitle.isEmpty)
+}

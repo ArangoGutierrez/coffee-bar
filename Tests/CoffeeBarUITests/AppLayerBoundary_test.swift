@@ -1438,6 +1438,50 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     }
 }
 
+@Test func theArmingControlIsInThePreferencesWindowAndNotInThePanel() throws {
+    // WHERE the button went, and the split is issue #56's rather than a
+    // preference. That issue moved lid-closed mode out of the panel, which is
+    // 260pt wide and reports what coffee-bar is doing NOW, and into the window
+    // where somebody configuring behaviour is already looking.
+    //
+    // The control belongs beside the SLIDER IT USES. `model.holdInForce` is the
+    // hold the button arms, that slider is in this window, and a button in one
+    // surface driven by a number the user set in another is the drift #74 is
+    // about — a window showing 12 hours over a click that arms 8.
+    //
+    // Named bug on the positive half: no view names the client, the feature
+    // exists only in the source, and the two sudo commands are still the whole
+    // product as far as any user can tell. Named bug on the negative half: the
+    // button is ALSO put in the panel, so a 260pt popover grows an
+    // authorisation-prompting control beside four advisories.
+    //
+    // Same LIMIT as its neighbours, stated rather than hidden: this proves
+    // which file NAMES the type, never what either surface renders. M1 design
+    // §5.4 forbids asserting on rendered AppKit text. And CODE, never the raw
+    // file — `PanelView.swift` carries a comment saying where lid-closed mode
+    // lives, and a raw-file check would read that note as the control.
+    let files = try appLayerSources()
+    #expect(files.count == expectedSourceCount,
+            "the boundary guard scanned \(files.count) files at \(packageRoot.path)")
+
+    let window = try #require(files.first { $0.lastPathComponent == "PreferencesView.swift" })
+    let panel = try #require(files.first { $0.lastPathComponent == "PanelView.swift" })
+
+    let windowCode = swiftCodeWithoutComments(try String(contentsOf: window, encoding: .utf8))
+    let panelCode = swiftCodeWithoutComments(try String(contentsOf: panel, encoding: .utf8))
+
+    #expect(windowCode.contains("PrivilegedHelperClient"), """
+        PreferencesView.swift never reads PrivilegedHelperClient in code, so the \
+        button issue #71 exists for reaches the user nowhere. A comment naming \
+        the type does not satisfy this.
+        """)
+    #expect(!panelCode.contains("PrivilegedHelperClient"), """
+        PanelView.swift names PrivilegedHelperClient. Lid-closed mode moved out \
+        of the panel in issue #56; putting its control back is that failure with \
+        a button instead of a paragraph.
+        """)
+}
+
 @Test func theEntitledChannelFilePinsEveryPeerItOpens() throws {
     // What `privilegedHelperEntitlement` BOUGHT, bounded — the same job
     // `theOnlyEntitledFileReachesOnlyThePinnedHost` does for the network
