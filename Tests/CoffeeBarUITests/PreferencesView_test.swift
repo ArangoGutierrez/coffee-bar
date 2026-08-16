@@ -799,40 +799,71 @@ private func copyButtonLabel(in body: String) throws -> String {
     }
 }
 
-@Test func thisWindowIsWhatDrivesTheAutomaticUpdateCheck() throws {
-    // WHERE the one automatic outbound request is triggered from, held at the
-    // one surface that can trigger it.
+/// The app layer's entry point, comment-stripped.
+///
+/// A resolver of its own, because `surfaceCode(named:)` walks `Sources/` by file
+/// name and FOUR targets in this package compile a `main.swift` — it would
+/// resolve four files and throw rather than answer. The path is explicit here.
+///
+/// SwiftPM treats `main.swift` as top-level code that no test target can import,
+/// which is why a source read is the only route to it at all;
+/// `theAppDeclaresTheSettingsSceneThePanelLinksTo` says the same about the scene.
+private func appEntryPointCode() throws -> String {
+    return swiftCodeWithoutComments(
+        try String(contentsOf: packageRoot.appending(path: "Sources/CoffeeBarApp/main.swift"),
+                   encoding: .utf8))
+}
+
+@Test func theAppDrivesTheAutomaticUpdateCheckAtLaunchAndTheWindowNoLongerDoes() throws {
+    // RETARGETED from `PreferencesView.onAppear` to `main.swift`, and this is
+    // the move `PreferencesView.swift` itself booked: "WHEN THE PANEL GAINS ITS
+    // OWN COPY (the deferred half of issue #29) this moves to App.init, because
+    // the answer will then be visible without opening anything." The panel now
+    // has it, so this is that move. The invariant did not change — exactly one
+    // automatic trigger, honouring the interval — only the surface that owns it.
     //
-    // Named bug this catches: the section renders, the button works, and the
-    // automatic half is wired nowhere — so the sentence beside it promising a
-    // check "once a day" is true of a check nothing ever makes, and the window
-    // says "not looked yet" for ever to every user who never presses the
-    // button.
+    // WHY IT HAD TO MOVE RATHER THAN BE ADDED. `.onAppear` fires when the
+    // window is CREATED and not when an existing one is re-presented; issue
+    // #126 established that by measurement, and it is why the trigger was never
+    // going to stay there. Leaving it in place beside a launch trigger would
+    // also be the "no duplicate scheduling" failure: two callers of the same
+    // interval-gated check, each able to make the request the other's stamp was
+    // meant to prevent.
     //
-    // `checkForUpdatesIfDue` and NOT `checkForUpdates`, and the difference is
-    // the interval itself: opening this window four times in an afternoon must
-    // post once. A guard that accepted either name would pass the version of
-    // this line that turns a stated daily check into a request per window open.
+    // BOTH ENDS ARE HELD, because either alone reads as a working feature. The
+    // launch trigger without the removal is two schedulers; the removal without
+    // the launch trigger is a stated daily check that nothing ever makes, and
+    // the panel would say "has not looked yet" for ever to every user who never
+    // presses the button.
+    let main = try appEntryPointCode()
     let prefs = try surfaceCode(named: "PreferencesView.swift")
 
-    let appear = try #require(braceBlock(after: ".onAppear", in: prefs), """
-        PreferencesView.swift declares no .onAppear block, so nothing asks \
-        whether a newer version is published unless the user presses the button.
+    // `checkForUpdatesIfDue` and NOT `checkForUpdates`, and the difference is
+    // the interval itself. A guard that accepted either name would pass the
+    // version of this line that turns a stated daily check into a request every
+    // time the app is launched — and a menu-bar app is launched at login.
+    #expect(main.contains("checkForUpdatesIfDue()"), """
+        main.swift never asks whether a newer version is published, so the \
+        automatic half of issue #29 is wired nowhere. The interval both \
+        surfaces state then governs nothing: coffee-bar would look only when \
+        the user presses Check now, and a user who never presses it is never \
+        told about a release.
         """)
 
-    #expect(appear.block.contains("checkForUpdatesIfDue"), """
-        PreferencesView.swift opens without asking whether a newer version is \
-        published. The update section then states an interval that governs \
-        nothing: coffee-bar would look only when the user presses Check now, \
-        and a user who never presses it is never told about a release.
+    #expect(!prefs.contains("checkForUpdatesIfDue"), """
+        PreferencesView.swift still drives the automatic check. It is driven \
+        from main.swift at launch now, so this is a SECOND scheduler for one \
+        request: opening the window can post the check the launch stamp was \
+        meant to have covered, and the sentence saying when coffee-bar looks \
+        can no longer be true of both.
         """)
 
-    // The interval-respecting call is the ONLY automatic one. An unconditional
-    // `checkForUpdates()` on appear reads almost identically and turns a stated
-    // daily check into one request per window open.
-    #expect(!appear.block.contains("checkForUpdates()"), """
-        PreferencesView.swift checks unconditionally when the window opens, \
-        ignoring the interval it states two lines above. Opening the window \
-        four times in an afternoon would post four requests off this machine.
+    // The window keeps its BUTTON, and that is not the same thing. Removing the
+    // automatic trigger from this file is correct; removing the manual one
+    // would take the control the update section is built around.
+    #expect(prefs.contains("model.checkForUpdates()"), """
+        PreferencesView.swift no longer offers the manual check either. Moving \
+        the automatic trigger to launch was the change; the Check now button is \
+        the surface's own control and stays.
         """)
 }

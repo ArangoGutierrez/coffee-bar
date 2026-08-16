@@ -80,7 +80,7 @@ else.
 
 **It tells you. It does not update itself.** Nothing is downloaded but that
 file, no bundle is replaced, and no installer runs. The whole outcome of a check
-is a sentence in the Preferences window. That is why the Sparkle appcast this
+is a sentence — in the panel, and in the Preferences window beside the interval. That is why the Sparkle appcast this
 section used to hold on record was narrowed away rather than built: `brew
 install coffee-bar` puts the app inside the Homebrew prefix, so an app that
 replaced its own bundle would desynchronise Homebrew's manifest and the next
@@ -137,12 +137,14 @@ is a rule that has to adjudicate every future one. If you are reading this
 because you want to strip the header: the answer is no, and this paragraph is
 the reason.
 
-**How often, and how to see it.** At most once a day, and only when you open the
-Preferences window. There is no timer: a coffee-bar sitting in the menu bar all
-week makes no request at all. That window states the interval, shows the time of
-the last check, and carries a Check now button that makes one on demand. The
-"no hidden durations" rule in `docs/ROADMAP.md` is why both the period and the
-timestamp are on the surface rather than only in this file.
+**How often, and how to see it.** At most once a day, and only when coffee-bar
+starts. There is no timer: a coffee-bar sitting in the menu bar all week makes
+one request, not seven, because the interval is enforced against a stamp in your
+preferences rather than by anything this process holds. The panel says what the
+last check concluded and when it ran, and carries a Check now button that makes
+one on demand; the Preferences window says the same and states the interval
+beside it. The "no hidden durations" rule in `docs/ROADMAP.md` is why both the
+period and the timestamp are on the surface rather than only in this file.
 
 If you find a second outbound request, or an identifier on this one, that is a
 vulnerability under this policy. Report it.

@@ -115,6 +115,80 @@ private let acceptanceScript = acceptancePackageRoot()
         """)
 }
 
+@Test func noAppleScriptHeredocCarriesABacktickOrAnApostrophe() throws {
+    // The script states this rule in its own prose and had no check for it, so
+    // it was broken again the next time somebody wrote a comment in one of
+    // those heredocs — this task, adding a third button to the panel.
+    //
+    // WHY IT MATTERS. The four AppleScript heredocs are UNQUOTED and sit inside
+    // `$( )`, so bash reads their contents on the way past:
+    //
+    //   - a BACKTICK runs what it encloses. Observed here: an explanatory
+    //     comment mentioning three AppleScript terms in backticks produced
+    //     `line 290: rows: command not found` three times per probe, on a run
+    //     that otherwise PASSED. The probe still answered, so nothing failed and
+    //     the noise was the only trace.
+    //   - an APOSTROPHE opens a quote bash never sees closed, and the complaint
+    //     is `unexpected EOF while looking for matching quote` reported against
+    //     the END of the file, nowhere near the cause.
+    //
+    // WHY `bash -n` CANNOT SEE IT, which is the whole reason this is separate
+    // from `aShellCanParseTheAcceptanceScript`: a backtick inside a heredoc is
+    // perfectly good syntax. It parses, it runs, and it runs the wrong thing.
+    // Only the apostrophe half is a parse error, and only sometimes.
+    let script = try String(contentsOf: acceptanceScript, encoding: .utf8)
+    let lines = script.components(separatedBy: "\n")
+
+    // The heredoc bodies, delimiter to delimiter. `<<OSA` opens one and a line
+    // that is exactly `OSA` closes it.
+    var inside = false
+    var offenders: [String] = []
+    var bodyLines = 0
+
+    for (index, line) in lines.enumerated() {
+        if !inside {
+            if line.contains("<<OSA") { inside = true }
+            continue
+        }
+        if line.trimmingCharacters(in: .whitespaces) == "OSA" {
+            inside = false
+            continue
+        }
+        bodyLines += 1
+        if line.contains("`") || line.contains("'") {
+            offenders.append("line \(index + 1): \(line.trimmingCharacters(in: .whitespaces))")
+        }
+    }
+
+    // ANTI-VACUITY, and not a formality: a delimiter renamed from OSA leaves
+    // this walking no heredoc at all, at which point the assertion below is
+    // green over a file it never read. The four heredocs run to well over a
+    // hundred lines between them.
+    #expect(bodyLines > 60, """
+        this guard found \(bodyLines) line(s) of AppleScript heredoc in \
+        \(acceptanceScript.lastPathComponent). It looks for bodies between \
+        <<OSA and a closing OSA; a renamed delimiter leaves it reading nothing \
+        and passing everything.
+        """)
+
+    #expect(!inside, """
+        \(acceptanceScript.lastPathComponent) opens an AppleScript heredoc that \
+        is never closed by a bare OSA line, so this guard cannot tell where the \
+        AppleScript ends and the shell begins.
+        """)
+
+    #expect(offenders.isEmpty, """
+        \(acceptanceScript.lastPathComponent) carries a backtick or an \
+        apostrophe inside an AppleScript heredoc:
+          \(offenders.joined(separator: "\n  "))
+        The heredocs are unquoted and inside $( ), so bash reads them: a \
+        backtick RUNS what it encloses — measured as "rows: command not found" \
+        on an otherwise passing run — and an apostrophe opens a quote reported \
+        as unexpected EOF against the end of the file. Write the term without \
+        quoting it.
+        """)
+}
+
 /// Capture group 1 of every match of `pattern` in `text`.
 private func matches(of pattern: String, in text: String,
                      options: NSRegularExpression.Options = []) throws -> [String] {

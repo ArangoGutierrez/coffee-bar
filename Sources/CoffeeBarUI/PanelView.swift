@@ -345,6 +345,62 @@ public struct PanelView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+            // IS THERE A NEWER ONE — issue #29's opening sentence, and the half
+            // of it that shipped missing. "Two triggers: a Check now button in
+            // the PANEL, and an automatic check on a visible interval." #127
+            // built both on the Preferences window and `PreferencesView.swift`
+            // booked this copy as deferred rather than dropped.
+            //
+            // DIRECTLY UNDER THE VERSION LINE, because it is the same question
+            // continued: that line answers "which build is this?" and this one
+            // answers "is it the current one?". A user reading the first has
+            // already asked the second.
+            //
+            // UNCONDITIONAL, all three of them, like the version line above and
+            // unlike the four advisories. There is always something true to say
+            // here — including before any check has run, which is the state a
+            // silently broken check leaves behind for ever. An `if` around this
+            // would hide exactly the case the button exists for.
+            //
+            // Rendered verbatim from the model, with no sentence built here,
+            // for the reason every other line in this file gives: M1 design
+            // §5.4 forbids asserting on rendered AppKit text, so a sentence
+            // composed here would be a sentence no check reads. `nil` is not
+            // "up to date" and `ServingModel.updateStatusLine` owns that
+            // distinction.
+            Text(model.updateStatusLine)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            // WHEN, beside WHAT, because an interval nobody can check against
+            // anything is a claim rather than a fact — `docs/ROADMAP.md`'s "no
+            // hidden durations", which issue #29 restates as a constraint.
+            //
+            // The ATTEMPT and not the last success. `ServingModel.lastUpdateCheck`
+            // documents why the two are kept apart: the sentence above says what
+            // the attempt concluded, so the pair cannot read as a check that
+            // worked.
+            Text(model.lastUpdateCheckLine)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            // THE MANUAL TRIGGER.
+            //
+            // `checkForUpdates()` and not `checkForUpdatesIfDue()` — the press
+            // IS the ask, and honouring the interval here would make the button
+            // do nothing for a user who pressed it twice, or who pressed it at
+            // all on a day coffee-bar already checked at launch. The window's
+            // copy of this control makes the same call for the same reason.
+            //
+            // STACKED rather than sharing a row with the time above it, which
+            // is where the window puts it. This column is 260 points wide:
+            // "Last checked: 2026-08-16 09:30." beside a button does not fit,
+            // and a caption that wraps under its own button reads as broken.
+            Button("Check now") {
+                Task { await model.checkForUpdates() }
+            }
+
             // One line, not an About sheet. The panel is 260pt wide and already
             // dense, and the DMG now reaches people who never saw the
             // repository: this is the only route from the product to its terms.

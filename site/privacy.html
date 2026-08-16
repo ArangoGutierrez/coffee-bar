@@ -129,11 +129,13 @@ Accept-Language, which carries the language you have set. That second one is the
 only line in the request that is about you rather than about the software, and
 it is named here because a promise to say what is sent has to cover all of it.
 SECURITY.md prints the whole request as measured.</p>
-<p>It happens at most once a day, and only while the Preferences window is open,
-so a coffee-bar left in the menu bar all week makes no request at all. That
-window states the interval and shows when the last check happened. The check
-tells you and installs nothing: no update is downloaded, and coffee-bar never
-replaces itself.</p>
+<p>It happens at most once a day, and only when coffee-bar starts, so a
+coffee-bar left in the menu bar all week makes one request rather than seven —
+the interval is kept against a stamp in your preferences, not by a timer running
+in the app. The panel says what the last check concluded and when it ran, and
+has a Check now button; the Preferences window says the same and states the
+interval beside it. The check tells you and installs nothing: no update is
+downloaded, and coffee-bar never replaces itself.</p>
 <p>Any further outbound request will be opt-in, off by default, and named here
 first.</p>
 

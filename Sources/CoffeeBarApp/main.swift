@@ -130,6 +130,39 @@ struct CoffeeBarMenuBarApp: App {
         } catch {
             NSLog("coffee-bar: ingest did not start: \(error)")
         }
+
+        // IS THERE A NEWER coffee-bar — the automatic half of issue #29, and
+        // the ONE outbound request this application makes.
+        //
+        // HERE NOW, and it was in `PreferencesView.onAppear` until this commit.
+        // That file booked the move itself: "WHEN THE PANEL GAINS ITS OWN COPY
+        // (the deferred half of issue #29) this moves to App.init, because the
+        // answer will then be visible without opening anything. Until it is,
+        // moving it early would be egress with no reader." The panel now
+        // renders the verdict, the time and a Check now button, so the reader
+        // exists and the request belongs where every other launch-time job is.
+        //
+        // IT MOVED RATHER THAN BEING ADDED. Two callers of one interval-gated
+        // check is the duplicate scheduling the issue rules out: each can make
+        // the request the other's stamp was meant to have covered. `.onAppear`
+        // was also never the right hook — it fires when the window is CREATED
+        // and not when an existing one is re-presented, which is the whole of
+        // issue #126.
+        //
+        // `IfDue` and never `checkForUpdates()`. This runs on every launch and
+        // a menu-bar app is launched at login; the unconditional call would
+        // turn a stated daily check into a request per launch. The interval is
+        // enforced against a stamp in the user's settings, so it survives a
+        // relaunch — this process holds no timer for it, and a coffee-bar
+        // sitting in the menu bar for a week makes no request at all.
+        //
+        // A `Task` because the call is `async` and `init` is not, and nothing
+        // waits on it: a check that cannot reach the network must not delay the
+        // menu bar appearing. Failure is silent by design — the model records
+        // a verdict the two surfaces render, and there is no banner and no
+        // retry.
+        Task { await model.checkForUpdatesIfDue() }
+
         _model = State(initialValue: model)
     }
 
