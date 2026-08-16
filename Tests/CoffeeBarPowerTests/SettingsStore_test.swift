@@ -573,4 +573,71 @@ struct SettingsStoreTests {
         store.setInteger(1_786_000_000, forKey: SettingsKey.lastUpdateCheck)
         #expect(store.integer(forKey: SettingsKey.lastUpdateCheck) == 1_786_000_000)
     }
+
+    // MARK: - Whether to come back after a reboot (issue #48)
+
+    @Test func theLaunchAtLoginKeyStringNeverChangesAndCollidesWithNothing() {
+        // Held for the reason every other key is, and this one leaves an
+        // ARTIFACT ON DISK that the rename does not clean up. A renamed key
+        // reads as `nil` on the next launch, so the window shows the switch off
+        // — while `~/Library/LaunchAgents/com.coffeebar.loginitem.plist` is
+        // still there and launchd still honours it at every boot. The user then
+        // has a login item the product tells them they do not have, and the one
+        // control that would remove it now believes there is nothing to remove.
+        //
+        // Collision with all seven existing keys is asserted here rather than in
+        // a separate check, matching the four keys above. It shares a type with
+        // `holdDisplayAwake`, `quietEverythingElse` and `quickStartCompleted`,
+        // which is the dangerous kind: a `Bool`/`Bool` collision reads cleanly
+        // in both directions, so turning the display hold on would install a
+        // launch agent and nothing anywhere would report it.
+        #expect(SettingsKey.launchAtLogin == "launchAtLogin")
+        #expect(SettingsKey.launchAtLogin != SettingsKey.holdDisplayAwake)
+        #expect(SettingsKey.launchAtLogin != SettingsKey.batteryFloorPercent)
+        #expect(SettingsKey.launchAtLogin != SettingsKey.demotableProcessNames)
+        #expect(SettingsKey.launchAtLogin != SettingsKey.quietEverythingElse)
+        #expect(SettingsKey.launchAtLogin != SettingsKey.agentTools)
+        #expect(SettingsKey.launchAtLogin != SettingsKey.lidClosedHoldSeconds)
+        #expect(SettingsKey.launchAtLogin != SettingsKey.quickStartCompleted)
+        #expect(SettingsKey.launchAtLogin != SettingsKey.lastUpdateCheck)
+    }
+
+    @Test func anUnsetLaunchAtLoginReadsAsAbsentRatherThanAsAskedFor() throws {
+        // The direction the whole of issue #48 rests on. `UserDefaults.bool(forKey:)`
+        // answers `false` for a key nobody wrote, which happens to be the right
+        // default here — but the seam answers `nil`, and the installer's guard
+        // is written against `== true` so that BOTH readings refuse. A `?? true`
+        // anywhere on this path installs a launch agent for every user who has
+        // never opened Preferences, which is the one thing design §6 forbids
+        // outright.
+        let suite = try throwawaySuite()
+        defer { suite.defaults.removePersistentDomain(forName: suite.name) }
+        let store = UserDefaultsSettingsStore(defaults: suite.defaults)
+
+        #expect(store.bool(forKey: SettingsKey.launchAtLogin) == nil)
+
+        // And a choice, once made, is a choice both ways: `false` is a written
+        // key and is told apart from never having been asked.
+        store.setBool(false, forKey: SettingsKey.launchAtLogin)
+        #expect(store.bool(forKey: SettingsKey.launchAtLogin) == false)
+
+        store.setBool(true, forKey: SettingsKey.launchAtLogin)
+        #expect(store.bool(forKey: SettingsKey.launchAtLogin) == true)
+    }
+
+    @Test func theLoginItemChoiceSurvivesARestart() throws {
+        // A key is a STORED FORMAT, and this is the check that reads it back
+        // through a SECOND store over the same domain — the same shape as
+        // `theQuietOthersSwitchSurvivesARestart`. It is the closest a unit check
+        // gets to the acceptance criterion: the setting has to outlive the
+        // process, because the artifact it governs is read at the next boot.
+        let suite = try throwawaySuite()
+        defer { suite.defaults.removePersistentDomain(forName: suite.name) }
+
+        UserDefaultsSettingsStore(defaults: suite.defaults)
+            .setBool(true, forKey: SettingsKey.launchAtLogin)
+
+        let next = UserDefaultsSettingsStore(defaults: suite.defaults)
+        #expect(next.bool(forKey: SettingsKey.launchAtLogin) == true)
+    }
 }
