@@ -164,6 +164,34 @@ public enum SettingsKey {
     /// `theLastUpdateCheckKeyStringNeverChangesAndCollidesWithNothing` holds the
     /// string itself and pins it apart from every other key here.
     public static let lastUpdateCheck = "lastUpdateCheck"
+
+    /// Whether the user asked coffee-bar to open at login (issue #48).
+    ///
+    /// Absent by default, and the default is `false`: nothing is installed until
+    /// the user asks. Design §6 refuses even to merge a hook snippet into a
+    /// settings file the user already owns, and a launch agent that appears
+    /// because the app was launched once is that rule broken where it costs
+    /// most. `LoginItemInstaller.install()` reads THIS key and refuses on
+    /// anything but a stored `true`, so the opt-in is a precondition of the
+    /// write rather than a convention its one caller observes.
+    ///
+    /// **It is the only key here that governs an artifact on disk**, which makes
+    /// it different in kind from the eight above. Those decide what coffee-bar
+    /// does while it runs; this one decides whether a file exists in
+    /// `~/Library/LaunchAgents` that launchd reads at every boot. A rename
+    /// therefore does not merely lose a preference: it reads as `nil` on the
+    /// next launch, so the window shows the switch off while the plist is still
+    /// there and still honoured — and the one control that would remove it now
+    /// believes there is nothing to remove.
+    ///
+    /// It shares a type with `holdDisplayAwake`, `quietEverythingElse` and
+    /// `quickStartCompleted`, which is the dangerous kind of neighbour: a
+    /// `Bool`/`Bool` collision reads cleanly in both directions rather than
+    /// answering `nil`, so turning the display hold on would install a launch
+    /// agent with nothing anywhere reporting it.
+    /// `theLaunchAtLoginKeyStringNeverChangesAndCollidesWithNothing` holds the
+    /// string itself and pins it apart from every other key here.
+    public static let launchAtLogin = "launchAtLogin"
 }
 
 /// Where a user preference is kept.

@@ -355,6 +355,21 @@ private let versionSurfaces = [(file: "PanelView.swift", type: "PanelView"),
         with every per-control check below still green.
         """)
 
+    // Issue #48's section, held the same way and for the same reason. It is the
+    // only section on this page whose control leaves an artifact on disk, so a
+    // section wrapped as a unit here does not merely hide a switch: it hides the
+    // switch that REMOVES the launch agent, from a user who can still have one.
+    let startupDepth = try #require(braceDepth(atFirst: "Text(\"Startup\")", in: prefs), """
+        PreferencesView.swift no longer contains Text("Startup"), so the login \
+        item has no section and the user has no way to turn it off.
+        """)
+    #expect(startupDepth == anchorDepth, """
+        PreferencesView.swift puts Text("Startup") at brace depth \(startupDepth) \
+        while Text("Power") sits at \(anchorDepth). The Startup section is inside \
+        something the Power section is not, so it can be disabled as a unit with \
+        the per-control check below still green.
+        """)
+
     // The nesting each control is ALLOWED, and naming what the braces are is
     // what makes this readable. Nought means a direct child of the `VStack`,
     // beside the headings. The slider's one is the `HStack` that carries its
@@ -379,6 +394,16 @@ private let versionSurfaces = [(file: "PanelView.swift", type: "PanelView"),
         (needle: "LidClosedHold.permitted", braces: 1, control: "the Lid-closed hold slider",
          enclosing: "its HStack row"),
         (needle: "$model.quietEverythingElse", braces: 0, control: "the Quiet everything else toggle", enclosing: "nothing"),
+        // Issue #48's control. Its needle is the BINDING rather than
+        // `Toggle(`, for the reason the agent-tool row's is `Toggle(isOn:`:
+        // `braceDepth(atFirst:)` takes the first match and the Quiet everything
+        // else toggle is spelled earlier in the file. A binding also refuses
+        // what a property would satisfy — `model.launchAtLogin` alone displays
+        // the value, and a switch the user can read and not flip is not a
+        // switch. That distinction matters more here than anywhere else on the
+        // page: an unflippable control over an installed launch agent is an
+        // install with no uninstall.
+        (needle: "$model.launchAtLogin", braces: 0, control: "the Open at login toggle", enclosing: "nothing"),
         // Issue #51's control, and the two braces are its row rather than a
         // condition: the `ForEach` closure over `AgentTool.allCases`, then the
         // `HStack` that carries the path and the buttons. `Toggle(isOn:` and not
@@ -405,6 +430,59 @@ private let versionSurfaces = [(file: "PanelView.swift", type: "PanelView"),
             nothing to click.
             """)
     }
+}
+
+@Test func thePreferencesWindowOffersTheLoginItemAndSaysWhatItWrites() throws {
+    // PRESENCE, the same tripwire shape as `thePreferencesWindowOffersTheQuietOthersControl`
+    // and for a sharper version of the same reason: `SettingsKey` can hold the
+    // key, `ServingModel` can store it and `LoginItemInstaller` can write a
+    // perfectly good launch agent with every check in this package green while
+    // no surface offers a way to turn ANY of it on — the shape `ProcGovernor`
+    // and `LaunchDaemonInstaller` both shipped in, which issue #13 exists to
+    // complain about.
+    //
+    // The issue asks for this on the PANEL. The panel is not available this
+    // wave, so it is here; a panel affordance is a follow-up, and both surfaces
+    // would bind this same property when it arrives.
+    //
+    // The NOTE is held beside the control rather than in a separate check,
+    // because the two are one decision: this is the only control on the page
+    // that puts a file in the user's home directory, and the sentence naming
+    // that file is what makes the switch honest. A window that offered the
+    // toggle and dropped the sentence would install an artifact nothing on any
+    // surface accounts for.
+    //
+    // COMMENT-STRIPPED through `surfaceCode`, for the reason the quiet-others
+    // guard gives: `PreferencesView.swift` explains every control at length, so
+    // a raw read would be satisfied by the prose about the thing it deleted.
+    //
+    // REACHABILITY is held by `everyMovedControlIsRenderedAsUnconditionallyAsTheHeadingsAboveIt`
+    // above, which pins this binding's brace depth. The assertions here are
+    // `contains`, and a `contains` cannot tell a live control from a dead one.
+    let prefs = try surfaceCode(named: "PreferencesView.swift")
+
+    // The BINDING, not the property: `model.launchAtLogin` would be satisfied
+    // by a line that merely displays the position.
+    #expect(prefs.contains("$model.launchAtLogin"), """
+        PreferencesView.swift binds no control to model.launchAtLogin, so the \
+        login item can be stored, installed and honoured and the user can \
+        neither turn it on nor take it off again.
+        """)
+
+    #expect(prefs.contains("ServingModel.launchAtLoginLabel"), """
+        PreferencesView.swift names its own label for the login-item control. It \
+        belongs on ServingModel beside the other control labels, where \
+        theLoginItemLabelSaysWhatTheSwitchDoesAndPromisesNothingElse reads it — \
+        design §5.4 rules out asserting on rendered AppKit text, so a literal \
+        here is a claim nothing in this package could check.
+        """)
+
+    #expect(prefs.contains("ServingModel.launchAtLoginNote"), """
+        PreferencesView.swift renders no note beside the login-item switch, so \
+        the one control on this page that writes a file into the user's home \
+        directory does not say which file. Rendered verbatim from the model for \
+        the reason every other sentence on this page is.
+        """)
 }
 
 @Test func thePreferencesWindowNeverWritesAnAgentToolsSettingsFile() throws {
