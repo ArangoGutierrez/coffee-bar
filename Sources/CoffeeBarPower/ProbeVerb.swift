@@ -25,6 +25,18 @@ public enum ProbeVerb: String, CaseIterable, Sendable {
     case report
     case revert
     case watchdog
+    /// The registered helper's entry point (#71).
+    ///
+    /// **The first verb in this binary that LISTENS**, and the only one nobody
+    /// types. `launchd` starts it for the `SMAppService` job whose plist ships
+    /// inside the app bundle; the user's part is clicking a button and
+    /// approving the prompt macOS presents.
+    ///
+    /// It does NOT replace `arm`. Both paths coexist: a Homebrew install gets
+    /// an ad-hoc bundle that can register nothing, so `sudo coffee-bar-probe
+    /// arm` stays the only route those users have — and a user who armed it
+    /// before upgrading must not be broken.
+    case serve
 
     /// How long `arm` holds the setting when the caller names no `--ttl`.
     ///
@@ -92,7 +104,7 @@ public enum ProbeVerb: String, CaseIterable, Sendable {
     public var requiresRoot: Bool {
         switch self {
         case .run: return false
-        case .arm, .report, .revert, .watchdog: return true
+        case .arm, .report, .revert, .watchdog, .serve: return true
         }
     }
 
@@ -108,6 +120,8 @@ public enum ProbeVerb: String, CaseIterable, Sendable {
             return "restore the prior sleep setting and remove the watchdog"
         case .watchdog:
             return "supervise an armed run; launchd starts this, you do not"
+        case .serve:
+            return "serve the app's arm requests; the registered helper, not for you"
         }
     }
 

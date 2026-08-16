@@ -156,14 +156,66 @@ fi
 # and which #71b will need.
 TS_FLAG="--timestamp=none"
 
+# The helper's SIGNING IDENTIFIER, and it has to be set explicitly (#71).
+#
+# MEASURED 2026-08-16 on a bundle assembled exactly the way build-app.sh
+# assembles one. `codesign` derives the identifier of a BARE Mach-O — one with
+# no Info.plist of its own — from its filename plus a hash:
+#
+#   $ codesign --force --options runtime --timestamp=none --sign - \
+#         CoffeeBar.app/Contents/MacOS/coffee-bar-probe
+#   $ codesign -d --verbose=4 …
+#   Identifier=coffee-bar-probe-5555494425cf766ad0ee3fa09a60a3a47d0cb04b
+#
+# Nothing can pin that. `PrivilegedHelperIdentity.helperPeerRequirement` pins
+# `identifier "com.coffeebar.probehelper"`, so the app would refuse its own
+# helper on every signed build — and that failure appears only AFTER signing,
+# which is the one configuration a dev build cannot reach. With `-i` the same
+# command yields `Identifier=com.coffeebar.probehelper`, measured in the same
+# session.
+#
+# The BUNDLE needs no such flag: `codesign` takes a bundle's identifier from
+# CFBundleIdentifier, measured as `Identifier=com.coffeebar.app`, which is what
+# `PrivilegedHelperIdentity.appPeerRequirement` pins. Only the nested probe is
+# the bare case.
+#
+# `theHelperIsSignedWithAStableIdentifier` holds this string against the Swift
+# constant, because no compiler crosses this boundary.
+HELPER_BINARY="coffee-bar-probe"
+HELPER_IDENTIFIER="com.coffeebar.probehelper"
+
 signed=0
 for bin in "${APP}/Contents/MacOS"/*; do
     [ -f "${bin}" ] || die "Contents/MacOS holds no regular file at ${bin}; nothing to sign"
-    codesign --force --options runtime "${TS_FLAG}" --sign "${IDENTITY}" "${bin}" \
-        || die "cannot sign nested binary ${bin}"
+    # Two spelled-out commands rather than one with an array of extra flags.
+    # MEASURED: /bin/bash on macOS is 3.2.57, where `"${empty[@]}"` under
+    # `set -u` aborts with "unbound variable" — so the array form failed every
+    # binary that needs no `-i`, which is every binary but the helper. An empty
+    # `-i ""` is not an option either: codesign reads it as an identifier.
+    if [ "$(basename "${bin}")" = "${HELPER_BINARY}" ]; then
+        codesign --force --options runtime "${TS_FLAG}" -i "${HELPER_IDENTIFIER}" \
+            --sign "${IDENTITY}" "${bin}" \
+            || die "cannot sign nested binary ${bin}"
+    else
+        codesign --force --options runtime "${TS_FLAG}" \
+            --sign "${IDENTITY}" "${bin}" \
+            || die "cannot sign nested binary ${bin}"
+    fi
     signed=$((signed + 1))
     echo "    signed $(basename "${bin}")"
 done
+
+# The identifier is read BACK off the helper, because `codesign --sign`
+# returning 0 proves nothing about what it stamped — and this string is what
+# every peer pin in the product is written against.
+helper_path="${APP}/Contents/MacOS/${HELPER_BINARY}"
+if [ -f "${helper_path}" ]; then
+    stamped="$(codesign -d --verbose=4 "${helper_path}" 2>&1 \
+        | sed -n 's/^Identifier=//p' || true)"
+    [ "${stamped}" = "${HELPER_IDENTIFIER}" ] \
+        || die "the helper signed as '${stamped}', expected ${HELPER_IDENTIFIER}; no peer pin can match it"
+    echo "    ${HELPER_BINARY} identifier ${stamped}"
+fi
 [ "${signed}" -gt 0 ] || die "signed nothing; ${APP}/Contents/MacOS is empty"
 
 codesign --force --options runtime "${TS_FLAG}" --sign "${IDENTITY}" "${APP}" \

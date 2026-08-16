@@ -29,12 +29,30 @@ branches on, as JSON. See
 
 ### The privileged verbs
 
-The probe also carries four verbs that need root — `arm`, `report`, `revert` and
-`watchdog`. **All four are implemented.** They are lid-closed mode, which shipped
-in v0.2.0: `arm` records the setting it is about to change, installs a launchd
-watchdog, sets the machine to stay awake with the lid shut and forces the display
-off; `report` prints what is armed; `revert` puts the setting back; `watchdog` is
-what launchd itself runs to undo the hold when the TTL expires.
+The probe also carries five verbs that need root — `arm`, `report`, `revert`,
+`watchdog` and `serve`. **All five are implemented.** They are lid-closed mode,
+which shipped in v0.2.0: `arm` records the setting it is about to change,
+installs a launchd watchdog, sets the machine to stay awake with the lid shut and
+forces the display off; `report` prints what is armed; `revert` puts the setting
+back; `watchdog` is what launchd itself runs to undo the hold when the TTL
+expires.
+
+`serve` is the odd one out and you will never type it. It is the entry point of
+the **registered helper** (issue #71): a launchd job whose plist ships inside
+`CoffeeBar.app/Contents/Library/LaunchDaemons/`, which the app installs through
+`SMAppService` when you click the button in Preferences and approve the prompt
+macOS presents. It publishes an XPC endpoint, and every peer on that channel is
+pinned by Team ID **and** bundle ID — `PrivilegedHelperIdentity` is where the
+requirement is written and `PrivilegedHelperPeerGate.swift` is the only file
+allowed to apply it.
+
+**That path needs a code-signed bundle, so a default build cannot use it.**
+`SMAppService` registers a plist out of a signed bundle's contents, and
+`scripts/build-app.sh` signs only when `SIGN_IDENTITY` is set — which a
+contributor build, a CI build and a Homebrew install all leave unset. Those
+builds carry no team, the app reads its own signature, and it does not offer the
+button. `sudo coffee-bar-probe arm` remains the route for them, and it is
+unchanged.
 
 `swift run` cannot reach them, because `swift run` does not run as root. Build
 first and invoke the binary directly:
