@@ -138,9 +138,39 @@ public final class PrivilegedHelperEndpoint: NSObject, NSXPCListenerDelegate, @u
         self.listener.delegate = self
     }
 
-    /// Starts listening. Never returns to the caller's control flow in the
-    /// daemon — `serve` parks after this.
+    /// A strong reference to itself, taken when the endpoint is published.
+    ///
+    /// A retain cycle on purpose, and never broken: `launchd` owns this
+    /// process's lifetime, and a published endpoint is owed exactly that long.
+    private var publishedSelf: PrivilegedHelperEndpoint?
+
+    /// Starts listening, and makes sure there is still something here to listen
+    /// WITH.
+    ///
+    /// **The retain is the fix for the defect that made this daemon useless.**
+    /// `NSXPCListener` holds its delegate weakly — `NSXPCConnection.h`: "The
+    /// delegate for the connection listener. If no delegate is set, all new
+    /// connections will be rejected." So an endpoint nothing retains is freed
+    /// the moment its caller's statement ends, and macOS then refuses every
+    /// client of a job that `launchd` reports healthy, `launchctl` shows active
+    /// and managed, and whose own log says nothing at all — because
+    /// `listener(_:shouldAcceptNewConnection:)` never runs.
+    ///
+    /// **Here rather than at the call site, and that is the whole point.**
+    /// `serveForever()` shipped `PrivilegedHelperEndpoint(exporting: self).resume()`
+    /// and every review read past it. A rule that lives in the caller has to be
+    /// remembered by each new caller; this one holds wherever the type is used.
+    ///
+    /// **In `resume()` rather than in `init`.** Only a published endpoint has a
+    /// listener macOS will call back, so only a published endpoint has anything
+    /// to stay alive for. Retaining on construction would leak every endpoint
+    /// anybody makes, including the ones a check throws away —
+    /// `anEndpointThatWasNeverResumedIsNotKeptAlive` is what refuses that.
+    ///
+    /// Never returns to the caller's control flow in the daemon: `serve` parks
+    /// after this.
     public func resume() {
+        publishedSelf = self
         listener.resume()
     }
 
