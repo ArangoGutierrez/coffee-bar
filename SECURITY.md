@@ -322,12 +322,23 @@ setting and puts it back. This policy is the authoritative bound on that path,
 and a shipped binary that exceeds any clause below is a vulnerability under this
 policy:
 
-- **There is no XPC service and no Mach service.** Nothing on the privileged
-  path listens for callers, so there is no peer to authenticate and no other
-  local process that can ask it for anything.
+- **There is a Mach service now, and every peer on it is pinned (#71).** This
+  section used to say there was none, and that was true of M5. What replaced it
+  is not a weaker version of the same promise: the endpoint
+  `com.coffeebar.probehelper` accepts a connection only from code that satisfies
+  `anchor apple generic`, the Developer ID marker OIDs, team `85FN4Z37V8` **and**
+  bundle identifier `com.coffeebar.app` — and the app demands the same four of
+  the helper before it says a word to it. The next section is the whole of that
+  argument. **The CLI path is unchanged and still ships**; a bundle that is not
+  signed by that team registers nothing and is not offered the button.
 - Its verbs are a fixed list, and **none of them takes an arbitrary string**.
   There is no "run this command" and no user-supplied path to execute.
-  The complete verb list is `run`, `arm`, `report`, `revert` and `watchdog`.
+  The complete verb list is `run`, `arm`, `report`, `revert`, `watchdog` and `serve`.
+  The one argument that crosses the XPC channel is a TTL in seconds,
+  and the helper clamps it on its own side against `JournalRecord.maxTTLSeconds`
+  — a peer that passed the code-signing pin is still not trusted to bound a root
+  hold, because "signed by the right team" and "not currently compromised" are
+  different claims.
 - The program the daemon executes is resolved inside the installer and is never
   taken from an argument. Accepting one turned `sudo coffee-bar-probe arm` into
   a one-line root persistence primitive, measured, and the shipped interface
@@ -415,25 +426,18 @@ policy:
   machine, and it is the one case where aborting does not reduce the risk.
   Clear your own `SleepDisabled` if you want the machine to sleep on heat.
 
-#### Why there is no XPC helper, and what would bring one back
+#### The XPC helper, and exactly what pins it
 
-This section used to require the opposite, and it was written before anything
-was built. The false premise is replaced rather than deleted: the rule it was
-reaching for still stands, and the reasoning is the record of a decision.
+This section has said three different things, and the sequence is the record of
+a decision rather than an embarrassment. It first required a pinned helper,
+before anything was built. It then said no helper could exist, because the only
+bundle shipping was ad-hoc signed and there was no certificate to pin. It now
+says a helper exists and what authenticates it. **The rule never moved.** What
+moved was whether it could be satisfied.
 
-What the shipped code does NOT do — each one refused structurally by
-`noTargetOnThePrivilegedPathReachesForXPCOrSMAppService` in
-`Tests/CoffeeBarUITests/AppLayerBoundary_test.swift`:
-
-- coffee-bar registers no `SMAppService` daemon.
-- It opens no `NSXPCListener`, and it publishes no `machServiceName`.
-- It does not use the deprecated `SMJobBless` path either.
-- It cannot pin a peer with `setCodeSigningRequirement(_:)`, and that is the
-  measurement the whole decision turns on.
-
-The bundle that ships today is Developer ID signed and notarised, so it carries
-both a team identifier and a full certificate chain. Measured 2026-08-10 against
-the installed v0.2.0 bundle:
+**The premise that unblocked it.** The bundle that ships is Developer ID signed
+and notarised, so it carries both a team identifier and a full certificate
+chain. Measured 2026-08-10 against the installed v0.2.0 bundle:
 
 ```
 $ codesign -dvvv /Applications/CoffeeBar.app
@@ -444,21 +448,77 @@ TeamIdentifier=85FN4Z37V8
 $ codesign -v -R='anchor apple generic' <that app>   ->  rc=0  PASSES
 ```
 
-So the bar above is **unimplemented rather than impossible**, and that
-relabelling is the whole of this correction. Until v0.2.0 there was no
-certificate to pin and no signed bundle to attach one to, and this section
-recorded that as a permanent bound. Both now exist, and the text did not move
-when the premise died — a reader was told a check could not be built when it had
-merely not been built.
+**The requirement both ends apply**, `PrivilegedHelperIdentity`, is:
 
-A peer check that could not be satisfied was not a weaker helper. It was an
-unauthenticated root service that accepted any local caller, which was strictly
-worse than the CLI that shipped — a command you type has exactly one caller, and
-you are it. That is why M5 shipped the CLI, and the decision stands.
+```
+anchor apple generic
+  and identifier "<the peer's bundle ID>"
+  and certificate 1[field.1.2.840.113635.100.6.2.6]
+  and certificate leaf[field.1.2.840.113635.100.6.1.13]
+  and certificate leaf[subject.OU] = "85FN4Z37V8"
+```
 
-Neither the peer pin nor the `SMAppService` route is impossible now — both are
-simply unimplemented. Whether either should be built is issue #71's question,
-and re-deriving the architecture here is what #71 exists to do.
+The helper demands it of `com.coffeebar.app`; the app demands it of
+`com.coffeebar.probehelper`. **Dropping any clause is a different attack, and
+none of them is decoration:**
+
+- Without `anchor apple generic` the other clauses are worthless. `identifier`
+  and `subject.OU` are both fields the SIGNER chooses, so a local attacker
+  self-signs a binary claiming this bundle ID and this team and walks in.
+  Measured 2026-08-16 on an ad-hoc fixture, `codesign -v -R='identifier
+  "com.coffeebar.app"'` returns **rc=0**; adding the team clause takes the same
+  fixture to **rc=3**.
+- The two marker OIDs rule out the other chains that also reach an Apple root —
+  a development certificate, or a Mac App Store leaf.
+- Without `identifier`, any binary this team ever signs is accepted. A team is
+  an author, not a program.
+
+**Where the pin may be applied.** In exactly one file.
+`PrivilegedHelperPeerGate.swift` is the only place in this package that may name
+`NSXPCListener`, `NSXPCConnection`, `setCodeSigningRequirement` or
+`machServiceName`, and `PrivilegedHelperClient.swift` is the only place that may
+name `SMAppService`. No file anywhere may name `SMJobBless`: it is the
+deprecated path, and nothing here needs it.
+`noTargetOnThePrivilegedPathReachesForXPCOrSMAppService` enforces the ban and
+the two exemptions; `theEntitledChannelFilePinsEveryPeerItOpens` refuses a
+connection that is created without a pin and refuses a requirement spelled out
+inline, which is the shape somebody reaches for when the real one will not
+compile and which reads exactly like a pin. Both connections are pinned
+**before** they are resumed: a resumed connection dispatches messages that have
+already arrived, so pinning afterwards closes a door the caller is through.
+`PrivilegedHelperIdentity_test.swift` evaluates the requirement through
+Security.framework rather than reading it, with `/bin/ls` as a positive control
+for the harness and as the discriminating negative — a validly signed program
+belonging to somebody else.
+
+**coffee-bar still elevates nothing on its own initiative, and this is the part
+worth reading slowly.** `SMAppService.register()` does not take a password, does
+not run an interpreter as root, and does not install anything itself: it asks
+macOS, which presents its own authorisation prompt naming the app and installs
+the job. `AuthorizationExecuteWithPrivileges` (deprecated since 10.7) and
+`NSAppleScript "with administrator privileges"` were both rejected for the
+opposite property — each takes the user's credentials inside coffee-bar's own
+process — and both remain in the app layer's denylist.
+`theAppLayerNeverReachesForPrivilegeEscalation` still refuses `setuid`,
+`launchctl`, `AuthorizationRef` and six more names for every file including the
+entitled one. What changed is who collects the consent, not whether it is asked
+for.
+
+**Both paths ship, and the CLI is not deprecated.** `sudo coffee-bar-probe arm`
+installs `com.coffeebar.probewatchdog` into `/Library/LaunchDaemons` exactly as
+before, and a user who armed it is unaffected by any of this. The registered
+helper is a separate job with a separate label — sharing one would let a
+registration boot out a watchdog supervising a live hold, leaving nothing to put
+`SleepDisabled` back. **A Homebrew install cannot use the helper at all**: that
+bundle is built with no `SIGN_IDENTITY`, names no team, and the app reads its own
+signature and does not offer the button. For those users the command is not a
+fallback, it is the feature.
+
+**What is not claimed here.** The helper's registration, the OS authorisation
+prompt and a live XPC round trip have not been observed on this branch, because
+they need a signed bundle and signing is opt-in. What has been measured is the
+requirement — that it parses, that it rejects a correctly signed program from
+another team, and that the build stamps the helper with the identifier it pins.
 
 The privileged side reads a journal file to know what to restore. That file is
 an instruction to a root process, and it is treated as one. All four of these

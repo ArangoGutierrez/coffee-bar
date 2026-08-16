@@ -95,6 +95,27 @@ private let policyDocuments = ["SECURITY.md", "docs/ROADMAP.md"]
 private struct RefusedMechanism {
     let token: String
     let wholeWord: Bool
+
+    /// Whether issue #71 entitled two named files to USE this mechanism.
+    ///
+    /// The distinction the documents turn on. A mechanism nothing may call must
+    /// never be described affirmatively in a policy document, because a reader
+    /// would be told the product does something it structurally cannot. A
+    /// mechanism two entitled files DO call is a mechanism the policy has to
+    /// describe — and describing it under a negator would be the false claim
+    /// instead.
+    ///
+    /// This is a NARROWING and not a deletion. `SMJobBless` is entitled for
+    /// nobody, so the rule still bites, and
+    /// `everyEntitledMechanismInTheDocumentsArrivesWithItsPin` below replaces
+    /// what the negator was buying for the other six.
+    let entitled: Bool
+
+    init(token: String, wholeWord: Bool, entitled: Bool = false) {
+        self.token = token
+        self.wholeWord = wholeWord
+        self.entitled = entitled
+    }
 }
 
 /// The same list `AppLayerBoundary_test.swift` forbids in code, plus the bare
@@ -103,15 +124,19 @@ private struct RefusedMechanism {
 /// Kept in step with that list BY HAND, and that is a stated weakness rather
 /// than a hidden one: the two files are in different test targets and cannot
 /// share a constant. `theRefusedListStillNamesTheMechanismsTheCodeGuardRefuses`
-/// below is what stops the two drifting silently.
+/// below is what stops the two drifting silently — and it is why every token
+/// stays here after #71 even though six of them are now reachable: the code
+/// guard still FORBIDS all six everywhere outside two entitled files, and a
+/// token dropped from this list would be a token no document is checked for at
+/// all.
 private let refusedMechanisms = [
-    RefusedMechanism(token: "SMAppService", wholeWord: false),
+    RefusedMechanism(token: "SMAppService", wholeWord: false, entitled: true),
     RefusedMechanism(token: "SMJobBless", wholeWord: false),
-    RefusedMechanism(token: "NSXPCListener", wholeWord: false),
-    RefusedMechanism(token: "NSXPCConnection", wholeWord: false),
-    RefusedMechanism(token: "setCodeSigningRequirement", wholeWord: false),
-    RefusedMechanism(token: "machServiceName", wholeWord: false),
-    RefusedMechanism(token: "XPC", wholeWord: true),
+    RefusedMechanism(token: "NSXPCListener", wholeWord: false, entitled: true),
+    RefusedMechanism(token: "NSXPCConnection", wholeWord: false, entitled: true),
+    RefusedMechanism(token: "setCodeSigningRequirement", wholeWord: false, entitled: true),
+    RefusedMechanism(token: "machServiceName", wholeWord: false, entitled: true),
+    RefusedMechanism(token: "XPC", wholeWord: true, entitled: true),
 ]
 
 /// Words that turn a mechanism's name into a statement about what does NOT
@@ -277,18 +302,72 @@ private func matchedGroups(_ pattern: String, in text: String) throws -> [String
         the false premise is the fix, deleting the section is not.
         """)
 
-    for mention in found {
+    // ENTITLED mechanisms are exempt from the negator, and only those (#71).
+    // The rule is unchanged for everything else: a document may not describe a
+    // mechanism the code cannot call. What changed is that six of these CAN now
+    // be called, from two named files, so requiring a denial beside them would
+    // force the policy to state the opposite of what ships.
+    //
+    // `SMJobBless` is entitled for nobody and still needs its negator, which is
+    // what keeps this loop discriminating rather than vacuous.
+    let entitledTokens = Set(refusedMechanisms.filter(\.entitled).map(\.token))
+    for mention in found where !entitledTokens.contains(mention.token) {
         #expect(carriesANegator(mention.before), """
             \(mention.document):\(mention.line) names \(mention.token) with \
             nothing on the line before it that denies it:
               \(mention.text)
-            M5 ships as a root CLI plus a launchd watchdog, and \
             noTargetOnThePrivilegedPathReachesForXPCOrSMAppService refuses this \
-            API in code. A document may explain why the mechanism is NOT used; \
-            stating that it IS used bounds the shipped product against a design \
-            nobody built. Put the denial on the same line as the name.
+            API in code, in EVERY file — it is not one of the two the #71 \
+            entitlement names. A document may explain why the mechanism is NOT \
+            used; stating that it IS used bounds the shipped product against a \
+            design nobody built. Put the denial on the same line as the name.
             """)
     }
+}
+
+@Test func everyEntitledMechanismInTheDocumentsArrivesWithItsPin() throws {
+    // What replaces the negator for the six mechanisms #71 entitled, and the
+    // reason dropping the negator is a narrowing rather than a hole.
+    //
+    // The old rule bought one thing: a reader could not be told coffee-bar
+    // speaks XPC, because it did not. It does now — so the claim that has to be
+    // held true instead is the one the whole design rests on. An XPC channel
+    // whose peer is unpinned accepts every local process and is strictly worse
+    // than the sudo command it replaces, because it looks safe. A policy that
+    // describes the channel and omits the pin describes exactly that product.
+    //
+    // Named bug: somebody trims this section for length, the paragraph
+    // explaining the peer requirement goes, and SECURITY.md then documents a
+    // root Mach service with no stated authentication at all.
+    let text = try policyDocument("SECURITY.md")
+
+    // ANTI-VACUITY: this check means nothing unless the document really does
+    // describe the channel.
+    #expect(text.contains("SMAppService") || text.contains("Mach service"), """
+        SECURITY.md describes no XPC helper at all, so this check is asserting \
+        nothing. The channel ships; the policy has to bound it.
+        """)
+
+    // BOTH pins, by name, because either one alone is a different product. A
+    // team identifier is an AUTHOR — pinning it alone accepts every tool this
+    // team ever signs. A bundle identifier is a NAME anybody may choose —
+    // pinning it alone accepts a self-signed impostor.
+    #expect(text.contains(PrivilegedHelperIdentity.teamIdentifier), """
+        SECURITY.md never names the team identifier the XPC peer is pinned to
+        """)
+    #expect(text.contains(PrivilegedHelperIdentity.appIdentifier), """
+        SECURITY.md never names the app bundle identifier the helper demands
+        """)
+    #expect(text.contains(PrivilegedHelperIdentity.helperIdentifier), """
+        SECURITY.md never names the helper bundle identifier the app demands
+        """)
+
+    // And the anchor without which the other two clauses are decoration: both
+    // `identifier` and `subject.OU` are fields the signer chooses.
+    #expect(text.contains("anchor apple generic"), """
+        SECURITY.md states the identifier and team pins without the Apple \
+        anchor that makes either of them mean anything
+        """)
 }
 
 // MARK: - Claim 2: the documented verb list is the shipped verb list

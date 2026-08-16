@@ -26,6 +26,28 @@ import CoffeeBarCore
 public struct PreferencesView: View {
     @Bindable var model: ServingModel
 
+    /// Whether this build can register the privileged helper (#71).
+    ///
+    /// Read ONCE, from the running code's own signature, and held rather than
+    /// re-asked on every render: it cannot change while the app is running —
+    /// a bundle does not re-sign itself — and `SecCodeCopySelf` in a `body` is
+    /// a Security.framework call on the render path.
+    ///
+    /// It is NOT on `ServingModel`. The model is driven by checks that build it
+    /// with doubles, and a property whose value is this process's signature is
+    /// exactly the kind of ambient machine state those checks exist to keep out
+    /// of it. The window is where `Bundle.main` is already read, for the same
+    /// reason.
+    private let helperAvailability = PrivilegedHelperClient().availability()
+
+    /// The result of the last click, or nil before there has been one.
+    @State private var helperStatus: String?
+
+    /// A click in flight. The button is disabled meanwhile: `register()` can
+    /// present an OS authorisation sheet, and a second press behind it queues a
+    /// second root request against a prompt the user has not answered.
+    @State private var armingInFlight = false
+
     public init(model: ServingModel) { self.model = model }
 
     public var body: some View {
@@ -227,6 +249,66 @@ public struct PreferencesView: View {
                     probeAt: ServingModel.probePath(
                         besideExecutable: Bundle.main.executableURL),
                     holdingFor: model.holdInForce))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+
+                // THE BUTTON, and issue #71 is the whole of it. Until now this
+                // section really did have no control — the comment above still
+                // records why, and that reasoning has not been deleted because
+                // it is what a reader needs to understand what changed.
+                //
+                // What changed is NOT that coffee-bar elevates itself. The click
+                // asks macOS, which presents its own authorisation sheet naming
+                // the app and installs the job itself. The routes that would
+                // take the user's credentials inside THIS process stay refused
+                // by `theAppLayerNeverReachesForPrivilegeEscalation`;
+                // `PrivilegedHelperClient` carries that argument in full, and
+                // it is deliberately not repeated here — this file can reach an
+                // agent tool's settings path, and
+                // `noSourceFileThatKnowsTheSettingsPathCanWriteToIt` reads it
+                // RAW, comments included, so naming one of those APIs even to
+                // rule it out would trip a guard that is right to be blunt.
+                // The consent moved from a terminal to an OS prompt; it did not
+                // stop being asked for.
+                //
+                // HERE and not in the panel: this is the surface issue #56 gave
+                // lid-closed mode, and the hold this button arms is the slider
+                // directly above it. A control in one window driven by a number
+                // set in another is #74's drift with a click on the end.
+                //
+                // `model.holdInForce` and NOT `model.lidClosedHoldSeconds`, for
+                // the reason the paragraph above gives: the stored setting is
+                // unbounded and only the bounded value may reach a root process.
+                //
+                // Every sentence comes from the model side — `buttonTitle` and
+                // `statusLine` — because M1 design §5.4 forbids asserting on
+                // rendered AppKit text, and a sentence written here is one no
+                // check reads.
+                HStack(spacing: 8) {
+                    Button(helperAvailability.buttonTitle) {
+                        // The availability gate is re-read inside `arm`, so a
+                        // build that cannot register never reaches the OS.
+                        armingInFlight = true
+                        Task {
+                            let outcome = await PrivilegedHelperClient()
+                                .arm(seconds: model.holdInForce)
+                            helperStatus = outcome.statusLine
+                            armingInFlight = false
+                        }
+                    }
+                    .disabled(armingInFlight || helperAvailability == .unavailable)
+
+                    if armingInFlight {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+
+                // The availability sentence always, the outcome only once there
+                // has been one. An empty line would read as "nothing happened",
+                // which is a claim this window cannot make about a root daemon.
+                Text(helperStatus ?? helperAvailability.explanation)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

@@ -47,6 +47,21 @@ PRODUCTS=(coffee-bar coffee-bar-probe)
 
 APP_NAME="CoffeeBar"
 BUNDLE_ID="com.coffeebar.app"
+
+# The registered helper (#71). Three spellings of one name, all literal.
+#
+# `PrivilegedHelperIdentity` is the Swift side — what the app registers, dials
+# and PINS — and no compiler crosses the boundary between it and this heredoc.
+# `theDaemonPlistAgreesWithTheAppOnEveryName` reads both ends and holds them
+# together, which is the only thing that can: a plist naming
+# `com.coffeebar.helper` while the app registers `com.coffeebar.probehelper`
+# builds cleanly, keeps the suite green, and fails only on a SIGNED install.
+#
+# Written as literals rather than composed from each other so the Swift check
+# can find each string. A `${HELPER_IDENTIFIER}.plist` would be correct and
+# invisible to it.
+HELPER_LABEL="com.coffeebar.probehelper"
+HELPER_PLIST="com.coffeebar.probehelper.plist"
 OUT_DIR="${REPO_ROOT}/build"
 APP="${OUT_DIR}/${APP_NAME}.app"
 CONTENTS="${APP}/Contents"
@@ -342,6 +357,76 @@ echo "    LSUIElement=true (no Dock icon)"
 icon_file="$(plutil -extract CFBundleIconFile raw -o - "${CONTENTS}/Info.plist")"
 [ "${icon_file}" = "AppIcon" ] || die "CFBundleIconFile is '${icon_file}', expected AppIcon"
 echo "    CFBundleIconFile=AppIcon"
+
+# --- the registered helper's launchd job (#71) --------------------------------
+#
+# `SMAppService.daemon(plistName:)` takes neither a path nor a dictionary: macOS
+# reads this file out of Contents/Library/LaunchDaemons INSIDE the app bundle
+# and verifies it against the bundle's signature. Nowhere else will do, and no
+# Swift check in the package can see whether the file arrived — which is why
+# `BuildScriptDaemonPlist_test.swift` exists.
+#
+# BEFORE the signature, like everything else in Contents: `codesign` on the
+# bundle seals this directory, and a file added afterwards leaves a bundle whose
+# signature no longer matches its contents — a break that shows up on somebody
+# else's Mac rather than here.
+#
+# An UNSIGNED bundle gets this file too, and deliberately. It is inert there —
+# `SMAppService` refuses to register a job it cannot verify, and
+# `HelperAvailability` reads the running signature and does not offer the button
+# at all — so writing it unconditionally keeps one bundle layout rather than
+# two, and keeps the signed and Homebrew builds differing only in the
+# signature.
+#
+# RunAtLoad and KeepAlive are load-bearing for the same reason they are on the
+# CLI watchdog: this job SUPERVISES a hold it granted. A SIGKILLed helper must
+# come back, and its first act on restart is to evaluate the journal — which is
+# what bounds a live hold when the process that granted it has gone.
+echo "==> daemon plist for ${HELPER_LABEL}"
+mkdir -p "${CONTENTS}/Library/LaunchDaemons"
+cat >"${CONTENTS}/Library/LaunchDaemons/${HELPER_PLIST}" <<HELPERPLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${HELPER_LABEL}</string>
+    <key>BundleProgram</key>
+    <string>Contents/MacOS/coffee-bar-probe</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>Contents/MacOS/coffee-bar-probe</string>
+        <string>serve</string>
+    </array>
+    <key>MachServices</key>
+    <dict>
+        <key>${HELPER_LABEL}</key>
+        <true/>
+    </dict>
+    <key>AssociatedBundleIdentifiers</key>
+    <array>
+        <string>${BUNDLE_ID}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
+HELPERPLIST
+
+plutil -lint "${CONTENTS}/Library/LaunchDaemons/${HELPER_PLIST}" \
+    || die "the helper plist failed plutil -lint"
+
+# -lint accepts any well-formed plist, and a heredoc that lost its Label key is
+# well-formed. Read back the key launchd and SMAppService both key on.
+helper_label="$(plutil -extract Label raw -o - \
+    "${CONTENTS}/Library/LaunchDaemons/${HELPER_PLIST}")"
+[ "${helper_label}" = "${HELPER_LABEL}" ] \
+    || die "the helper plist's Label is '${helper_label}', expected ${HELPER_LABEL}"
+echo "    Contents/Library/LaunchDaemons/${HELPER_PLIST} (Label=${helper_label})"
 
 # --- what actually shipped ----------------------------------------------------
 #

@@ -5,20 +5,28 @@ import Foundation
 import CoffeeBarCore
 import CoffeeBarPower
 
-// The privileged path is a root CLI plus a launchd watchdog. There is no XPC
-// and no `SMAppService`, deliberately.
+// The privileged path is TWO paths now, and both are shipped (#71).
 //
-// SECURITY.md requires an XPC peer to be pinned by Team ID and bundle ID. That
-// is UNIMPLEMENTED, and since v0.2.0 it is no longer impossible. Measured
-// 2026-08-10 against the shipped app: `codesign -R='anchor apple generic'`
-// exits 0, `TeamIdentifier=85FN4Z37V8`, authority `Developer ID Application`.
-// An earlier version of this comment recorded the opposite, correctly, when the
-// only bundle that shipped was the ad-hoc signed Homebrew build. Whether to add
-// the pin is issue #71's question; this comment states only what is true today.
+// 1. The root CLI plus a launchd watchdog, unchanged: `sudo coffee-bar-probe
+//    arm` installs `com.coffeebar.probewatchdog` and the user types every
+//    character of it. This is the only route a Homebrew install has, because
+//    that bundle is ad-hoc signed and can register nothing.
+// 2. The registered helper: `serve`, started by launchd for the
+//    `SMAppService` job whose plist ships inside a code-signed app bundle.
 //
-// The accepted cost, which nothing here papers over: the panel cannot toggle
-// lid-closed mode by itself. coffee-bar prints the command and the user runs
-// it. No code path in this binary elevates its own privilege.
+// SECURITY.md requires an XPC peer to be pinned by Team ID AND bundle ID, and
+// that requirement is why (2) did not exist until now. It stopped being
+// impossible at v0.2.0 — measured 2026-08-10 against the shipped app,
+// `codesign -R='anchor apple generic'` exits 0, `TeamIdentifier=85FN4Z37V8`,
+// authority `Developer ID Application` — and `PrivilegedHelperIdentity` is
+// where the pin is written. Every peer check in the product lives in
+// `PrivilegedHelperPeerGate.swift` and nowhere else; the boundary guard in
+// `AppLayerBoundary_test.swift` refuses a second site.
+//
+// What has NOT changed: no code path in this binary elevates its own
+// privilege. Path (1) is the user's own `sudo`. Path (2) is macOS presenting
+// its own authorisation prompt for a registration the user asked for by
+// clicking, and installing the job itself.
 
 /// What the caller asked for, after the flags are taken out.
 private struct Invocation {
@@ -269,4 +277,32 @@ case .watchdog:
         }
         Thread.sleep(forTimeInterval: 5)   // §8.2(2): a 5 s timer.
     }
+
+case .serve:
+    // launchd starts this for the registered `SMAppService` job. It never
+    // returns.
+    //
+    // `RegisteredJobSupervisor` and NOT `LaunchDaemonInstaller`, and the
+    // difference is load-bearing rather than tidy: this process IS the
+    // supervised job, and the installer would refuse its own program path —
+    // `/Applications` is admin-writable, which is precisely the primitive
+    // `PathSecurity` exists to refuse. The type's own comment carries the
+    // measurement.
+    LidClosedHelperService(
+        armService: ArmService(
+            journal: FileJournalStore(),
+            reader: GuardedJournalReader(quarantineOnRefusal: false),
+            power: PmsetSleepDisabledController(runner: runner),
+            supervisor: RegisteredJobSupervisor(),
+            display: PmsetDisplaySleeper(runner: runner)),
+        // The supervising half, in the same process. Built through
+        // `makeWatchdogService`'s siblings rather than through it, because that
+        // helper wires the launchd installer this path must not use.
+        watchdog: WatchdogService(
+            reader: GuardedJournalReader(),
+            power: PmsetSleepDisabledController(runner: runner),
+            supervisor: RegisteredJobSupervisor(),
+            notifier: notifier,
+            environment: SystemWatchdogEnvironment()),
+        notifier: notifier).serveForever()
 }
