@@ -57,6 +57,24 @@ public final class ServingModel {
     /// `main.swift` for the construction and for the launch recovery.
     private let governance: ProcessGovernance?
 
+    /// Whether coffee-bar comes back after a reboot (issue #48).
+    ///
+    /// **The default is the REAL installer, like the listener's and unlike
+    /// `governance`'s, and the direction is the reason.** A null default here
+    /// ships a switch that moves and installs nothing — the user ticks it, the
+    /// preference is recorded, and the cup vanishes at the next reboot exactly
+    /// as it did before, with every check in this package green. That is the
+    /// honesty failure design §6 exists to prevent, so the wire cannot be the
+    /// thing that is missing.
+    ///
+    /// A real default is safe here in a way it is not for `governance`, because
+    /// the installer refuses to touch the disk unless
+    /// `SettingsKey.launchAtLogin` already reads `true`. A check that took the
+    /// default would read the suite runner's own preferences, so every check in
+    /// this package injects one anyway — but the worst a slip could do is
+    /// nothing at all.
+    private let loginItem: any LoginItemInstalling
+
     /// True once `startMonitoring` has started the listener successfully.
     ///
     /// The listener starts AT MOST ONCE per model. A second `start()` on the
@@ -1182,7 +1200,8 @@ public final class ServingModel {
                 policy: StalePolicy = .standard,
                 now: @escaping @Sendable () -> Date = { Date() },
                 governance: ProcessGovernance? = nil,
-                updates: any ReleaseManifestFetching = PublishedManifestFetcher()) {
+                updates: any ReleaseManifestFetching = PublishedManifestFetcher(),
+                loginItem: any LoginItemInstalling = LoginItemInstaller()) {
         self.holder = holder
         self.reader = reader
         self.health = health
@@ -1193,6 +1212,7 @@ public final class ServingModel {
         self.now = now
         self.governance = governance
         self.updates = updates
+        self.loginItem = loginItem
         self.reading = reader.read()
         // Read ONCE, here, and never again. `refresh()` runs every 30 seconds
         // and on every hook event; re-reading the store on each of those would
@@ -1267,6 +1287,18 @@ public final class ServingModel {
         // the truth on the surface.
         self.lastUpdateCheck = settings.integer(forKey: SettingsKey.lastUpdateCheck)
             .map { Date(timeIntervalSince1970: TimeInterval($0)) }
+        // Read once, here, for the reason above, and `?? false` is the whole of
+        // issue #48's posture: a key nobody wrote is a user who never asked, and
+        // nothing is installed for them.
+        //
+        // **It READS and reconciles NOTHING**, which is the difference between
+        // this seam and `governance`. `refresh()` reconciles the demotion state
+        // on every tick because a demotion is a live process attribute; a launch
+        // agent is a file, and a model that installed one here would put it back
+        // for a user who had deleted it by hand. The switch is the only thing
+        // that touches the disk.
+        self.launchAtLoginStorage =
+            settings.bool(forKey: SettingsKey.launchAtLogin) ?? false
     }
 
     // There is deliberately NO `deinit` here, and none may be added.
@@ -1574,6 +1606,93 @@ public final class ServingModel {
     /// opt-in and the panel renders it as a toggle, so a second label would be a
     /// label nothing draws.
     static let quietOthersLabel = "Quiet everything else"
+
+    // MARK: - Coming back after a reboot (issue #48)
+
+    /// Whether coffee-bar opens at login.
+    ///
+    /// **A SETTING and an ARTIFACT, which no other property on this type is.**
+    /// The eight settings above change what this process does while it runs, so
+    /// forgetting one costs a preference. This one governs a file in
+    /// `~/Library/LaunchAgents` that launchd reads at every boot, so forgetting
+    /// it leaves something on the machine that outlives every process here.
+    ///
+    /// **The setter records the choice BEFORE it reconciles, and here that
+    /// ordering is load-bearing rather than the crash-safety argument the
+    /// settings above make.** `LoginItemInstaller.install()` refuses unless
+    /// `SettingsKey.launchAtLogin` already reads `true` — the opt-in is a
+    /// precondition of the write, not a convention this call site observes — so
+    /// a setter that reconciled first would drive an installer that refuses
+    /// every single time. The switch would move, the preference would be
+    /// recorded, no launch agent would ever appear, and the app would still not
+    /// survive a reboot. `turningItOnRecordsTheChoiceBeforeItInstalls` holds it
+    /// by asking the store what the installer would have seen.
+    ///
+    /// **Turning it off reconciles too**, and that is the acceptance criterion
+    /// rather than symmetry for its own sake: a setter that recorded `false` and
+    /// stopped would leave the launch agent in place while this window said
+    /// there was none, and the one control that would take it off would then
+    /// believe there was nothing to take off. An install with no uninstall is a
+    /// trap.
+    ///
+    /// **The failure is swallowed, deliberately, and this is the weakest part of
+    /// this feature stated out loud.** A refused disk write leaves the
+    /// preference `true` and no agent installed, and this surface says nothing.
+    /// The alternative — rolling the preference back — makes a switch that
+    /// springs back under the user's finger with no explanation, which is worse.
+    /// Reporting it properly needs an advisory line of the shape `hookAdvisory`
+    /// and `staleHelperAdvisory` already have, and that is a follow-up rather
+    /// than something to improvise here.
+    public var launchAtLogin: Bool {
+        get { launchAtLoginStorage }
+        set {
+            launchAtLoginStorage = newValue
+            settings.setBool(newValue, forKey: SettingsKey.launchAtLogin)
+            if newValue {
+                try? loginItem.install()
+            } else {
+                try? loginItem.uninstall()
+            }
+        }
+    }
+
+    /// The backing store for `launchAtLogin`, seeded from the settings in
+    /// `init`. Private, for the reason `holdDisplayAwakeStorage` is.
+    private var launchAtLoginStorage: Bool
+
+    /// What the login-item control is CALLED.
+    ///
+    /// Here rather than in `PreferencesView`, for the reason every other control
+    /// label on this type is: design §5.4 rules out asserting on the rendered
+    /// control, so a label written in the view is a label no check reads.
+    ///
+    /// **It names OPENING THE APP and claims nothing about holding the machine
+    /// awake.** "Keep my Mac awake after a reboot" is the tempting wording and
+    /// it is false: what is held is decided by the intent, the battery floor and
+    /// the running sessions, none of which this switch touches. All this does is
+    /// start the process, which then behaves exactly as it does today.
+    static let launchAtLoginLabel = "Open coffee-bar at login"
+
+    /// What ticking the switch puts on the machine, and how to get it off again.
+    ///
+    /// **The sentence that earns this control the right to write a file at all.**
+    /// Everywhere else this product prints a command and refuses to touch the
+    /// user's files — the Agent tools section copies a snippet to the pasteboard
+    /// and says so, and lid-closed mode prints a root command it will not run.
+    /// This one puts a file in the user's home directory, so the surface names
+    /// the file, in a form the user can go and look at, and says plainly that
+    /// unticking the switch takes it away.
+    ///
+    /// No `sudo` anywhere near it, unlike the lid-closed paragraph on the same
+    /// page. A launch AGENT in the user's own tree needs no privilege whatever;
+    /// that is the whole reason this ships as a switch and lid-closed mode does
+    /// not.
+    static let launchAtLoginNote =
+        "Ticking this puts one file, "
+        + "~/Library/LaunchAgents/com.coffeebar.loginitem.plist, in your home "
+        + "folder, and macOS starts coffee-bar from it when you log in. "
+        + "Unticking removes that file. Nothing else on your Mac is changed, and "
+        + "no administrator password is needed either way."
 
     // MARK: - The quick start (issue #52)
 

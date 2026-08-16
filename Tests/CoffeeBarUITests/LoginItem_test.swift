@@ -266,6 +266,12 @@ private func makeModel(_ settings: FakeSettings,
 
 // MARK: - What the window says about it
 
+// `@MainActor` because `ServingModel` is, so its labels are too. Held the same
+// way as the four labels beside it rather than made `nonisolated`:
+// `theQuietOthersLabelNamesWhatIsQuietedAndClaimsNoSpeedUp` records that the
+// 6.1.2 CI toolchain and a 6.3 developer machine disagree about isolation
+// inference, and this repository pins no toolchain.
+@MainActor
 @Test func theLoginItemLabelSaysWhatTheSwitchDoesAndPromisesNothingElse() {
     // The label lives on the model, where a check can read it: design §5.4
     // rules out asserting on rendered AppKit text, so a label written in the
@@ -285,6 +291,7 @@ private func makeModel(_ settings: FakeSettings,
     }
 }
 
+@MainActor
 @Test func theLoginItemNoteNamesTheFileItWritesAndSaysTurningItOffRemovesIt() {
     // HONESTY ABOUT AN ARTIFACT ON DISK, and it is the sentence that earns this
     // feature the right to write a file at all. Everywhere else this product

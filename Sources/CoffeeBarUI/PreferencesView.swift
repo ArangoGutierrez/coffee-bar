@@ -283,6 +283,57 @@ public struct PreferencesView: View {
 
                 Toggle(ServingModel.quietOthersLabel, isOn: $model.quietEverythingElse)
 
+                // Issue #48, and its own section because it is a different
+                // question again: not what coffee-bar does while it runs, but
+                // whether it is running at all after a reboot. Measured after a
+                // restart, it is not — the cup vanishes, nothing relaunches it,
+                // and the hooks carry on firing into a socket nobody serves.
+                //
+                // THE ONE CONTROL ON THIS PAGE THAT LEAVES SOMETHING ON DISK.
+                // Every other switch here changes what this process does; this
+                // one puts a launchd job description in the user's own
+                // `~/Library/LaunchAgents`, which macOS reads at every login.
+                // That is why the note below is not decoration: design §6 is
+                // "print, never write", and the exemption this control takes is
+                // narrow — a path coffee-bar alone owns, on an explicit tick,
+                // named on the surface, and taken away again by unticking.
+                //
+                // NEEDS NO ROOT, unlike the lid-closed paragraph above. A launch
+                // AGENT in the user's own tree is unprivileged, so this can be a
+                // switch where arming lid-closed mode has to be a command the
+                // user types. Different tree, different privilege, different
+                // launchd job.
+                //
+                // THIS WINDOW INSTALLS NOTHING ITSELF. The binding reaches
+                // `ServingModel.launchAtLogin`, which records the choice and
+                // then asks `LoginItemInstaller` — and that installer refuses
+                // unless the recorded answer is already `true`, so nothing here
+                // can install anything ahead of the user asking for it.
+                //
+                // THE ISSUE ASKS FOR THIS ON THE PANEL. The panel is owned by
+                // another change this wave; a panel affordance is a follow-up,
+                // and it would bind this same property rather than spelling a
+                // second one.
+                Text("Startup").font(.headline)
+
+                Toggle(ServingModel.launchAtLoginLabel, isOn: $model.launchAtLogin)
+
+                // WHICH FILE, and how to get rid of it. Rendered verbatim from
+                // the model with no text built here, for the reason every other
+                // sentence on this page gives: design §5.4 forbids asserting on
+                // rendered AppKit text, so a sentence composed in this file is a
+                // sentence no check reads — and this is the last sentence on the
+                // page that should go unread, because it is the one accounting
+                // for an artifact the user would otherwise never hear about.
+                //
+                // Unconditional, like the scope note above and unlike the
+                // advisories: it describes what the switch beside it does, which
+                // is true in both positions.
+                Text(ServingModel.launchAtLoginNote)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
                 // The remedy, beside the complaint. The panel already tells the
                 // user which hook file it cannot confirm; until now that was
                 // advice with nothing to act on, and the action it implied was
