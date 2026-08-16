@@ -49,13 +49,27 @@
 # control is added below Preferences. Reading the button gives the same answer
 # with nothing to remember.
 #
-# THE ONE THING AX CANNOT TELL US, and how that is handled. SwiftUI gives neither
-# button a title: the Preferences control and `Button("Quit coffee-bar")` both
-# come back as an untitled AXButton, so the tree can say WHERE the two buttons are
-# but not WHICH is which. Position alone would put us back to guessing, with Quit
-# as the cost of guessing wrong. So the order is read out of PanelView.swift — the
-# file that decides it — and the click only happens when the source and the tree
-# agree about the shape of the panel.
+# THE ONE THING AX CANNOT TELL US, and how that is handled. SwiftUI gives none of
+# the buttons a title: the Preferences control, Check now and Quit all come back
+# as an untitled AXButton, so the tree can say WHERE the buttons are but not WHICH
+# is which. Position alone would put us back to guessing, with Quit as the cost of
+# guessing wrong. So the order is read out of PanelView.swift — the file that
+# decides it — and the click only happens when the source and the tree agree about
+# the shape of the panel.
+#
+# IT USED TO BE "THE TOPMOST OF TWO", and issue #29 retired that rule by putting a
+# Check now button in the panel. The old version of this script anticipated it:
+# "a third control at the foot of the panel is not a disaster — it is a reason to
+# stop and re-read this script". This is that re-read.
+#
+# WHAT REPLACED IT IS A RANK, and nothing about it is remembered. The source is
+# counted for `Button` sites up to and including the one whose `label:` carries
+# the `"Preferences…"` literal, which gives the position of Preferences among the
+# panel's buttons; the tree's buttons are sorted top to bottom and the button at
+# that position is the one clicked. Adding, removing or reordering a control
+# changes both sides together, so there is no number here to update — and a source
+# that disagrees with the tree about HOW MANY buttons exist refuses rather than
+# clicking, which is the same safe direction the old count had.
 #
 # THE SOURCE ANCHOR IS THE LABEL, NOT THE CONTROL TYPE. This used to grep for
 # `SettingsLink`, which pinned the check to one implementation of the button: the
@@ -109,13 +123,15 @@ set -uo pipefail
 APP_NAME="coffee-bar"
 WINDOW_NAME="coffee-bar Settings"
 
-# The panel two buttons: Preferences then Quit. A third control at the foot of
-# the panel is not a disaster — it is a reason to stop and re-read this script,
-# because the topmost-of-two rule below stops being the right rule.
-EXPECTED_PANEL_BUTTONS=2
+# The fewest buttons this script will believe a coffee-bar panel has. It is a
+# FLOOR and not the expected count: the count itself is derived from
+# PanelView.swift below, so there is nothing here to keep in step with the panel.
+# Preferences and Quit have both been there since the panel existed, so a tree
+# reporting fewer than two is reporting something this script does not understand.
+MINIMUM_PANEL_BUTTONS=2
 
-# The smallest vertical gap between the two buttons that this script will treat as
-# two distinct rows. They sit 36 points apart in the shipped panel. Anything under
+# The smallest vertical gap between ADJACENT buttons that this script will treat
+# as distinct rows. They sit 36 points apart in the shipped panel. Anything under
 # a button own height means the tree is reporting something this script does not
 # understand, and clicking into that is how the old version killed the app.
 MINIMUM_BUTTON_GAP=20
@@ -292,10 +308,15 @@ tell application "System Events"
 		set n to count of btns
 		if n is 0 then return "nobuttons|" & panelW & "x" & panelH
 
-		-- Topmost first, and every reading comes from the tree. Nothing below is
+		-- EVERY button, and every reading comes from the tree. Nothing below is
 		-- a remembered coordinate: AXActivationPoint is what the window server
 		-- itself answers to "where would a click on this land", which is the
 		-- question the old fixed offset was guessing at.
+		--
+		-- ALL OF THEM rather than the top two, because "the topmost of two" is
+		-- no longer a rule that identifies Preferences — issue #29 put a Check
+		-- now button above it. The rows are handed back unsorted and bash sorts
+		-- them by y, which keeps the ordering in one place instead of two.
 		--
 		-- NO APOSTROPHE AND NO BACKTICK MAY APPEAR IN THIS HEREDOC, and both
 		-- were measured here rather than assumed. The heredoc is unquoted and
@@ -303,34 +324,27 @@ tell application "System Events"
 		-- bash -n report "unexpected EOF while looking for matching quote"
 		-- against the END of the file, nowhere near the cause, and a backtick
 		-- runs what it encloses as a command.
-		set topY to 0
-		set topPoint to {0, 0}
-		set otherY to 0
-		set seen to 0
+		-- btnRows, and NEVER the bare plural of row, which was measured here
+		-- rather than assumed. That word is a System Events class, so assigning
+		-- to it inside a tell process block fails at RUN time with "AppleEvent
+		-- handler failed. (-10000)" — not at compile time. This script sends the
+		-- probe with stderr discarded, so the only symptom was an empty result
+		-- and an unreadable-probe refusal from the caller, which names neither
+		-- the word nor this file. Same family as btnY below.
+		set btnRows to ""
 		-- btnY, and never the two-letter name AppleScript reserves for a
 		-- preposition. Using that one as a variable is a syntax error reported
 		-- against a line number in generated source, nowhere near this file.
 		repeat with b in btns
 			set {btnX, btnY} to position of b
-			set btnY to btnY as integer
-			if seen is 0 then
-				set topY to btnY
-				set otherY to btnY
-				set topPoint to (value of attribute "AXActivationPoint" of b)
-			else if btnY < topY then
-				set otherY to topY
-				set topY to btnY
-				set topPoint to (value of attribute "AXActivationPoint" of b)
-			else if btnY > otherY then
-				set otherY to btnY
-			end if
-			set seen to seen + 1
+			set spot to (value of attribute "AXActivationPoint" of b)
+			if btnRows is not "" then set btnRows to btnRows & ";"
+			set btnRows to btnRows & (btnY as integer) & "," ¬
+				& ((item 1 of spot) as integer) & "," & ((item 2 of spot) as integer)
 		end repeat
 
-		return "ok|" & n & "|" & ((item 1 of topPoint) as integer) ¬
-			& "|" & ((item 2 of topPoint) as integer) & "|" & topY & "|" & otherY ¬
-			& "|" & (panelW as integer) & "|" & (panelH as integer) ¬
-			& "|" & (panelY as integer)
+		return "ok|" & n & "|" & (panelW as integer) & "|" & (panelH as integer) ¬
+			& "|" & (panelY as integer) & "|" & btnRows
 	end tell
 end tell
 OSA
@@ -374,7 +388,34 @@ QUIT_LINE=$(grep -n 'Button("Quit' "${PANEL_SOURCE}" | grep -vE '^[0-9]+:[[:spac
 [ -n "${QUIT_LINE}" ] \
     || refuse "cannot locate Preferences safely: no Quit button in ${PANEL_SOURCE}"
 [ "${PREFS_LINE}" -lt "${QUIT_LINE}" ] \
-    || refuse "cannot locate Preferences safely: PanelView.swift puts Quit (line ${QUIT_LINE}) above Preferences (line ${PREFS_LINE}), so the topmost button is no longer the one to click"
+    || refuse "cannot locate Preferences safely: PanelView.swift puts Quit (line ${QUIT_LINE}) above Preferences (line ${PREFS_LINE}), so a button below Quit is not one this script will click"
+
+# HOW MANY BUTTONS THE PANEL HAS, and WHICH of them is Preferences — both read
+# out of the file that decides, neither remembered here.
+#
+# `Button(` covers `Button("Check now")` and `Button("Quit coffee-bar")`;
+# `Button {` covers the Preferences control, which takes a trailing action
+# closure and a separate `label:`. Comment lines are stripped first, so the
+# paragraphs in PanelView.swift that discuss `SettingsLink` and the rejected
+# spellings cannot move either answer.
+#
+# The RANK is a count and not an index into a list of labels: every `Button` site
+# at or before the `"Preferences…"` line, which is the Check now button plus the
+# Preferences control's own `Button {` — that literal sits inside its `label:`
+# closure, below the site that opens it. Quit is after it and is not counted.
+# Insert a control anywhere and both numbers move by themselves.
+BUTTON_SITES=$(grep -nE 'Button\(|Button \{' "${PANEL_SOURCE}" \
+    | grep -vE '^[0-9]+:[[:space:]]*//' | grep -c '')
+PREFS_RANK=$(grep -nE 'Button\(|Button \{' "${PANEL_SOURCE}" \
+    | grep -vE '^[0-9]+:[[:space:]]*//' \
+    | cut -d: -f1 | awk -v prefs="${PREFS_LINE}" '$1 <= prefs' | grep -c '')
+
+[ -n "${BUTTON_SITES}" ] && [ "${BUTTON_SITES}" -ge "${MINIMUM_PANEL_BUTTONS}" ] \
+    || refuse "cannot locate Preferences safely: ${PANEL_SOURCE} declares ${BUTTON_SITES:-0} Button sites, under the ${MINIMUM_PANEL_BUTTONS} every coffee-bar panel has had. This script is reading the wrong file, or the panel is not the panel."
+[ -n "${PREFS_RANK}" ] && [ "${PREFS_RANK}" -ge 1 ] && [ "${PREFS_RANK}" -le "${BUTTON_SITES}" ] \
+    || refuse "cannot locate Preferences safely: resolved Preferences to button ${PREFS_RANK:-none} of ${BUTTON_SITES} in ${PANEL_SOURCE}, which is not a position a button can hold"
+
+echo "source: ${BUTTON_SITES} buttons in PanelView.swift, Preferences is number ${PREFS_RANK} from the top"
 
 # --- Start from no windows open ----------------------------------------------
 #
@@ -472,30 +513,63 @@ invocation() {
             refuse "cannot locate Preferences safely: unreadable probe [${probe}]" ;;
     esac
 
-    local buttons CLICK_X CLICK_Y TOP_Y OTHER_Y PANEL_W PANEL_H PANEL_Y
+    local buttons CLICK_X CLICK_Y PANEL_W PANEL_H PANEL_Y SORTED ROW
     buttons=$(printf '%s' "${probe}" | cut -d'|' -f2)
-    CLICK_X=$(printf '%s' "${probe}" | cut -d'|' -f3)
-    CLICK_Y=$(printf '%s' "${probe}" | cut -d'|' -f4)
-    TOP_Y=$(printf '%s' "${probe}" | cut -d'|' -f5)
-    OTHER_Y=$(printf '%s' "${probe}" | cut -d'|' -f6)
-    PANEL_W=$(printf '%s' "${probe}" | cut -d'|' -f7)
-    PANEL_H=$(printf '%s' "${probe}" | cut -d'|' -f8)
-    PANEL_Y=$(printf '%s' "${probe}" | cut -d'|' -f9)
+    PANEL_W=$(printf '%s' "${probe}" | cut -d'|' -f3)
+    PANEL_H=$(printf '%s' "${probe}" | cut -d'|' -f4)
+    PANEL_Y=$(printf '%s' "${probe}" | cut -d'|' -f5)
 
-    echo "panel=${PANEL_W}x${PANEL_H}@y${PANEL_Y} buttons=${buttons} preferences@${CLICK_X},${CLICK_Y}"
+    # TOP TO BOTTOM, numerically. `sort -n` on the y the tree reported, which is
+    # the only ordering this script trusts — the order buttons arrive in from
+    # AXUIElement is not documented to be anything.
+    SORTED=$(printf '%s' "${probe}" | cut -d'|' -f6 | tr ';' '\n' | sort -t, -k1,1n)
 
     # --- The refusals. Every one of them happens BEFORE any click. ------------
+    #
+    # THE SOURCE AND THE TREE MUST AGREE ABOUT HOW MANY. Neither number is
+    # remembered: one is counted out of PanelView.swift and the other read from
+    # the window server. When they disagree, the rank resolved from the file
+    # does not describe the panel on screen, and clicking the nth of something
+    # else is how the first version of this script killed the app under test.
 
-    [ "${buttons}" = "${EXPECTED_PANEL_BUTTONS}" ] || {
+    [ "${buttons}" = "${BUTTON_SITES}" ] || {
         reset_windows
-        refuse "cannot locate Preferences safely: the panel has ${buttons} buttons and this script knows how to read ${EXPECTED_PANEL_BUTTONS}. Topmost-of-two is no longer a rule that identifies Preferences"
+        refuse "cannot locate Preferences safely: the panel exposes ${buttons} buttons and PanelView.swift declares ${BUTTON_SITES}. The rank read from the file does not describe the panel on screen — a control may live in another file, or one of them is not a button in the tree."
     }
 
-    local gap=$(( OTHER_Y - TOP_Y ))
-    [ "${gap}" -ge "${MINIMUM_BUTTON_GAP}" ] || {
+    [ "${buttons}" -ge "${MINIMUM_PANEL_BUTTONS}" ] || {
         reset_windows
-        refuse "cannot locate Preferences safely: the two buttons are ${gap} points apart, under the ${MINIMUM_BUTTON_GAP} this script requires to tell them apart"
+        refuse "cannot locate Preferences safely: the panel exposes ${buttons} buttons, under the ${MINIMUM_PANEL_BUTTONS} every coffee-bar panel has had"
     }
+
+    # ADJACENT ROWS, all of them, not just the top pair. Two buttons closer
+    # together than one is tall means the tree is reporting something this
+    # script does not understand, and the rank would then be counting rows that
+    # are not rows.
+    local PREVIOUS_Y="" THIS_Y GAP
+    while IFS= read -r ROW; do
+        [ -n "${ROW}" ] || continue
+        THIS_Y=$(printf '%s' "${ROW}" | cut -d, -f1)
+        if [ -n "${PREVIOUS_Y}" ]; then
+            GAP=$(( THIS_Y - PREVIOUS_Y ))
+            [ "${GAP}" -ge "${MINIMUM_BUTTON_GAP}" ] || {
+                reset_windows
+                refuse "cannot locate Preferences safely: two buttons are ${GAP} points apart, under the ${MINIMUM_BUTTON_GAP} this script requires to tell them apart"
+            }
+        fi
+        PREVIOUS_Y="${THIS_Y}"
+    done <<< "${SORTED}"
+
+    # THE RANK-th ROW, and the activation point the window server gave for it.
+    ROW=$(printf '%s' "${SORTED}" | sed -n "${PREFS_RANK}p")
+    [ -n "${ROW}" ] || {
+        reset_windows
+        refuse "cannot locate Preferences safely: no button number ${PREFS_RANK} in a tree of ${buttons}"
+    }
+    CLICK_X=$(printf '%s' "${ROW}" | cut -d, -f2)
+    CLICK_Y=$(printf '%s' "${ROW}" | cut -d, -f3)
+
+    echo "panel=${PANEL_W}x${PANEL_H}@y${PANEL_Y} buttons=${buttons} preferences=#${PREFS_RANK}@${CLICK_X},${CLICK_Y}"
 
     # The click has to land inside the panel the tree just described, and BOTH
     # bounds come from that same reading rather than from a remembered menu-bar

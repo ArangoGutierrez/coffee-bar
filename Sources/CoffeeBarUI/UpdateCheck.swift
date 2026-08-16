@@ -9,7 +9,8 @@ import Foundation
 // bundle replacement and no relaunch. `brew install coffee-bar` puts the app
 // inside the Homebrew prefix, so an app that replaced its own bundle would
 // desynchronise Homebrew's manifest and the next `brew upgrade` would fight it.
-// The whole outcome of a check is a sentence in the Preferences window.
+// The whole outcome of a check is a sentence — in the panel, and in the
+// Preferences window beside the interval.
 //
 // **No Sparkle, and no package dependency of any kind.** `SECURITY.md` cites
 // the empty dependency list as a security fact — "no third-party code is
@@ -167,15 +168,21 @@ public enum UpdateCheck {
     /// that a check will not turn into an install — that is the whole difference
     /// between this feature and the Sparkle design it replaces, and it is not
     /// something waiting can confirm.
-    /// It names WHEN, and the answer is "when you open this window" rather than
-    /// "when coffee-bar starts". That is the shipped trigger and the sentence
-    /// follows the code: `PreferencesView` asks on appear, so the request
-    /// happens while the user is looking at the surface that shows the answer,
-    /// and a machine left in the menu bar for a week posts nothing at all.
+    /// It names WHEN, and the answer is "when coffee-bar starts" rather than
+    /// "when you open this window". That sentence FOLLOWED the code and has
+    /// been changed in the commit that changed it: the trigger was
+    /// `PreferencesView.onAppear` while this window was the only surface that
+    /// could show the answer, and it moved to `main.swift` the moment the panel
+    /// gained its own copy of the section. A promise and its behaviour must
+    /// never drift, so the two move together or not at all.
+    ///
+    /// "Once a day" still bounds it and the interval is still enforced across
+    /// launches by a stored stamp rather than by a timer this process holds —
+    /// a machine left in the menu bar for a week posts once, not seven times.
     static let intervalNote = """
-        coffee-bar looks for a newer version once a day, when you open this \
-        window, and whenever you press Check now. It only tells you: it \
-        downloads no update and installs nothing.
+        coffee-bar looks for a newer version once a day, when it starts, and \
+        whenever you press Check now. It only tells you: it downloads no \
+        update and installs nothing.
         """
 
     /// The line that makes the timing checkable rather than merely claimed.

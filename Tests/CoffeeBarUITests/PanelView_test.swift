@@ -173,17 +173,23 @@ func thePreferencesControlKeepsItsLabel() throws {
     let source = try panelSource()
 
     // The label is not decoration: `scripts/preferences-activation-acceptance.sh`
-    // resolves which of the panel's two untitled AXButtons to click by reading
-    // this literal out of this file, because SwiftUI gives neither button a
-    // title and the other one is Quit. Rename it and the acceptance script
-    // REFUSES rather than clicking — which is the safe direction, and still a
-    // regression, because the check that measures issue #63 stops running.
+    // resolves which of the panel's untitled AXButtons to click by reading this
+    // literal out of this file, because SwiftUI gives none of them a title. It
+    // counts the `Button` sites at or before this line to get the position of
+    // Preferences from the top, so the literal is the ANCHOR for the whole
+    // resolution. Rename it and the script REFUSES rather than clicking — the
+    // safe direction, and still a regression, because the check that measures
+    // issue #63 stops running.
+    //
+    // EXACTLY ONE, and that matters more since issue #29 added a third button:
+    // a second occurrence would move the rank by one and the script would click
+    // whatever sits at that position instead. Quit is one row below it.
     let labels = source.components(separatedBy: "\"Preferences…\"").count - 1
     #expect(labels == 1, """
         PanelView.swift carries the "Preferences…" label \(labels) times, \
-        expected exactly 1. The acceptance script resolves the button to click \
-        by reading this literal; at any other count it cannot tell which control \
-        it is about to click, and the panel's other button is Quit.
+        expected exactly 1. The acceptance script resolves which button to \
+        click by counting Button sites up to this literal; at any other count \
+        it resolves the wrong row, and the row below Preferences is Quit.
         """)
 }
 
@@ -272,4 +278,135 @@ func theGuardsDiscriminateTheOldShapeFromTheNew() throws {
         the settings action must be found by what it DOES, not by being the \
         first Button in the file
         """)
+}
+
+// MARK: - Is there a newer coffee-bar? The panel's half of issue #29
+
+@Test("the panel offers Check now, and says what the last check concluded and when")
+func thePanelOffersTheUpdateCheckUnconditionally() throws {
+    // ISSUE #29's OPENING SENTENCE: "Two triggers: a Check now button in the
+    // PANEL, and an automatic check on a visible interval." The feature shipped
+    // in #127 with both on the Preferences window, and `PreferencesView.swift`
+    // recorded the panel's copy as deferred rather than dropped. This is it.
+    //
+    // Named bug this catches: the section written into the file and unreachable
+    // — `if model.updateVerdict != nil { … }` around it hides the button from
+    // every user who has not checked yet, which before the launch trigger was
+    // every user, and is exactly the state a manual check exists for.
+    //
+    // BRACE DEPTH against an unconditional neighbour, the mechanism
+    // `theUpdateSectionStatesItsIntervalAndItsLastCheckUnconditionally` uses on
+    // the window. EQUALITY and not `<=`: an `if false { … }` inside the VStack
+    // lands at exactly the depth an `HStack` row does, so an inequality passes
+    // over the mutation this exists to catch.
+    let source = try panelSource()
+
+    let anchorDepth = try #require(braceDepth(atFirst: "Text(\"Waiting on you\")", in: source), """
+        PanelView.swift no longer contains Text("Waiting on you"), so this \
+        guard has no unconditional neighbour to compare against and measured \
+        nothing.
+        """)
+
+    // All three at the VStack's own depth. The panel is 260 points wide, so
+    // unlike the window these are stacked rather than sharing an `HStack` row —
+    // "Last checked: 2026-08-16 09:30." beside a button does not fit that
+    // column, and a caption that wraps under its own button reads as broken.
+    let required = [
+        (needle: "model.updateStatusLine",
+         line: "the sentence saying what the last check concluded"),
+        (needle: "model.lastUpdateCheckLine",
+         line: "the time of the last check"),
+        (needle: "Button(\"Check now\")",
+         line: "the Check now button"),
+    ]
+
+    for item in required {
+        let depth = try #require(braceDepth(atFirst: item.needle, in: source), """
+            PanelView.swift names \(item.needle) nowhere in code, so \
+            \(item.line) is absent from the panel — the surface issue #29 asks \
+            for it on.
+            """)
+        #expect(depth == anchorDepth, """
+            PanelView.swift renders \(item.line) at brace depth \(depth) while \
+            the unconditional Text("Waiting on you") sits at \(anchorDepth). It \
+            is inside something the headings are not — an `if`, a `switch`, a \
+            closure — so the user may never see it.
+            """)
+    }
+}
+
+@Test("the panel's button asks unconditionally; only the launch trigger honours the interval")
+func thePanelButtonIsTheManualCheckAndNotTheScheduledOne() throws {
+    // THE PRESS IS THE ASK. `checkForUpdatesIfDue()` here would make the button
+    // do nothing for a user who pressed it twice, or who pressed it an hour
+    // after coffee-bar started — and a button that silently declines is a
+    // button lying about having a job. The window's copy of this control is
+    // held to the same rule, at its own call site.
+    //
+    // Named bug this catches, and it is the likelier direction: somebody sees
+    // "no duplicate scheduling" in the issue, reaches for the interval-gated
+    // spelling on both surfaces, and the manual check stops being manual.
+    //
+    // SCOPED to the button's own action. A `contains` over the file would be
+    // satisfied by the launch trigger's spelling if one were ever written here.
+    let source = try panelSource()
+
+    let action = try #require(braceBlock(after: "Button(\"Check now\")", in: source), """
+        PanelView.swift declares no Button("Check now") with a block, so the \
+        panel offers no manual check at all.
+        """)
+
+    #expect(action.block.contains("model.checkForUpdates()"), """
+        the panel's Check now button does not call model.checkForUpdates(). \
+        The check has exactly one implementation and the button's whole job is \
+        to reach it; a second spelling of the request in this file would be a \
+        second thing to keep honest.
+        """)
+
+    #expect(!action.block.contains("checkForUpdatesIfDue"), """
+        the panel's Check now button honours the interval, so a user who \
+        presses it twice — or who presses it at all on the day coffee-bar \
+        already checked at launch — gets nothing and no explanation. IfDue is \
+        the automatic half and belongs at the launch trigger.
+        """)
+
+    // NO SECOND SPELLING OF THE REQUEST. The panel asks the model, the model
+    // asks the one entitled fetcher, and nothing else in this application opens
+    // a connection — `noLinkedTargetCanReachTheNetworkByAddress` is the
+    // authority and this is stated here because a button is the shortest path
+    // anyone would take to a URLSession.
+    for name in ["URLSession", "URLRequest", "PublishedManifestFetcher"] {
+        #expect(!source.contains(name), """
+            PanelView.swift names \(name) in CODE. Issue #29 entitles exactly \
+            one file to reach the network and this is not it.
+            """)
+    }
+}
+
+@Test("the panel composes no update sentence of its own")
+func thePanelComposesNoUpdateSentenceOfItsOwn() throws {
+    // M1 design §5.4 forbids asserting on rendered AppKit text, so a sentence
+    // written in this file is a sentence no check reads. The panel now makes
+    // the same two claims the window does — how often coffee-bar reaches the
+    // network, and whether this is the newest build — and both are rendered
+    // verbatim from a seam that IS checked.
+    //
+    // Named bug this catches: `Text("coffee-bar is up to date.")` written here
+    // beside a model that concluded something else, or a second "once a day"
+    // that disagrees with `UpdateCheck.interval`. The window is held to exactly
+    // this list by `thePreferencesWindowComposesNoUpdateSentenceOfItsOwn`; two
+    // surfaces rendering the same feature need the same rule, and #30 is the
+    // precedent — the Preferences window wrote its own copy of an advisory
+    // sentence it could not reach, and shipped the pigment #30 had removed.
+    let source = try panelSource()
+
+    for invented in ["once a day", "installs nothing", "up to date", "Last checked"] {
+        #expect(!source.contains(invented), """
+            PanelView.swift composes the phrase "\(invented)" itself. The \
+            update sentences live on UpdateCheck and on the model, where \
+            UpdateCheck_test.swift reads them against the constant they \
+            describe; a second spelling here can disagree with what the code \
+            does and nothing would see it.
+            """)
+    }
 }

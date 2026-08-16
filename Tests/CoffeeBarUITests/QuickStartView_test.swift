@@ -526,3 +526,114 @@ private func quickStartSurface(named name: String) throws -> String {
         file drives.
         """)
 }
+
+// MARK: - Who opens the window the page lives in
+
+/// The app layer's entry point, comment-stripped.
+///
+/// A SEPARATE reader from `quickStartSurface(named:)`, which resolves under
+/// `Sources/CoffeeBarUI/`. This file is in another target, and it cannot be
+/// found by name either: FOUR targets in this package compile a `main.swift`,
+/// so a by-name walk over `Sources/` resolves four files and the
+/// `PreferencesView_test.swift` reader would throw rather than answer. The path
+/// is therefore explicit.
+///
+/// COMMENT-STRIPPED for the reason every other source reader here is:
+/// `main.swift` explains the scene, the recovery and now the first-run
+/// presentation in prose several paragraphs long, so a raw `contains` is
+/// satisfied by the explanation of the line it deleted.
+private func appEntryPointSource() throws -> String {
+    let root = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()    // …/Tests/CoffeeBarUITests
+        .deletingLastPathComponent()    // …/Tests
+        .deletingLastPathComponent()    // the package root
+    return swiftCodeWithoutComments(
+        try String(contentsOf: root.appending(path: "Sources/CoffeeBarApp/main.swift"),
+                   encoding: .utf8))
+}
+
+@Test func theAppAsksTheThreeQuestionsWithoutTheUserOpeningPreferences() throws {
+    // ACCEPTANCE BULLET 1 of issue #52 — "a first-run user is asked all three
+    // questions before the app claims to be working" — and it is the bullet the
+    // feature shipped without.
+    //
+    // Named bug this catches, and it was LIVE at 004e23a: every other guard in
+    // this file passed. The page is built, the three questions are bound, the
+    // gate is correct, `PreferencesView` presents it unconditionally — and
+    // NOTHING OPENS THAT WINDOW. coffee-bar is `LSUIElement`: no Dock icon, no
+    // menu bar of its own, and a `Settings` scene that stays closed until the
+    // user finds the panel and clicks Preferences. A first-run user who never
+    // does is never asked anything, which is the whole complaint the issue
+    // opens with.
+    //
+    // WHY A SOURCE READ IS THE ONLY ROUTE HERE. SwiftPM treats `main.swift` as
+    // top-level code, so no test target can import it —
+    // `theAppDeclaresTheSettingsSceneThePanelLinksTo` says the same about the
+    // scene this rests on. The behaviour under it is checked properly: the gate
+    // is `quickStartPending`, and every check above this MARK drives it through
+    // the model.
+    let code = try appEntryPointSource()
+
+    // THE TYPED ROUTE, and it is not interchangeable with the AppKit one.
+    // Measured on macOS 26.5 with a probe bundle built for this task:
+    // `NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)`
+    // returns TRUE — some responder accepts it — and the Settings scene's
+    // content never appears. Sent from `App.init`, deferred to the next turn of
+    // the main loop, and again from the notification AppKit posts once launching
+    // has finished: three spellings, `ok=true` each time, no window. The same probe
+    // called `openSettings()` and the scene appeared. `PanelView.swift` says
+    // the selector "compiles on every OS and works on some"; this is the OS it
+    // does not work on, and a guard that accepted either would pass the version
+    // of this feature that silently asks nobody.
+    #expect(code.contains("@Environment(\\.openSettings)"), """
+        main.swift declares no @Environment(\\.openSettings), so it has no way \
+        to open the one window the quick start is presented in. The AppKit \
+        selector is not a substitute: measured on this build it answers true \
+        and opens nothing.
+        """)
+
+    // Scoped to the presentation itself, so the two halves cannot stand in for
+    // one another. `openSettings(` appears in `PanelView.swift` too, and a bare
+    // `contains` over this file would be satisfied by an `openSettings()` in
+    // any other closure — including one that runs on every launch.
+    let presentation = try #require(
+        braceBlock(after: ".onChange(of: model.quickStartPending", in: code), """
+            main.swift never observes model.quickStartPending, so nothing \
+            presents the quick start at launch. The page then reaches only the \
+            user who opens Preferences by hand, which is the user who did not \
+            need asking.
+            """)
+
+    #expect(presentation.block.contains("openSettings()"), """
+        main.swift observes quickStartPending and does not open the Settings \
+        window when it is set. The quick start is presented BY that window, so \
+        a launch that leaves it closed asks nobody anything.
+        """)
+
+    // THE GATE, INSIDE the block, and this is the half that protects the
+    // EXISTING user. `onChange` fires on every change of the value it observes,
+    // not only on the initial read: without this condition, FINISHING the quick
+    // start — which flips `quickStartPending` from true to false — re-opens the
+    // Preferences window on the way out. `initial: true` below is what makes
+    // the first read arrive at all, and it is what makes the unguarded version
+    // of this block fire for a user who has already answered.
+    #expect(presentation.block.contains("if model.quickStartPending"), """
+        main.swift opens the Settings window on ANY change of \
+        quickStartPending, including the change that records the answer. \
+        Finishing the quick start would re-open the window it was just \
+        dismissed from, and an existing user whose value never changes is \
+        spared only by accident.
+        """)
+
+    // WITHOUT `initial: true` NOTHING HAPPENS AT LAUNCH. `quickStartPending` is
+    // seeded in `ServingModel.init` and does not change again during a launch
+    // that presents the page, so an `onChange` that waits for a CHANGE waits
+    // for ever. That is the silent-failure shape of this feature: the code is
+    // all present, reads correctly, and asks nobody.
+    #expect(code.contains("initial: true"), """
+        main.swift observes quickStartPending without initial: true, so the \
+        block runs only if the value CHANGES. It is seeded at launch and never \
+        changes for a first-run user before the page would be shown, so \
+        nothing is ever presented.
+        """)
+}
