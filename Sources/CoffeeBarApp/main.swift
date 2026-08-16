@@ -18,6 +18,27 @@ import CoffeeBarUI
 struct CoffeeBarMenuBarApp: App {
     @State private var model: ServingModel
 
+    /// The typed route to the `Settings` scene below, and the reason the
+    /// first-run quick start reaches anybody at all.
+    ///
+    /// THE ALTERNATIVE WAS BUILT AND MEASURED, and it does not work.
+    /// `NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)`
+    /// is the AppKit spelling, and it is the obvious one from `init()` where
+    /// there is no view to hold an Environment. A probe bundle on macOS 26.5
+    /// sent it three ways — synchronously from `App.init`, deferred to the next
+    /// turn of the main loop, and from the notification AppKit posts once
+    /// launching has finished — and every one of them returned TRUE while the
+    /// Settings scene's content never appeared. The same probe called
+    /// `openSettings()` and the window came up.
+    /// `PanelView.swift` records the selector as a string that "compiles on
+    /// every OS and works on some"; this is one it does not work on, and it
+    /// fails by reporting success.
+    ///
+    /// `@Environment` in an `App` rather than in a `View`, which is the part
+    /// that is not obvious: it compiles, and the action is live by the time the
+    /// scene modifier below runs. Measured, not assumed.
+    @Environment(\.openSettings) private var openSettings
+
     init() {
         // THE composition root for process demotion, and the reason
         // `ProcGovernor` now has a production caller at all. Everything it
@@ -171,6 +192,47 @@ struct CoffeeBarMenuBarApp: App {
         // is resizable macOS autosaves the frame, so a user who drags it keeps
         // their size — which is the point of the whole change.
         .defaultSize(width: 420, height: 560)
+        // ASK THE THREE QUESTIONS AT LAUNCH (issue #52, acceptance bullet 1).
+        //
+        // The wizard has been built, bound and gated since #125, and until now
+        // nothing opened the window it is presented in. coffee-bar is
+        // `LSUIElement`: no Dock icon, no menu bar of its own, and a `Settings`
+        // scene that stays shut until somebody finds the panel and clicks
+        // Preferences. A first-run user who never does was never asked
+        // anything — which is the complaint issue #52 opens with, still true of
+        // the build that closed most of it.
+        //
+        // A SCENE MODIFIER, and there is no earlier hook that works.
+        // `App.init()` runs before the scenes are installed and has no
+        // Environment, so the action is not callable there; a `View`'s
+        // `onAppear` needs a view, and the only two this app has are the panel
+        // (built only while it is open) and the window this would be opening.
+        // `onChange(initial: true)` on the scene runs once at launch — measured
+        // firing in a probe bundle on every route tried, including the two
+        // where nothing else happened.
+        //
+        // `initial: true` IS THE WHOLE TRIGGER, not a refinement of it.
+        // `quickStartPending` is seeded in `ServingModel.init` and does not
+        // change again before the page would be shown, so without it this waits
+        // for a change that never comes and asks nobody. That is the shape this
+        // feature already failed in once.
+        //
+        // AND THE CONDITION IS WHAT SPARES THE EXISTING USER. `onChange` fires
+        // on every subsequent change too, and finishing the quick start is a
+        // change: `completeQuickStart()` flips the value to false, this block
+        // runs again, and without the `if` it would re-open the window the user
+        // has just finished with. `quickStartPending` is the model's gate and
+        // the only one — a second condition here would be a second place the
+        // page can be switched off that no check in the package reads.
+        //
+        // Nothing here decides WHETHER to ask. That decision is
+        // `quickStartPending`, in `ServingModel`, where a test target can reach
+        // it: reading it writes nothing, an answered user reads false, and
+        // "Ask me later" is recoverable next launch. This is the wire, not the
+        // policy.
+        .onChange(of: model.quickStartPending, initial: true) {
+            if model.quickStartPending { openSettings() }
+        }
     }
 }
 
