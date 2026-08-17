@@ -515,11 +515,20 @@ bundle is built with no `SIGN_IDENTITY`, names no team, and the app reads its ow
 signature and does not offer the button. For those users the command is not a
 fallback, it is the feature.
 
-**What is not claimed here.** The helper's registration, its approval in System
-Settings and a live XPC round trip have not been observed on this branch, because
-they need a signed bundle and signing is opt-in. What has been measured is the
-requirement — that it parses, that it rejects a correctly signed program from
-another team, and that the build stamps the helper with the identifier it pins.
+**What was observed, and when.** On 2026-08-17 a signed Developer ID build of
+this branch, team `85FN4Z37V8`, registered the helper, had it enabled in System
+Settings, and completed a live XPC round trip: each side set the other's
+requirement identifier on the connection, both connections activated, and
+`SleepDisabled` moved 0 → 1 with the helper still running afterwards. That
+records one run, on one Mac, on one date. It is not a promise about the build in
+front of you, and nothing in this repository can re-run it — the run needed a
+signed bundle, and signing is opt-in.
+
+**What is not claimed here.** Removing the helper from the UI has not been
+exercised, and neither has the fallback an unsigned build takes. What has been
+measured about the requirement is that it parses, that it rejects a correctly
+signed program from another team, and that the build stamps the helper with the
+identifier it pins.
 
 The privileged side reads a journal file to know what to restore. That file is
 an instruction to a root process, and it is treated as one. All four of these
