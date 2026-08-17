@@ -247,6 +247,189 @@ private final class ReadCounter: @unchecked Sendable {
         """)
 }
 
+// MARK: - Issue #71i: the registration state is never remembered beside it
+
+/// An `SMAppService` that counts the questions and can change its answer.
+///
+/// A second double for `HelperRegistering`, and it is not a duplicate of
+/// `PrivilegedHelperRegistration_test.swift`'s `StubRegistration`: that one
+/// scripts a status that moves ACROSS a `register()` call, which is what the
+/// registration OUTCOME turns on. This one counts reads and moves BETWEEN calls,
+/// which is what the registration FRESHNESS turns on. Both are `private` to
+/// their file, so neither can drift into answering the other's question.
+private final class CountingRegistration: HelperRegistering, @unchecked Sendable {
+    private let lock = NSLock()
+    private var state: HelperRegistrationState
+    private var reads = 0
+
+    init(_ state: HelperRegistrationState) { self.state = state }
+
+    var registrationState: HelperRegistrationState {
+        lock.lock()
+        defer { lock.unlock() }
+        reads += 1
+        return state
+    }
+
+    /// The user flips the switch in System Settings while the app is running.
+    func set(_ next: HelperRegistrationState) {
+        lock.lock()
+        defer { lock.unlock() }
+        state = next
+    }
+
+    /// How many times macOS was actually asked.
+    var readCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return reads
+    }
+
+    /// A read must not write. `registeredHelperIsActive()` runs on a 30-second
+    /// timer, so a `register()` reached from it would put an item in the Login
+    /// Items & Extensions list of a user who clicked nothing — the nag
+    /// `outcome(ofRegistering:)` refuses to become, arriving by the back door.
+    func register() throws {
+        Issue.record("""
+            a read on the refresh timer registered a daemon: the user is now \
+            listed under Login Items & Extensions having clicked nothing
+            """)
+    }
+}
+
+@Test func theRegistrationStateIsAskedAfreshOnEveryCallUnlikeTheSignature() {
+    // Named bug, and it is the one #71h primed rather than caused: a cache next
+    // to the signature's. `37da19f` put a remembered reading in this file, so
+    // the obvious next optimisation is to remember the expensive call beside it
+    // — and the registration is the ONE thing here that changes while the app
+    // runs, because the user enables the item in System Settings mid-session.
+    // Issue #71c exists because a stale reading of it tells them to
+    // sudo-install a legacy root binary that is playing no part in the hold.
+    //
+    // `armingThroughTheHelperClearsTheStaleAdvisoryOnTheNextRefresh` drives
+    // `StubRegisteredHelper` through the `RegisteredHelperReporting` seam, one
+    // layer ABOVE this one, so a cache added inside `registeredHelperIsActive()`
+    // never reaches it and it stays green over the defect. This is the same rule
+    // at the layer that would hold the cache.
+    //
+    // Counting the reads OF THE STATE rather than the calls to the seam is
+    // deliberate: hoisting `SMAppService.daemon(plistName:)` into a stored
+    // property would be fewer seam calls and exactly as fresh, because `.status`
+    // asks macOS every time it is read. That is not the defect and must not go
+    // red.
+    let machine = CountingRegistration(.enabled)
+    let client = PrivilegedHelperClient(
+        signature: RunningSignature { PrivilegedHelperIdentity.teamIdentifier },
+        daemon: { machine })
+
+    for _ in 0..<3 {
+        #expect(client.registeredHelperIsActive(),
+                "a daemon macOS reports as enabled was not reported as active")
+    }
+
+    // `== 3` and not `>= 3`: once per call, no more and no less. A second read
+    // per call is 0.92 ms of the main actor twice over — measured in #71h, where
+    // this call is 97.5% of what `refresh()` still costs.
+    let asks = machine.readCount
+    #expect(asks == 3, """
+        macOS was asked \(asks) times whether the helper is registered, to \
+        answer 3 questions about it. Anything but 3 means the answer was \
+        remembered — and it is precisely the answer that changes while the app \
+        runs, the moment the user enables the item in System Settings.
+        """)
+}
+
+@Test func aHelperEnabledWhileTheAppRunsIsReportedWithoutARelaunch() {
+    // The same rule stated as behaviour rather than as a count, and it is the
+    // user's own story: the click that registers the daemon happens in the
+    // Preferences window of a RUNNING app. An answer frozen at the first call
+    // leaves them reading the advisory their click just disproved until they
+    // relaunch.
+    //
+    // Not redundant with the counter above. A cache that re-read and re-stored
+    // would keep the count at 3 and still answer stale; a cache that engaged
+    // only for one of the two answers — the exact shape of the `String?` defect
+    // `aBuildCarryingNoTeamIsAlsoReadOnlyOnce` was written for — would be caught
+    // by whichever of the two directions below it froze.
+    let machine = CountingRegistration(.other)
+    let client = PrivilegedHelperClient(
+        signature: RunningSignature { PrivilegedHelperIdentity.teamIdentifier },
+        daemon: { machine })
+
+    #expect(client.registeredHelperIsActive() == false,
+            "precondition: nothing is registered on this machine yet")
+
+    // The user clicks "Arm lid-closed mode" and approves it in System Settings.
+    machine.set(.enabled)
+    #expect(client.registeredHelperIsActive(), """
+        the registration the user just granted was not reported until relaunch, \
+        so the stale-helper advisory outlives the click that made it false
+        """)
+
+    // And back: macOS drops a registration when the bundle moves or the user
+    // switches the item off. A cache that only remembered the good news would
+    // report a helper that is no longer running as the one holding the machine,
+    // silencing the advisory on exactly the Mac that needs it.
+    machine.set(.other)
+    #expect(client.registeredHelperIsActive() == false, """
+        a registration macOS has dropped was still reported as active, so the \
+        window is silent about the legacy root binary that is now the only thing \
+        holding the lid closed
+        """)
+}
+
+@Test func aHelperWaitingOnTheUsersApprovalIsNotReportedAsActive() {
+    // `.enabled` and nothing looser, which the doc comment claims and nothing
+    // could check until this seam existed.
+    //
+    // Named bug: `!= .other`, or a `switch` that folds `.requiresApproval` in
+    // with `.enabled`. A helper waiting on approval is a helper macOS is NOT
+    // running — so whatever holds that machine's lid closed is the legacy binary
+    // at `ServingModel.privilegedProbePath`, which is the exact case the
+    // stale-helper advisory was written for. Loosening this silences it there.
+    let machine = CountingRegistration(.requiresApproval)
+    let client = PrivilegedHelperClient(
+        signature: RunningSignature { PrivilegedHelperIdentity.teamIdentifier },
+        daemon: { machine })
+
+    #expect(client.registeredHelperIsActive() == false, """
+        a helper macOS is not running — it is waiting on an approval the user \
+        has not given — was reported as the one holding this machine's lid closed
+        """)
+}
+
+@Test func aBuildThatCouldNotHaveRegisteredAnythingDoesNotAskMacOS() {
+    // The ORDER the doc comment claims, and the half of it that is not about
+    // speed. `availability()` runs FIRST: a bundle that cannot register a helper
+    // cannot have registered THIS one, so asking `SMAppService` about a job it
+    // could never install answers about somebody else's registration — a
+    // developer's own signed copy on the same Mac, say — and silences the
+    // advisory on the unsigned build where `sudo` is genuinely the only route
+    // there is.
+    //
+    // Named bug: dropping the `guard`, or reordering the two halves. The
+    // fixture makes them disagree on purpose — no team, and a daemon macOS
+    // would report as enabled — so a check that only read the returned value
+    // could not tell "gated" from "asked and answered".
+    let machine = CountingRegistration(.enabled)
+    let client = PrivilegedHelperClient(
+        signature: RunningSignature { nil },
+        daemon: { machine })
+
+    #expect(client.registeredHelperIsActive() == false, """
+        an unsigned build reported a registered helper: it cannot have \
+        registered one, so that answer is about a registration belonging to \
+        somebody else
+        """)
+
+    let asks = machine.readCount
+    #expect(asks == 0, """
+        macOS was asked \(asks) times about a job this bundle could never have \
+        installed. The signature gate is meant to close before the question is \
+        put.
+        """)
+}
+
 // MARK: - What the button says, before and after a click
 
 @Test func theArmedStatusCarriesTheGRANTEDHoldAndNotTheRequestedOne() throws {
