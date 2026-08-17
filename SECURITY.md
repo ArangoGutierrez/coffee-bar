@@ -521,8 +521,9 @@ Settings, and completed a live XPC round trip: each side set the other's
 requirement identifier on the connection, both connections activated, and
 `SleepDisabled` moved 0 → 1 with the helper still running afterwards. That
 records one run, on one Mac, on one date. It is not a promise about the build in
-front of you, and nothing in this repository can re-run it — the run needed a
-signed bundle, and signing is opt-in.
+front of you, and no test in this repository re-runs it — the run needed a
+signed bundle, which is opt-in, and a registration approved by hand in System
+Settings, so the suite cannot reproduce it.
 
 **What is not claimed here.** Removing the helper from the UI has not been
 exercised, and neither has the fallback an unsigned build takes. What has been
