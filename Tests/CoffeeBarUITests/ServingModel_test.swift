@@ -2706,6 +2706,184 @@ private let installedElsewhere = "/Volumes/Spare/CoffeeBar.app/Contents/MacOS/co
         """)
 }
 
+// MARK: - Issue #71c: the advisory the registered helper makes false
+
+// The defect, measured on this machine on 2026-08-17. A signed build with the
+// helper registered armed lid-closed mode by clicking the button: the hold was
+// granted by the registered helper at pid 60528, and the XPC round trip is in
+// the system log. The legacy binary at
+// `/Library/PrivilegedHelperTools/coffee-bar-probe` was present, was a DIFFERENT
+// build, and was not running — it played no part in the hold whatever.
+//
+// The window said "lid-closed mode is running an older root binary" and told the
+// user to `sudo install` over it. Both halves are false in that state, and
+// following the advice re-introduces the manual path issue #71 exists to delete.
+//
+// The staleness check reads two files and knows nothing about the registration,
+// which is correct as far as it goes and is exactly why the answer had to arrive
+// from somewhere else.
+
+/// A registered helper whose answer these checks choose, and can change.
+///
+/// The `true` side is unreachable to this package by construction:
+/// `PrivilegedHelperClient.availability()` reads THIS binary's signature, the
+/// test runner is linker-signed ad-hoc, and
+/// `theRunningBuildReadsItsOwnSignatureRatherThanAssumingOne` measures it
+/// answering `.unavailable`. So the state the user was actually in reaches a
+/// check only through a double — the same position `StubHelperState` above is in
+/// for a stale root binary.
+private final class StubRegisteredHelper: RegisteredHelperReporting, @unchecked Sendable {
+    private let lock = NSLock()
+    private var active: Bool
+
+    init(active: Bool) { self.active = active }
+
+    /// The user clicks the button, or macOS drops the registration.
+    func set(active next: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        active = next
+    }
+
+    func registeredHelperIsActive() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return active
+    }
+}
+
+@MainActor
+@Test func theStaleAdvisoryIsSilentWhileTheRegisteredHelperIsTheOneHoldingTheMachine() {
+    // Named bug: the one measured above. The model reads a legacy binary that
+    // really is a different build, and says so, on a Mac where that binary is
+    // not what lid-closed mode runs.
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth(),
+                             helper: StubHelperState(.stale),
+                             registration: StubRegisteredHelper(active: true),
+                             settings: FakeSettings())
+    model.refresh()
+
+    // The premise, pinned. Without this the check below could pass because the
+    // machine looks CURRENT, which is a different state and not the one at
+    // issue — and the silence would then prove nothing at all.
+    #expect(model.helperState == .stale,
+            "precondition: the legacy binary is present and is a different build")
+    #expect(model.registeredHelperIsActive,
+            "precondition: the model asked whether the registered helper is active")
+
+    #expect(model.staleHelperAdvisory(probeAt: installedElsewhere) == nil, """
+        the window told a user whose hold is held by the REGISTERED helper that \
+        lid-closed mode is running an older root binary, and to sudo-install \
+        over it. Both halves are false in that state, and following the advice \
+        puts the manual root binary back:
+          \(model.staleHelperAdvisory(probeAt: installedElsewhere) ?? "")
+        """)
+}
+
+@MainActor
+@Test func aRegisteredHelperAlsoSilencesTheAdvisoryTheAppCannotVerify() {
+    // The rule is about the ADVISORY and not about one of its cases, so the
+    // `.unverifiable` sentence goes quiet on the same machines. It names the
+    // same legacy path — "it cannot tell whether the probe at … is current" —
+    // and points at reinstalling the app to repair a file the registered helper
+    // has made irrelevant.
+    //
+    // Named bug: silencing `.stale` alone. The user then clicks the button,
+    // watches "running an older root binary" disappear, and is handed a second
+    // paragraph about the same file it was never about.
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth(),
+                             helper: StubHelperState(.unverifiable),
+                             registration: StubRegisteredHelper(active: true),
+                             settings: FakeSettings())
+    model.refresh()
+
+    #expect(model.helperState == .unverifiable, "precondition: the comparison did not run")
+    #expect(model.staleHelperAdvisory(probeAt: installedElsewhere) == nil, """
+        the advisory speaks about the legacy probe on a Mac the registered \
+        helper is running:
+          \(model.staleHelperAdvisory(probeAt: installedElsewhere) ?? "")
+        """)
+}
+
+@MainActor
+@Test func withoutARegisteredHelperTheStaleAdvisoryIsWordForWordWhatItWas() throws {
+    // The other half of the rule, and the half that keeps the fix from being a
+    // deletion. On an unsigned build, and on a signed one whose owner has never
+    // clicked the button, the `sudo` route is the only route there is and the
+    // advisory earns its place.
+    //
+    // The WHOLE SENTENCE, against a literal. `cad2577` on this branch is the
+    // precedent: two `contains(...)` assertions passed over a message that named
+    // no action at all, because a substring check cannot see what was dropped
+    // around it. This one goes red if a single word of the user-visible string
+    // moves — which is the point, since "unchanged, word for word" is the
+    // requirement being enforced.
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth(),
+                             helper: StubHelperState(.stale),
+                             registration: StubRegisteredHelper(active: false),
+                             settings: FakeSettings())
+    model.refresh()
+
+    #expect(model.registeredHelperIsActive == false,
+            "precondition: no registered helper on this machine")
+
+    let line = try #require(model.staleHelperAdvisory(probeAt: installedElsewhere), """
+        the fix silenced the advisory on a machine that has no registered helper, \
+        so the only route this build has to lid-closed mode is now documented \
+        nowhere the user will look
+        """)
+    #expect(line == """
+        The probe at /Library/PrivilegedHelperTools/coffee-bar-probe is not the one in \
+        this build, so lid-closed mode is running an older root binary. Replace it with \
+        sudo install -o root -g wheel -m 755 \
+        /Volumes/Spare/CoffeeBar.app/Contents/MacOS/coffee-bar-probe \
+        /Library/PrivilegedHelperTools/coffee-bar-probe and arm it again.
+        """, """
+        the sentence a user without a registered helper reads has changed:
+          \(line)
+        """)
+}
+
+@MainActor
+@Test func armingThroughTheHelperClearsTheStaleAdvisoryOnTheNextRefresh() {
+    // Named bug this catches: reading the registration ONCE, in `init`. The
+    // click that makes the advisory false happens in the Preferences window of a
+    // running app, so a value frozen at launch leaves the user staring at the
+    // sentence their click just disproved — the same frozen-state defect
+    // `theStaleHelperAdvisoryClearsOnTheNextRefreshWithoutARelaunch` names for
+    // the file read beside it.
+    let machine = StubRegisteredHelper(active: false)
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth(),
+                             helper: StubHelperState(.stale),
+                             registration: machine,
+                             settings: FakeSettings())
+    model.refresh()
+    #expect(model.staleHelperAdvisory(probeAt: installedElsewhere) != nil,
+            "precondition: the stale legacy binary is being reported")
+
+    // The user clicks "Arm lid-closed mode" and macOS registers the daemon. The
+    // legacy binary on disk has not moved and is still a different build.
+    machine.set(active: true)
+    model.refresh()
+
+    #expect(model.helperState == .stale,
+            "precondition: nothing touched the legacy binary; only the registration changed")
+    #expect(model.staleHelperAdvisory(probeAt: installedElsewhere) == nil, """
+        the advisory outlived the click that made it false, so a user who armed \
+        through the helper is told to sudo-install an older root binary until \
+        coffee-bar is relaunched:
+          \(model.staleHelperAdvisory(probeAt: installedElsewhere) ?? "")
+        """)
+}
+
 // MARK: - Issue #74: the lid-closed hold the user chose
 
 @MainActor

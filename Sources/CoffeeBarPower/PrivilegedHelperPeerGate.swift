@@ -79,27 +79,98 @@ public enum PrivilegedHelperPeerGate {
     }
 }
 
+/// The two things `PrivilegedHelperEndpoint` does to its listener, behind a
+/// protocol.
+///
+/// The same seam `PinnableConnection` is, for a narrower reason. A real
+/// `NSXPCListener(machServiceName:)` can be built and resumed inside `swift
+/// test` — measured, it returns and the run loop turns — but it publishes an
+/// endpoint on the machine's Mach namespace under the name the SHIPPED daemon
+/// answers to. A unit check must not reach out of its own process to assert
+/// something about a reference count.
+///
+/// `delegate` is a member of this protocol rather than an implementation
+/// detail, because it is the property the whole rule is about.
+/// `NSXPCConnection.h` on `NSXPCListener.delegate`: "The delegate for the
+/// connection listener. If no delegate is set, all new connections will be
+/// rejected." It is declared `weak` there, so a double that held it strongly
+/// would report a delegate the real listener has already dropped — which is the
+/// exact defect, certified absent by its own stand-in. The double in
+/// `PrivilegedHelperEndpointLifetime_test.swift` declares it `weak`, and
+/// `anEndpointThatWasNeverResumedIsNotKeptAlive` is what proves the double
+/// really does.
+///
+/// `NSXPCListener` already declares both members with these exact signatures,
+/// so the conformance below adds no code and cannot drift from what the real
+/// object does.
+protocol ResumableListener: AnyObject {
+    /// Weak on the real listener. Nil means every connection is refused.
+    var delegate: (any NSXPCListenerDelegate)? { get set }
+    /// Starts publishing the endpoint.
+    func resume()
+}
+
+extension NSXPCListener: ResumableListener {}
+
 /// The root helper's side: publishes the endpoint and pins every caller.
 ///
 /// Constructed by `coffee-bar-probe serve`, which is the verb `launchd` starts
 /// for the registered job and which no user runs by hand.
 public final class PrivilegedHelperEndpoint: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
-    private let listener: NSXPCListener
+    private let listener: any ResumableListener
     private let exported: any LidClosedControl
 
     /// `exporting` is the object that actually does the work. Held as the
     /// protocol so the transport knows nothing about arming, and so the
     /// privileged logic stays in a type that has no opinion about XPC.
-    public init(exporting object: any LidClosedControl) {
-        self.listener = NSXPCListener(machServiceName: PrivilegedHelperIdentity.endpointName)
+    public convenience init(exporting object: any LidClosedControl) {
+        self.init(exporting: object,
+                  listener: NSXPCListener(machServiceName: PrivilegedHelperIdentity.endpointName))
+    }
+
+    /// The seam, and it is deliberately NOT public. The app layer is held to
+    /// naming `SMAppService` and nothing else, so there is nowhere outside this
+    /// package to hand this type a listener of somebody else's choosing.
+    init(exporting object: any LidClosedControl, listener: any ResumableListener) {
+        self.listener = listener
         self.exported = object
         super.init()
         self.listener.delegate = self
     }
 
-    /// Starts listening. Never returns to the caller's control flow in the
-    /// daemon — `serve` parks after this.
+    /// A strong reference to itself, taken when the endpoint is published.
+    ///
+    /// A retain cycle on purpose, and never broken: `launchd` owns this
+    /// process's lifetime, and a published endpoint is owed exactly that long.
+    private var publishedSelf: PrivilegedHelperEndpoint?
+
+    /// Starts listening, and makes sure there is still something here to listen
+    /// WITH.
+    ///
+    /// **The retain is the fix for the defect that made this daemon useless.**
+    /// `NSXPCListener` holds its delegate weakly — `NSXPCConnection.h`: "The
+    /// delegate for the connection listener. If no delegate is set, all new
+    /// connections will be rejected." So an endpoint nothing retains is freed
+    /// the moment its caller's statement ends, and macOS then refuses every
+    /// client of a job that `launchd` reports healthy, `launchctl` shows active
+    /// and managed, and whose own log says nothing at all — because
+    /// `listener(_:shouldAcceptNewConnection:)` never runs.
+    ///
+    /// **Here rather than at the call site, and that is the whole point.**
+    /// `serveForever()` shipped `PrivilegedHelperEndpoint(exporting: self).resume()`
+    /// and every review read past it. A rule that lives in the caller has to be
+    /// remembered by each new caller; this one holds wherever the type is used.
+    ///
+    /// **In `resume()` rather than in `init`.** Only a published endpoint has a
+    /// listener macOS will call back, so only a published endpoint has anything
+    /// to stay alive for. Retaining on construction would leak every endpoint
+    /// anybody makes, including the ones a check throws away —
+    /// `anEndpointThatWasNeverResumedIsNotKeptAlive` is what refuses that.
+    ///
+    /// Never returns to the caller's control flow in the daemon: `serve` parks
+    /// after this.
     public func resume() {
+        publishedSelf = self
         listener.resume()
     }
 

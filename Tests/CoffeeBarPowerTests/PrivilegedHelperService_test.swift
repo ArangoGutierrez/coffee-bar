@@ -207,8 +207,9 @@ private func armAndWait(_ service: LidClosedHelperService,
 @Test func unregisteringIsNeverSomethingARevertDoes() throws {
     // Named bug, and it is the one a user would actually meet: `revert` is
     // wired to tear the registration down, so the next click of the button
-    // presents the OS authorisation prompt again. Registration is a decision
-    // the user made once; ending a hold is not un-making it.
+    // sends the user back to System Settings to enable the item again.
+    // Registration is a decision the user made once; ending a hold is not
+    // un-making it.
     //
     // Stated over the supervisor because that is the seam `WatchdogService`
     // calls `uninstall()` through. A conformer that did anything at all here

@@ -24,9 +24,9 @@ import CoffeeBarPower
 // `AppLayerBoundary_test.swift` refuses a second site.
 //
 // What has NOT changed: no code path in this binary elevates its own
-// privilege. Path (1) is the user's own `sudo`. Path (2) is macOS presenting
-// its own authorisation prompt for a registration the user asked for by
-// clicking, and installing the job itself.
+// privilege. Path (1) is the user's own `sudo`. Path (2) is macOS listing a
+// registration the user asked for by clicking, and running the job only once
+// the user enables it in System Settings.
 
 /// What the caller asked for, after the flags are taken out.
 private struct Invocation {

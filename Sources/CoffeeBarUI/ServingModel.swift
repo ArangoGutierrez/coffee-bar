@@ -23,6 +23,15 @@ public final class ServingModel {
     private let reader: any PowerReadingProviding
     private let health: any HookHealthProviding
     private let helper: any PrivilegedHelperStateProviding
+    /// Where the answer to "is the registered helper the thing running lid-closed
+    /// mode" comes from (issue #71c).
+    ///
+    /// A SEAM and not a call, for a reason of its own on top of the ones the
+    /// other dependencies here have: the shipping implementation lives in the
+    /// one app-layer file entitled to name `SMAppService`, and this file is not
+    /// it. `RegisteredHelperReporting` is what carries that answer across the
+    /// boundary without moving the entitlement.
+    private let registration: any RegisteredHelperReporting
     private let listener: any IngestListening
     private let settings: any SettingsStoring
     /// Where the published version manifest comes from (issue #29).
@@ -317,6 +326,24 @@ public final class ServingModel {
     /// Nothing renders it before then: `PanelView.onAppear` calls `refresh()`,
     /// and the menu-bar label reads `isServing` only.
     public private(set) var helperState: PrivilegedHelperState?
+
+    /// Whether macOS is running the helper THIS build registers (issue #71c).
+    ///
+    /// **A plain `Bool` where `helperState` above is an optional, and the two
+    /// are not inconsistent.** That property carries a verdict the user is shown
+    /// verbatim, so "not asked yet" had to be distinguishable from "looked and
+    /// could not tell". This one is shown nowhere and only ever SUPPRESSES a
+    /// sentence, so the unmeasured value has to be the one that suppresses
+    /// nothing — and `false` is that value. It is written on the same line group
+    /// of `refresh()` as `helperState`, so there is no moment at which one has
+    /// been measured and the other has not.
+    ///
+    /// Re-read on every `refresh()` rather than once in `init`, for the reason
+    /// `helperState` is: the user's whole recovery path is a click in the
+    /// Preferences window, and a registration remembered from launch would keep
+    /// the advisory on screen until coffee-bar was relaunched.
+    /// `armingThroughTheHelperClearsTheStaleAdvisoryOnTheNextRefresh` holds it.
+    public private(set) var registeredHelperIsActive = false
 
     /// Whether this process is serving the ingest socket RIGHT NOW.
     ///
@@ -638,8 +665,32 @@ public final class ServingModel {
     /// composes the sentence from a state, the other reports the state THIS
     /// model measured. The argument labels differ, so no call site is ambiguous,
     /// and `LidClosedPanel_test.swift` pins the static by name.
+    /// **Silent while the registered helper is the one running lid-closed mode
+    /// (issue #71c), and that gate is HERE rather than in the static above.**
+    /// The static composes a sentence from a state and stays a pure function of
+    /// the two things it is given; this is where the model reports what it
+    /// measured, and the registration is one of the things it measured. Measured
+    /// on 2026-08-17: a signed build whose helper had just granted the hold over
+    /// XPC was told lid-closed mode was running an older root binary, and to
+    /// `install(1)` over it — both false, and following the advice puts back the
+    /// manual root binary issue #71 exists to delete. The legacy file at
+    /// `privilegedProbePath` really was present and really was a different
+    /// build, which is all `PrivilegedHelper.state` can see; it plays no part in
+    /// a hold the registered helper is holding.
+    ///
+    /// **The whole advisory and not the `.stale` case alone.** `.unverifiable`
+    /// speaks about the same file, and on a Mac the registered helper is running
+    /// "reinstall the app" is advice about a file that is not in play. Silencing
+    /// one and not the other trades one wrong paragraph for another.
+    ///
+    /// **Nothing else about it changes.** On an unsigned build, and on a signed
+    /// one whose owner has never armed through the button, the `sudo` route is
+    /// the only route there is and every word of the sentence is what it was —
+    /// `withoutARegisteredHelperTheStaleAdvisoryIsWordForWordWhatItWas` holds
+    /// the whole string against a literal.
     public func staleHelperAdvisory(probeAt path: String) -> String? {
-        helperState.flatMap { Self.staleHelperAdvisory(state: $0, probeAt: path) }
+        guard !registeredHelperIsActive else { return nil }
+        return helperState.flatMap { Self.staleHelperAdvisory(state: $0, probeAt: path) }
     }
 
     /// `path` as exactly ONE operand of a shell command line.
@@ -1195,6 +1246,7 @@ public final class ServingModel {
                 reader: any PowerReadingProviding = SystemPowerReader(),
                 health: any HookHealthProviding = HookHealthReader(),
                 helper: any PrivilegedHelperStateProviding = PrivilegedHelperReader(),
+                registration: any RegisteredHelperReporting = PrivilegedHelperClient(),
                 settings: any SettingsStoring = UserDefaultsSettingsStore(),
                 listener: any IngestListening = UnixSocketIngestListener(),
                 policy: StalePolicy = .standard,
@@ -1206,6 +1258,7 @@ public final class ServingModel {
         self.reader = reader
         self.health = health
         self.helper = helper
+        self.registration = registration
         self.settings = settings
         self.listener = listener
         self.policy = policy
@@ -1976,6 +2029,22 @@ public final class ServingModel {
         // whole point is that the app tells the user something they can act on,
         // so the advisory has to clear without a relaunch.
         helperState = helper.state()
+        // Asked on the same tick as the line above, deliberately. The two answer
+        // one question between them — is the root binary this Mac runs the one
+        // this build ships — and a pair sampled at different moments can be read
+        // together as a state the machine was never in.
+        //
+        // Issue #71c is what put it here. It is a launchd query, off the render
+        // path, which is where `PreferencesView` will not put it.
+        //
+        // Measured (#71e), it also used to be a read of this process's own
+        // signature — 4.97 ms of the 5.84 ms this line held the main actor for,
+        // and this is not merely a 30-second timer: `ingest(from:_:)` below runs
+        // `refresh()` on every hook event. Issue #71h left the launchd query
+        // where it is and remembers the signature for the life of the process,
+        // because a process cannot change its own signature and the registration
+        // is exactly what CAN change — which is what #71c needed fresh.
+        registeredHelperIsActive = registration.registeredHelperIsActive()
         // ASKED, not remembered. The bind is asynchronous, so a `start()` that
         // returned cleanly is not proof the socket is serving, and `stop()`
         // takes it away again.

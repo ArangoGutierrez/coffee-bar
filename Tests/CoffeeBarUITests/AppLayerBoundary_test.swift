@@ -1593,10 +1593,10 @@ private func sources(ofTargets names: [String]) throws -> [URL] {
     // `NSAppleScript` and `/usr/bin/sudo` from a `Process` are the routes this
     // rule was written for and they stay shut. That is not a smaller version of
     // the same thing: `SMAppService.register()` hands the decision to the
-    // OPERATING SYSTEM, which presents its own authorisation sheet with the
-    // app's name on it and installs the job itself. The refused routes take the
-    // user's password inside coffee-bar's own process, or run an interpreter as
-    // root. coffee-bar still elevates nothing on its own initiative; what
+    // OPERATING SYSTEM, which lists the app under Login Items & Extensions and
+    // runs the job only once the user enables it there. The refused routes take
+    // the user's password inside coffee-bar's own process, or run an interpreter
+    // as root. coffee-bar still elevates nothing on its own initiative; what
     // changed is that the user's consent is now collected by macOS rather than
     // typed into a terminal.
     //

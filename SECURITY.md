@@ -494,15 +494,16 @@ belonging to somebody else.
 **coffee-bar still elevates nothing on its own initiative, and this is the part
 worth reading slowly.** `SMAppService.register()` does not take a password, does
 not run an interpreter as root, and does not install anything itself: it asks
-macOS, which presents its own authorisation prompt naming the app and installs
-the job. `AuthorizationExecuteWithPrivileges` (deprecated since 10.7) and
+macOS, which lists the request under the app's name in System Settings › General
+› Login Items & Extensions and runs the job only once the user enables it there.
+`AuthorizationExecuteWithPrivileges` (deprecated since 10.7) and
 `NSAppleScript "with administrator privileges"` were both rejected for the
 opposite property — each takes the user's credentials inside coffee-bar's own
 process — and both remain in the app layer's denylist.
 `theAppLayerNeverReachesForPrivilegeEscalation` still refuses `setuid`,
 `launchctl`, `AuthorizationRef` and six more names for every file including the
-entitled one. What changed is who collects the consent, not whether it is asked
-for.
+entitled one. What changed is who collects the consent, not whether it is
+required.
 
 **Both paths ship, and the CLI is not deprecated.** `sudo coffee-bar-probe arm`
 installs `com.coffeebar.probewatchdog` into `/Library/LaunchDaemons` exactly as
@@ -514,11 +515,21 @@ bundle is built with no `SIGN_IDENTITY`, names no team, and the app reads its ow
 signature and does not offer the button. For those users the command is not a
 fallback, it is the feature.
 
-**What is not claimed here.** The helper's registration, the OS authorisation
-prompt and a live XPC round trip have not been observed on this branch, because
-they need a signed bundle and signing is opt-in. What has been measured is the
-requirement — that it parses, that it rejects a correctly signed program from
-another team, and that the build stamps the helper with the identifier it pins.
+**What was observed, and when.** On 2026-08-17 a signed Developer ID build of
+this branch, team `85FN4Z37V8`, registered the helper, had it enabled in System
+Settings, and completed a live XPC round trip: each side set the other's
+requirement identifier on the connection, both connections activated, and
+`SleepDisabled` moved 0 → 1 with the helper still running afterwards. That
+records one run, on one Mac, on one date. It is not a promise about the build in
+front of you, and no test in this repository re-runs it — the run needed a
+signed bundle, which is opt-in, and a registration approved by hand in System
+Settings, so the suite cannot reproduce it.
+
+**What is not claimed here.** Removing the helper from the UI has not been
+exercised, and neither has the fallback an unsigned build takes. What has been
+measured about the requirement is that it parses, that it rejects a correctly
+signed program from another team, and that the build stamps the helper with the
+identifier it pins.
 
 The privileged side reads a journal file to know what to restore. That file is
 an instruction to a root process, and it is treated as one. All four of these

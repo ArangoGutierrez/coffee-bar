@@ -29,8 +29,9 @@ public enum ProbeVerb: String, CaseIterable, Sendable {
     ///
     /// **The first verb in this binary that LISTENS**, and the only one nobody
     /// types. `launchd` starts it for the `SMAppService` job whose plist ships
-    /// inside the app bundle; the user's part is clicking a button and
-    /// approving the prompt macOS presents.
+    /// inside the app bundle; the user's part is clicking a button and then
+    /// enabling the item in System Settings › General › Login Items &
+    /// Extensions.
     ///
     /// It does NOT replace `arm`. Both paths coexist: a Homebrew install gets
     /// an ad-hoc bundle that can register nothing, so `sudo coffee-bar-probe
