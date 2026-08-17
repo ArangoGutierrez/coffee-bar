@@ -23,6 +23,15 @@ public final class ServingModel {
     private let reader: any PowerReadingProviding
     private let health: any HookHealthProviding
     private let helper: any PrivilegedHelperStateProviding
+    /// Where the answer to "is the registered helper the thing running lid-closed
+    /// mode" comes from (issue #71c).
+    ///
+    /// A SEAM and not a call, for a reason of its own on top of the ones the
+    /// other dependencies here have: the shipping implementation lives in the
+    /// one app-layer file entitled to name `SMAppService`, and this file is not
+    /// it. `RegisteredHelperReporting` is what carries that answer across the
+    /// boundary without moving the entitlement.
+    private let registration: any RegisteredHelperReporting
     private let listener: any IngestListening
     private let settings: any SettingsStoring
     /// Where the published version manifest comes from (issue #29).
@@ -317,6 +326,24 @@ public final class ServingModel {
     /// Nothing renders it before then: `PanelView.onAppear` calls `refresh()`,
     /// and the menu-bar label reads `isServing` only.
     public private(set) var helperState: PrivilegedHelperState?
+
+    /// Whether macOS is running the helper THIS build registers (issue #71c).
+    ///
+    /// **A plain `Bool` where `helperState` above is an optional, and the two
+    /// are not inconsistent.** That property carries a verdict the user is shown
+    /// verbatim, so "not asked yet" had to be distinguishable from "looked and
+    /// could not tell". This one is shown nowhere and only ever SUPPRESSES a
+    /// sentence, so the unmeasured value has to be the one that suppresses
+    /// nothing — and `false` is that value. It is written on the same line group
+    /// of `refresh()` as `helperState`, so there is no moment at which one has
+    /// been measured and the other has not.
+    ///
+    /// Re-read on every `refresh()` rather than once in `init`, for the reason
+    /// `helperState` is: the user's whole recovery path is a click in the
+    /// Preferences window, and a registration remembered from launch would keep
+    /// the advisory on screen until coffee-bar was relaunched.
+    /// `armingThroughTheHelperClearsTheStaleAdvisoryOnTheNextRefresh` holds it.
+    public private(set) var registeredHelperIsActive = false
 
     /// Whether this process is serving the ingest socket RIGHT NOW.
     ///
@@ -1195,6 +1222,7 @@ public final class ServingModel {
                 reader: any PowerReadingProviding = SystemPowerReader(),
                 health: any HookHealthProviding = HookHealthReader(),
                 helper: any PrivilegedHelperStateProviding = PrivilegedHelperReader(),
+                registration: any RegisteredHelperReporting = PrivilegedHelperClient(),
                 settings: any SettingsStoring = UserDefaultsSettingsStore(),
                 listener: any IngestListening = UnixSocketIngestListener(),
                 policy: StalePolicy = .standard,
@@ -1206,6 +1234,7 @@ public final class ServingModel {
         self.reader = reader
         self.health = health
         self.helper = helper
+        self.registration = registration
         self.settings = settings
         self.listener = listener
         self.policy = policy
@@ -1976,6 +2005,16 @@ public final class ServingModel {
         // whole point is that the app tells the user something they can act on,
         // so the advisory has to clear without a relaunch.
         helperState = helper.state()
+        // Asked on the same tick as the line above, deliberately. The two answer
+        // one question between them — is the root binary this Mac runs the one
+        // this build ships — and a pair sampled at different moments can be read
+        // together as a state the machine was never in.
+        //
+        // Issue #71c is what put it here. This is a launchd query and a read of
+        // this process's own signature, both on a 30-second timer and neither on
+        // the render path, which is where `PreferencesView` will not put the
+        // signature read.
+        registeredHelperIsActive = registration.registeredHelperIsActive()
         // ASKED, not remembered. The bind is asynchronous, so a `start()` that
         // returned cleanly is not proof the socket is serving, and `stop()`
         // takes it away again.

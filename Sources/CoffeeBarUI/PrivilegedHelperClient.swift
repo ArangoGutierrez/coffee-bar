@@ -164,6 +164,25 @@ extension SMAppService: HelperRegistering {
     }
 }
 
+/// Whether the daemon macOS is running is the one THIS build registers.
+///
+/// A protocol, and it is the seam issue #71c could not be written without.
+/// `theAppLayerNeverReachesForPrivilegeEscalation` holds the set of app-layer
+/// files entitled to name `SMAppService` to exactly one, and this is not the
+/// file that composes the stale-helper advisory — so `ServingModel` cannot ask
+/// macOS the question and the answer has to arrive through a type it may hold.
+///
+/// It is also the only route a check has to the `true` side. `availability()`
+/// reads THIS binary's signature, and under `swift test` the runner is
+/// linker-signed ad-hoc and names no team —
+/// `theRunningBuildReadsItsOwnSignatureRatherThanAssumingOne` measures exactly
+/// that — so no arrangement of files in this repository produces a registered
+/// helper for the shipping implementation to report.
+public protocol RegisteredHelperReporting: Sendable {
+    /// `true` only while macOS reports this build's daemon as enabled.
+    func registeredHelperIsActive() -> Bool
+}
+
 /// Registers the privileged helper and asks it to arm.
 ///
 /// **The ONE file in the app layer entitled to name `SMAppService`**, and
@@ -180,7 +199,7 @@ extension SMAppService: HelperRegistering {
 /// **It holds no connection object.** `PrivilegedHelperChannel` is opaque, so
 /// there is nowhere in this file to resume a connection unpinned — which is why
 /// the entitlement can be one symbol wide.
-public struct PrivilegedHelperClient: Sendable {
+public struct PrivilegedHelperClient: Sendable, RegisteredHelperReporting {
     public init() {}
 
     /// The team identifier of the running code, read off the signature.
@@ -209,6 +228,31 @@ public struct PrivilegedHelperClient: Sendable {
 
     public func availability() -> HelperAvailability {
         HelperAvailability.decide(teamIdentifier: Self.runningTeamIdentifier())
+    }
+
+    /// What the stale-helper advisory asks before it reports an old root binary.
+    ///
+    /// **Both halves are load-bearing, in this order.** `availability()` first,
+    /// because a bundle that cannot register a helper cannot have registered
+    /// this one — asking `SMAppService` about a job it could never install would
+    /// answer about somebody else's registration, and on an unsigned build the
+    /// `sudo` route is genuinely the only one there is. Then the status, because
+    /// a build that CAN register is not one that HAS: a signed copy whose owner
+    /// has never clicked the button is exactly the Mac the advisory was written
+    /// for.
+    ///
+    /// `.enabled` and nothing looser. `.requiresApproval` is a helper macOS is
+    /// NOT running, so whatever holds that machine's lid closed is the binary at
+    /// `ServingModel.privilegedProbePath` — the case the advisory is about.
+    ///
+    /// **It registers nothing.** This is a read, on a timer, and a `register()`
+    /// here would put an OS authorisation sheet in front of a user who clicked
+    /// nothing — the nag `outcome(ofRegistering:)` refuses to become, arriving
+    /// through the back door instead.
+    public func registeredHelperIsActive() -> Bool {
+        guard availability() == .registrable else { return false }
+        return SMAppService.daemon(plistName: PrivilegedHelperIdentity.daemonPlistName)
+            .registrationState == .enabled
     }
 
     /// Asks macOS to install the helper, and answers with what it did.
