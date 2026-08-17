@@ -73,11 +73,20 @@ public enum HelperAvailability: Equatable, Sendable {
     /// The unavailable case NAMES THE COMMAND. A gate that only says "no"
     /// leaves the user with nothing, and lid-closed mode is genuinely available
     /// to them — by the route it has always been available by.
+    ///
+    /// The registrable case PROMISES NO PROMPT, and that is the correction #71
+    /// exists for. macOS shows none for a daemon registration; approval is a
+    /// switch the user flips in System Settings, so a sentence saying macOS
+    /// will ask leaves them waiting for a dialog while the click reports EPERM.
+    /// It stops at naming the pane rather than repeating `approvalGuidance` —
+    /// this one sets an expectation before the click, that one gives directions
+    /// after a failed one, and two spellings of one instruction drift apart.
+    /// `theRegistrableCasePromisesNoPromptMacOSDoesNotShow` holds the sentence.
     public var explanation: String {
         switch self {
         case .registrable:
             return "coffee-bar can install the privileged helper for you. "
-                + "macOS will ask you to approve it once."
+                + "macOS will not run it until you approve it in System Settings yourself."
         case .unavailable:
             return "This build is not signed by coffee-bar's developer, so it "
                 + "cannot install a privileged helper. Lid-closed mode still "
