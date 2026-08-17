@@ -241,7 +241,11 @@ final class RunningSignature: @unchecked Sendable {
     /// else. `aBuildCarryingNoTeamIsAlsoReadOnlyOnce` is the check that fails.
     private var reading: String??
 
-    /// How many times the underlying read has actually run.
+    /// Bookkeeping for `readCount`, and nothing decides anything on it.
+    ///
+    /// Separate from `reading` rather than derived from it, because "has a value"
+    /// and "how many times it was fetched" have to be able to disagree — a cache
+    /// that re-read and re-stored would look identical on `reading` alone.
     private var reads = 0
 
     init(read: @escaping @Sendable () -> String?) {
