@@ -233,10 +233,17 @@ private final class ReadCounter: @unchecked Sendable {
     _ = PrivilegedHelperClient().availability()
     _ = PrivilegedHelperClient().availability()
 
-    #expect(RunningSignature.shared.readCount == 1, """
-        the process-wide signature reading was made \
-        \(RunningSignature.shared.readCount) times across two clients built the \
-        ordinary way
+    // SAMPLED ONCE into a local, and that is not a style preference. Read twice
+    // — once by the expectation and once by the message interpolating it — this
+    // counter can report two different numbers for one failure, because the rest
+    // of the suite runs in parallel and any of it may call `availability()`
+    // between the two reads. Mutating the cache away printed exactly that:
+    // `readCount → 2` beside a message claiming 3. A failure message that
+    // disagrees with the value asserted sends the next reader after the wrong bug.
+    let reads = RunningSignature.shared.readCount
+    #expect(reads == 1, """
+        the process-wide signature reading was made \(reads) times across two \
+        clients built the ordinary way
         """)
 }
 
