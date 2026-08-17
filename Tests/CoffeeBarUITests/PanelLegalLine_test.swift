@@ -135,11 +135,12 @@ private func panelBody() throws -> String {
 /// THIS TABLE IS A DESIGNED UPDATE POINT. A legitimate container around the
 /// footer — an `HStack` for the buttons, a `Group` — turns the nesting half red,
 /// and the fix is to raise the number here and say which brace was added.
-private let panelFooterTopToBottom: [(needle: String, what: String, braces: Int, enclosing: String)] = [
-    ("Button(\"Check now\")", "the Check now button", 0, "nothing"),
-    ("Text(\"Preferences…\")", "the Preferences… button", 1, "its label: closure"),
-    ("Button(\"Quit coffee-bar\")", "the Quit coffee-bar button", 0, "nothing"),
-    ("PanelView.legalLine()", "the licence line", 0, "nothing"),
+private let panelFooterTopToBottom: [(needle: String, what: String, braces: Int, nesting: String)] = [
+    ("Button(\"Check now\")", "the Check now button", 0, "directly in the VStack"),
+    ("Text(\"Preferences…\")", "the Preferences… button", 1,
+     "one brace deeper than its siblings, inside its own label: closure"),
+    ("Button(\"Quit coffee-bar\")", "the Quit coffee-bar button", 0, "directly in the VStack"),
+    ("PanelView.legalLine()", "the licence line", 0, "directly in the VStack"),
 ]
 
 @Test func theLicenceLineIsDrawnUnderTheFooterControlsAndNotBetweenThem() throws {
@@ -207,8 +208,8 @@ private let panelFooterTopToBottom: [(needle: String, what: String, braces: Int,
             the footer and its nesting could not be measured.
             """)
         #expect(depth == anchor + entry.braces, """
-            PanelView.body puts \(entry.what) at brace depth \(depth), where \
-            \(anchor + entry.braces) is what \(entry.enclosing) accounts for. It is inside \
+            PanelView.body puts \(entry.what) at brace depth \(depth), not the \
+            \(anchor + entry.braces) it has when it sits \(entry.nesting). It is inside \
             something its siblings are not, so it can be disabled — or nested into a \
             neighbour — with the order guard above still green.
             """)
