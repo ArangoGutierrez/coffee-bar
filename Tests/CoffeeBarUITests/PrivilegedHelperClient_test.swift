@@ -94,6 +94,39 @@ import CoffeeBarPower
     #expect(!HelperAvailability.registrable.explanation.contains("sudo"))
 }
 
+@Test func theRegistrableCasePromisesNoPromptMacOSDoesNotShow() throws {
+    // Named bug, and it is the one that actually stranded a user: this sentence
+    // read "macOS will ask you to approve it once". No prompt comes. A daemon
+    // registration is refused with a bare EPERM and the item is left disallowed
+    // under System Settings › General › Login Items & Extensions, so the user
+    // waits for a dialog that does not exist and is shown "macOS refused to
+    // install the helper: … Operation not permitted" instead. The sentence read
+    // BEFORE the click is the only surface that can set that expectation —
+    // `approvalGuidance` speaks only after a click has already failed.
+    //
+    // The WHOLE sentence as a literal, not substrings. `contains("System
+    // Settings")` stays green over a wording that names the pane and still
+    // promises a prompt, which is exactly the drift this has to pin shut;
+    // `cad2577` on this branch caught that shape in the guidance string.
+    //
+    // Written out rather than compared against the enum's own property:
+    // comparing the implementation against itself is an assertion that cannot
+    // fail. This literal IS the contract.
+    #expect(HelperAvailability.registrable.explanation == """
+        coffee-bar can install the privileged helper for you. macOS will not \
+        run it until you approve it in System Settings yourself.
+        """)
+
+    // The discriminating half, and it earns its place by outliving the equality
+    // above: a later maintainer who loosens `==` to a `contains` still cannot
+    // ship the exact promise that caused this. It names the literal rather than
+    // describing it, so the failure message is the sentence a reader recognises.
+    #expect(!HelperAvailability.registrable.explanation.contains("ask you to approve"), """
+        the button again promises an approval prompt macOS does not show: \
+        \(HelperAvailability.registrable.explanation)
+        """)
+}
+
 // MARK: - What the button says, before and after a click
 
 @Test func theArmedStatusCarriesTheGRANTEDHoldAndNotTheRequestedOne() throws {
