@@ -340,11 +340,16 @@ public struct PrivilegedHelperClient: Sendable, RegisteredHelperReporting {
     /// Where the answer to "is this build's daemon registered" comes from.
     ///
     /// **A closure returning the service, and NOT a stored service, because the
-    /// asymmetry with `signature` above is the point.** Holding one
-    /// `SMAppService` would be equally fresh — `.status` asks macOS every time
-    /// it is read — but it would put a remembered object beside a remembered
-    /// reading, in a file whose next reader has just been shown a cache. What
-    /// this spells instead is: ask again, every time.
+    /// asymmetry with `signature` above is the point.** A stored service would
+    /// put a remembered object beside a remembered reading, in a file whose
+    /// next reader has just been shown a cache. What this spells instead is:
+    /// ask again, every time.
+    ///
+    /// Whether holding one `SMAppService` would in fact be EQUALLY fresh is a
+    /// claim this file used to make and no longer does. Nothing on this branch
+    /// establishes it: every check hands in a double, none of them holds a real
+    /// service across two reads, and nothing here depends on the answer either
+    /// way. The closure sidesteps the question rather than settling it.
     ///
     /// It is also the seam. `registeredHelperIsActive()`'s body was unreachable
     /// to every check in this package before it existed — the `swift test`
@@ -356,13 +361,25 @@ public struct PrivilegedHelperClient: Sendable, RegisteredHelperReporting {
     /// `SMAppService.daemon(plistName:)` itself two methods below. The
     /// duplication is the cheaper risk: both spellings name the same
     /// `PrivilegedHelperIdentity.daemonPlistName` constant, so they cannot drift
-    /// apart over WHICH job they mean, while an injectable `register()` would be
-    /// a way to hand the one method that installs a root daemon a service of
-    /// somebody else's choosing. It would also buy no check — driving it needs a
-    /// double that either answers `.enabled` and proves nothing, or lets the
-    /// `swift test` runner attempt a real registration against the user's own
-    /// machine. `outcome(ofRegistering:)` is already the seam for what a click
-    /// SAYS, and it takes the service as a plain argument.
+    /// apart over WHICH job they mean, while an injectable `register()` would
+    /// widen the injection surface on the one method that installs a root
+    /// daemon — a service of somebody else's choosing, handed to the root
+    /// install path.
+    ///
+    /// It would also buy no check, and the reason is the OPPOSITE of the one
+    /// this comment gave until #71j. That draft had it that injecting
+    /// `register()` would let the `swift test` runner attempt a real
+    /// registration; injection is what would AVOID one. A check driving an
+    /// injected `register()` drives a DOUBLE, which is safer than what is here
+    /// now, not riskier — the real-registration hazard exists precisely BECAUSE
+    /// this method is not injected and spells the real service inline.
+    ///
+    /// What injection cannot do is prove the WIRING. A double answering
+    /// `.enabled` says nothing about whether the real `SMAppService` is the
+    /// service `register()` reaches, and the only thing that could say so is a
+    /// real registration on the machine running the suite — which is exactly
+    /// what must never happen. `outcome(ofRegistering:)` is already the seam
+    /// for what a click SAYS, and it takes the service as a plain argument.
     let daemon: @Sendable () -> any HelperRegistering
 
     /// Shares the process-wide reading, which is the only correct default.
@@ -472,6 +489,20 @@ public struct PrivilegedHelperClient: Sendable, RegisteredHelperReporting {
     /// Nothing here retries and nothing here loops. A registration macOS
     /// declined is a decision the user made, and asking again is how a prompt
     /// becomes a nag.
+    ///
+    /// **DO NOT DRIVE THIS FROM A CHECK.** The `guard` below reads through the
+    /// `signature` seam, so a test handing in the real team identifier opens
+    /// it — and past it this method spells `SMAppService.daemon(plistName:)`
+    /// inline, the REAL service, not the `daemon` seam above. Such a test
+    /// registers the helper on whatever machine runs `swift test`: an item
+    /// filed into System Settings › General › Login Items & Extensions, and any
+    /// registration already granted there burnt, recoverable only by
+    /// `sfltool resetbtm` and re-approving by hand. Drive
+    /// `outcome(ofRegistering:)` with a `HelperRegistering` double instead —
+    /// it takes the service as a plain argument and is the seam for exactly
+    /// this. `noTestCanMakeTheSuiteRegisterTheHelperForReal` (issue #71j)
+    /// refuses the shape, and `arm(seconds:)` below is the same hazard one call
+    /// further out because it opens with `if let refusal = register()`.
     public func register() -> HelperArmOutcome? {
         guard availability() == .registrable else {
             return .refused(HelperAvailability.unavailable.explanation)
