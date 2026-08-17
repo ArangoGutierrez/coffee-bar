@@ -494,15 +494,16 @@ belonging to somebody else.
 **coffee-bar still elevates nothing on its own initiative, and this is the part
 worth reading slowly.** `SMAppService.register()` does not take a password, does
 not run an interpreter as root, and does not install anything itself: it asks
-macOS, which presents its own authorisation prompt naming the app and installs
-the job. `AuthorizationExecuteWithPrivileges` (deprecated since 10.7) and
+macOS, which lists the request under the app's name in System Settings › General
+› Login Items & Extensions and runs the job only once the user enables it there.
+`AuthorizationExecuteWithPrivileges` (deprecated since 10.7) and
 `NSAppleScript "with administrator privileges"` were both rejected for the
 opposite property — each takes the user's credentials inside coffee-bar's own
 process — and both remain in the app layer's denylist.
 `theAppLayerNeverReachesForPrivilegeEscalation` still refuses `setuid`,
 `launchctl`, `AuthorizationRef` and six more names for every file including the
-entitled one. What changed is who collects the consent, not whether it is asked
-for.
+entitled one. What changed is who collects the consent, not whether it is
+required.
 
 **Both paths ship, and the CLI is not deprecated.** `sudo coffee-bar-probe arm`
 installs `com.coffeebar.probewatchdog` into `/Library/LaunchDaemons` exactly as
@@ -514,8 +515,8 @@ bundle is built with no `SIGN_IDENTITY`, names no team, and the app reads its ow
 signature and does not offer the button. For those users the command is not a
 fallback, it is the feature.
 
-**What is not claimed here.** The helper's registration, the OS authorisation
-prompt and a live XPC round trip have not been observed on this branch, because
+**What is not claimed here.** The helper's registration, its approval in System
+Settings and a live XPC round trip have not been observed on this branch, because
 they need a signed bundle and signing is opt-in. What has been measured is the
 requirement — that it parses, that it rejects a correctly signed program from
 another team, and that the build stamps the helper with the identifier it pins.

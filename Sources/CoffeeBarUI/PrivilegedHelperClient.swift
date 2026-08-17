@@ -201,9 +201,10 @@ public protocol RegisteredHelperReporting: Sendable {
 /// and the rest — remain refused for everybody, and the difference is not one
 /// of degree. Those routes take the user's password inside coffee-bar's own
 /// process, or run an interpreter as root. `SMAppService.register()` hands the
-/// decision to the OPERATING SYSTEM: macOS presents its own authorisation
-/// sheet, names the app, and installs the job itself. coffee-bar still elevates
-/// nothing on its own initiative; what changed is who collects the consent.
+/// decision to the OPERATING SYSTEM: macOS lists the app under System Settings
+/// › General › Login Items & Extensions and runs the job only once the user
+/// enables it there. coffee-bar still elevates nothing on its own initiative;
+/// what changed is who collects the consent.
 ///
 /// **It holds no connection object.** `PrivilegedHelperChannel` is opaque, so
 /// there is nowhere in this file to resume a connection unpinned — which is why
@@ -255,9 +256,9 @@ public struct PrivilegedHelperClient: Sendable, RegisteredHelperReporting {
     /// `ServingModel.privilegedProbePath` — the case the advisory is about.
     ///
     /// **It registers nothing.** This is a read, on a timer, and a `register()`
-    /// here would put an OS authorisation sheet in front of a user who clicked
-    /// nothing — the nag `outcome(ofRegistering:)` refuses to become, arriving
-    /// through the back door instead.
+    /// here would put an item in the Login Items & Extensions list of a user
+    /// who clicked nothing — the nag `outcome(ofRegistering:)` refuses to
+    /// become, arriving through the back door instead.
     public func registeredHelperIsActive() -> Bool {
         guard availability() == .registrable else { return false }
         return SMAppService.daemon(plistName: PrivilegedHelperIdentity.daemonPlistName)

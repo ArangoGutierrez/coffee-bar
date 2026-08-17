@@ -26,9 +26,9 @@ import CoffeeBarCore
 /// `theRegisteredJobArmsWhereTheLaunchdInstallerCouldNot` drives both halves.
 ///
 /// `uninstall()` is a no-op for a different reason, and it is the one that
-/// would bite a user. Unregistering is a decision the USER made once, through
-/// an authorisation prompt macOS presented. Tearing the registration down on
-/// every revert would ask them again the next time they clicked the button.
+/// would bite a user. Registering is a decision the USER made once, by enabling
+/// the item in System Settings. Tearing the registration down on every revert
+/// would send them back there the next time they clicked the button.
 public struct RegisteredJobSupervisor: WatchdogSupervising {
     public init() {}
 

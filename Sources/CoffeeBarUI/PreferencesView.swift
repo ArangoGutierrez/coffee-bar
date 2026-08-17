@@ -43,9 +43,10 @@ public struct PreferencesView: View {
     /// The result of the last click, or nil before there has been one.
     @State private var helperStatus: String?
 
-    /// A click in flight. The button is disabled meanwhile: `register()` can
-    /// present an OS authorisation sheet, and a second press behind it queues a
-    /// second root request against a prompt the user has not answered.
+    /// A click in flight. The button is disabled meanwhile: `register()` is a
+    /// round trip to macOS that can end waiting on an approval, and a second
+    /// press behind it queues a second root request against a decision the user
+    /// has not made yet.
     @State private var armingInFlight = false
 
     public init(model: ServingModel) { self.model = model }
@@ -260,18 +261,19 @@ public struct PreferencesView: View {
                 // it is what a reader needs to understand what changed.
                 //
                 // What changed is NOT that coffee-bar elevates itself. The click
-                // asks macOS, which presents its own authorisation sheet naming
-                // the app and installs the job itself. The routes that would
-                // take the user's credentials inside THIS process stay refused
-                // by `theAppLayerNeverReachesForPrivilegeEscalation`;
+                // asks macOS, which lists the app under Login Items &
+                // Extensions and runs the job once the user enables it there.
+                // The routes that would take the user's credentials inside THIS
+                // process stay refused by
+                // `theAppLayerNeverReachesForPrivilegeEscalation`;
                 // `PrivilegedHelperClient` carries that argument in full, and
                 // it is deliberately not repeated here — this file can reach an
                 // agent tool's settings path, and
                 // `noSourceFileThatKnowsTheSettingsPathCanWriteToIt` reads it
                 // RAW, comments included, so naming one of those APIs even to
                 // rule it out would trip a guard that is right to be blunt.
-                // The consent moved from a terminal to an OS prompt; it did not
-                // stop being asked for.
+                // The consent moved from a terminal to System Settings; it did
+                // not stop being required.
                 //
                 // HERE and not in the panel: this is the surface issue #56 gave
                 // lid-closed mode, and the hold this button arms is the slider
