@@ -224,6 +224,16 @@ public protocol RegisteredHelperReporting: Sendable {
 /// stored property and `ServingModel` holds another, so a cache scoped to an
 /// instance would leave the window paying the cold read — 5.39 ms, ~7x a warm
 /// one — every time it opens.
+///
+/// **One behaviour DID change, and deliberately: an in-place upgrade.** A
+/// `brew upgrade` replaces the bundle under a running app, and an uncached
+/// `SecCodeCopySelf` can start failing against a file that is no longer the one
+/// this process launched from — flipping a signed build's button to "not signed
+/// by coffee-bar's developer" mid-session, on a machine where nothing about the
+/// running code changed. The remembered reading holds the last good answer
+/// instead, which is the truer one: the question is what THIS PROCESS is, and
+/// the answer to that did not move. The first `refresh()` after the relaunch
+/// reads the new bundle.
 final class RunningSignature: @unchecked Sendable {
     /// The one reading the whole process answers from.
     static let shared = RunningSignature(read: { PrivilegedHelperClient.runningTeamIdentifier() })
