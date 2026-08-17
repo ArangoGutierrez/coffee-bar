@@ -192,6 +192,94 @@ public protocol RegisteredHelperReporting: Sendable {
     func registeredHelperIsActive() -> Bool
 }
 
+/// This process's own team identifier, read once and answered from thereafter.
+///
+/// **A cache with no invalidation path, and that is a property of the subject
+/// rather than an omission.** A running process cannot change its own code
+/// signature while it runs: replacing the bundle on disk replaces the FILE, and
+/// `SecCodeCopySelf` answers about the code this process is EXECUTING, which is
+/// the code it launched with. There is no state for this reading to go stale
+/// against, which is the whole reason it is the half worth remembering.
+///
+/// **It exists because the read was expensive and was on a timer.** Measured on
+/// a Developer-ID-signed app bundle at the app's real 30-second cadence
+/// (issue #71e): `SecCodeCopySelf` + `SecCodeCopySigningInformation` cost
+/// 4.97 ms of the 5.84 ms `ServingModel.refresh()` spent on the `@MainActor`,
+/// 85% of it, and `refresh()` has eight call sites — one of them
+/// `ingest(from:_:)`, which runs on every hook event and is not user-paced.
+/// Back-to-back the same read costs 0.74 ms, so a loop benchmark understates it
+/// ~5x: the caches that make a loop cheap go cold across a 30-second gap, and a
+/// 30-second gap is what this app actually has.
+///
+/// **The registration state is deliberately NOT remembered beside it.**
+/// `registeredHelperIsActive()` asks `SMAppService` afresh every time, because
+/// that answer is precisely the one that changes while the app runs — the user
+/// enables the item in System Settings — and issue #71c exists because a stale
+/// reading of it tells them to `sudo`-install a legacy binary that is playing no
+/// part in the hold. `armingThroughTheHelperClearsTheStaleAdvisoryOnTheNextRefresh`
+/// holds that half.
+///
+/// A class, and shared, because the fact is a property of the PROCESS and not of
+/// any one client: `PreferencesView` builds a `PrivilegedHelperClient` on a
+/// stored property and `ServingModel` holds another, so a cache scoped to an
+/// instance would leave the window paying the cold read — 5.39 ms, ~7x a warm
+/// one — every time it opens.
+final class RunningSignature: @unchecked Sendable {
+    /// The one reading the whole process answers from.
+    static let shared = RunningSignature(read: { PrivilegedHelperClient.runningTeamIdentifier() })
+
+    private let read: @Sendable () -> String?
+    private let lock = NSLock()
+
+    /// `nil` until the read has run; `.some(nil)` once it ran and found no team.
+    ///
+    /// **Two levels of optional, and the inner one is load-bearing.** `nil` IS
+    /// the answer on every unsigned build — every `brew install` copy, because
+    /// `scripts/build-app.sh` signs only when `SIGN_IDENTITY` is set, and the
+    /// `swift test` runner besides. A `String?` here, re-read whenever it held
+    /// `nil`, would be a cache that engages for signed builds and for nobody
+    /// else. `aBuildCarryingNoTeamIsAlsoReadOnlyOnce` is the check that fails.
+    private var reading: String??
+
+    /// How many times the underlying read has actually run.
+    private var reads = 0
+
+    init(read: @escaping @Sendable () -> String?) {
+        self.read = read
+    }
+
+    /// How many times the underlying read has actually run.
+    ///
+    /// Exposed because `everyClientBuiltTheOrdinaryWayAnswersFromOneProcessWideReading`
+    /// is the only check that can watch the SHARED instance work, and a cache
+    /// has no observable behaviour but the reads it did not make. The two checks
+    /// beside it count through their own source and never read this.
+    var readCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return reads
+    }
+
+    /// The team identifier of the running code, read at most once.
+    ///
+    /// The lock is held ACROSS the read rather than around the two halves of it,
+    /// which costs a few ms of contention exactly once and buys exactly-once in
+    /// return. Releasing it to read would let two threads arriving together both
+    /// miss and both call into Security.framework — the cost this exists to
+    /// delete, paid on the one tick that matters. Nothing reachable from `read`
+    /// comes back here, so there is no re-entrancy to deadlock on.
+    func teamIdentifier() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        if let reading { return reading }
+
+        let fresh = read()
+        reading = .some(fresh)
+        reads += 1
+        return fresh
+    }
+}
+
 /// Registers the privileged helper and asks it to arm.
 ///
 /// **The ONE file in the app layer entitled to name `SMAppService`**, and
@@ -210,7 +298,27 @@ public protocol RegisteredHelperReporting: Sendable {
 /// there is nowhere in this file to resume a connection unpinned — which is why
 /// the entitlement can be one symbol wide.
 public struct PrivilegedHelperClient: Sendable, RegisteredHelperReporting {
-    public init() {}
+    /// Where the answer to "what team signed this binary" comes from.
+    ///
+    /// A seam, the third in this file and there for the same reason as the other
+    /// two: the reading itself is unreachable to a check — under `swift test` the
+    /// runner is linker-signed ad-hoc and names no team — and a cache has no
+    /// behaviour to observe except how many times it read. Substituting the
+    /// source is what lets `theSignatureIsReadOnceHoweverOftenAvailabilityIsAsked`
+    /// count the reads it did not make.
+    let signature: RunningSignature
+
+    /// Shares the process-wide reading, which is the only correct default.
+    ///
+    /// Every caller in the app layer builds one this way, and several build one
+    /// per use — so a fresh cache here would be no cache at all.
+    public init() {
+        self.signature = .shared
+    }
+
+    init(signature: RunningSignature) {
+        self.signature = signature
+    }
 
     /// The team identifier of the running code, read off the signature.
     ///
@@ -222,6 +330,12 @@ public struct PrivilegedHelperClient: Sendable, RegisteredHelperReporting {
     /// Measured under `swift test`: nil. The test runner is linker-signed
     /// ad-hoc and names no team, which is the same state a `brew install`
     /// bundle is in.
+    ///
+    /// **Callers go through `availability()`, which reads this at most once per
+    /// process** (`RunningSignature`). It stays public and uncached itself
+    /// because `theRunningBuildReadsItsOwnSignatureRatherThanAssumingOne`
+    /// measures the real running build through it, and a check that read a
+    /// remembered value could not tell a real read from a constant.
     public static func runningTeamIdentifier() -> String? {
         var code: SecCode?
         guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return nil }
@@ -236,8 +350,15 @@ public struct PrivilegedHelperClient: Sendable, RegisteredHelperReporting {
         return fields[kSecCodeInfoTeamIdentifier as String] as? String
     }
 
+    /// What this build may be offered, decided over its own signature.
+    ///
+    /// Through `signature` and never `Self.runningTeamIdentifier()` directly:
+    /// this is the chokepoint every caller reaches the read through —
+    /// `registeredHelperIsActive()` and `register()` below, `PreferencesView` on
+    /// a stored property — and calling the reader here is what put 4.97 ms on
+    /// the main actor once every 30 seconds and on every hook event besides.
     public func availability() -> HelperAvailability {
-        HelperAvailability.decide(teamIdentifier: Self.runningTeamIdentifier())
+        HelperAvailability.decide(teamIdentifier: signature.teamIdentifier())
     }
 
     /// What the stale-helper advisory asks before it reports an old root binary.
@@ -259,6 +380,14 @@ public struct PrivilegedHelperClient: Sendable, RegisteredHelperReporting {
     /// here would put an item in the Login Items & Extensions list of a user
     /// who clicked nothing — the nag `outcome(ofRegistering:)` refuses to
     /// become, arriving through the back door instead.
+    ///
+    /// **Only the first half is remembered, and the asymmetry is the point.**
+    /// `availability()` answers from a reading taken once per process, because a
+    /// process cannot change its own signature. The status below is asked EVERY
+    /// TIME, because it is exactly what does change while the app runs — the
+    /// moment the user enables the item in System Settings — and issue #71c
+    /// exists because a stale reading of it tells them to `sudo`-install a
+    /// legacy binary that is playing no part in the hold.
     public func registeredHelperIsActive() -> Bool {
         guard availability() == .registrable else { return false }
         return SMAppService.daemon(plistName: PrivilegedHelperIdentity.daemonPlistName)

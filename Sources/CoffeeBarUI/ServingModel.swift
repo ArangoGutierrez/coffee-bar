@@ -2034,10 +2034,16 @@ public final class ServingModel {
         // this build ships — and a pair sampled at different moments can be read
         // together as a state the machine was never in.
         //
-        // Issue #71c is what put it here. This is a launchd query and a read of
-        // this process's own signature, both on a 30-second timer and neither on
-        // the render path, which is where `PreferencesView` will not put the
-        // signature read.
+        // Issue #71c is what put it here. It is a launchd query, off the render
+        // path, which is where `PreferencesView` will not put it.
+        //
+        // Measured (#71e), it also used to be a read of this process's own
+        // signature — 4.97 ms of the 5.84 ms this line held the main actor for,
+        // and this is not merely a 30-second timer: `ingest(from:_:)` below runs
+        // `refresh()` on every hook event. Issue #71h left the launchd query
+        // where it is and remembers the signature for the life of the process,
+        // because a process cannot change its own signature and the registration
+        // is exactly what CAN change — which is what #71c needed fresh.
         registeredHelperIsActive = registration.registeredHelperIsActive()
         // ASKED, not remembered. The bind is asynchronous, so a `start()` that
         // returned cleanly is not proof the socket is serving, and `stop()`
