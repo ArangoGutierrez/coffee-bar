@@ -40,8 +40,9 @@ expires.
 `serve` is the odd one out and you will never type it. It is the entry point of
 the **registered helper** (issue #71): a launchd job whose plist ships inside
 `CoffeeBar.app/Contents/Library/LaunchDaemons/`, which the app installs through
-`SMAppService` when you click the button in Preferences and approve the prompt
-macOS presents. It publishes an XPC endpoint, and every peer on that channel is
+`SMAppService` when you click the button in Preferences and then enable the
+item yourself in System Settings › General › Login Items & Extensions. It
+publishes an XPC endpoint, and every peer on that channel is
 pinned by Team ID **and** bundle ID — `PrivilegedHelperIdentity` is where the
 requirement is written and `PrivilegedHelperPeerGate.swift` is the only file
 allowed to apply it.
