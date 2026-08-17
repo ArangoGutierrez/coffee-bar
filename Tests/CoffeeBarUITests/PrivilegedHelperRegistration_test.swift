@@ -100,11 +100,22 @@ private func refusal(_ outcome: HelperArmOutcome?,
     // button do nothing on the machines where it would have worked.
     #expect(service.registerCalls == 1)
 
-    // WHERE to go, and it takes both halves: macOS puts this under
-    // System Settings › General › Login Items & Extensions, and a sentence
-    // naming only the app is not something a user can act on.
-    #expect(reason.contains("System Settings"))
-    #expect(reason.contains("Login Items"))
+    // WHERE to go, and it is the WHOLE sentence rather than two substrings.
+    //
+    // Named bug: `contains("System Settings")` plus `contains("Login Items")`
+    // is satisfied by the fragment "System Settings Login Items", which names
+    // no action a user can take. Measured — with `approvalGuidance` replaced by
+    // exactly that fragment, all five checks in this file stayed GREEN at rc=0.
+    // Two substrings pin two tokens; a user needs a sentence.
+    //
+    // Written out as a literal rather than compared against
+    // `PrivilegedHelperClient.approvalGuidance`: comparing the implementation
+    // against its own constant is an assertion that cannot fail, and it would
+    // pass over that same fragment. This literal IS the contract.
+    #expect(reason == """
+        Approve coffee-bar's helper in System Settings › General › Login Items, \
+        then try again.
+        """)
 
     // The discriminating half. This is the literal the user was shown, and it
     // is what the fix has to stop shipping.
@@ -157,8 +168,14 @@ private func refusal(_ outcome: HelperArmOutcome?,
                              "a service awaiting approval must refuse the click")
 
     #expect(service.registerCalls == 0)
-    #expect(reason.contains("System Settings"))
-    #expect(reason.contains("Login Items"))
+    // The same whole-sentence contract as the branch above, for the same
+    // reason: this path answers with `approvalGuidance` too, and a substring
+    // pair here would leave the already-outstanding branch free to drift into a
+    // sentence the other branch would have caught.
+    #expect(reason == """
+        Approve coffee-bar's helper in System Settings › General › Login Items, \
+        then try again.
+        """)
 }
 
 @Test func anAlreadyEnabledHelperIsNotRegisteredAgain() throws {
