@@ -127,6 +127,119 @@ import CoffeeBarPower
         """)
 }
 
+// MARK: - Issue #71h: the signature is read once for the life of the process
+
+/// Counts the reads a cache did not make.
+///
+/// A locked class rather than a captured `var`: the closure the cache holds is
+/// `@Sendable`, so Swift 6 refuses the capture outright, and these checks run
+/// in parallel with everything else in the suite.
+private final class ReadCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func bump() {
+        lock.lock()
+        defer { lock.unlock() }
+        count += 1
+    }
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
+}
+
+@Test func theSignatureIsReadOnceHoweverOftenAvailabilityIsAsked() throws {
+    // Named bug, and it is what this file did until #71h: every `availability()`
+    // ran `SecCodeCopySelf` + `SecCodeCopySigningInformation` afresh. Measured on
+    // a Developer-ID-signed app bundle at the app's REAL 30-second cadence
+    // (issue #71e), that read is 4.97 ms of the 5.84 ms `ServingModel.refresh()`
+    // holds the `@MainActor` for — 85% of it — and `refresh()` has eight callers,
+    // one of which (`ingest(from:_:)`) runs on every hook event rather than on
+    // the timer.
+    //
+    // A cache has NO behaviour a check can observe EXCEPT the reads it did not
+    // make, so this counts them. Asserting that the returned VALUE is equal
+    // across calls would be green on the uncached code too — the signature does
+    // not change either way — which is why the source is a seam and not a value,
+    // the same shape `HelperRegistering` and `RegisteredHelperReporting` already
+    // are in this file.
+    let reads = ReadCounter()
+    let client = PrivilegedHelperClient(signature: RunningSignature {
+        reads.bump()
+        return PrivilegedHelperIdentity.teamIdentifier
+    })
+
+    for _ in 0..<5 {
+        #expect(client.availability() == .registrable,
+                "the remembered reading stopped answering what the source said")
+    }
+
+    #expect(reads.value == 1, """
+        the signature was read \(reads.value) times to answer 5 questions about \
+        it. A running process cannot change its own code signature, so every \
+        read after the first spends ~5 ms of the main actor re-deriving a value \
+        that cannot have moved.
+        """)
+}
+
+@Test func aBuildCarryingNoTeamIsAlsoReadOnlyOnce() throws {
+    // Named bug, and it is the one a plain `String?` cache ships with: store the
+    // reading as `String?`, re-read whenever it holds `nil`, and the cache
+    // engages for signed builds and for nobody else.
+    //
+    // `nil` IS the answer on every unsigned copy — every `brew install` bundle,
+    // and this test runner, which is why the check above has to hand in a team
+    // of its own to reach the other branch. So that defect would leave the users
+    // there are most of paying the full read on every tick, with
+    // `theSignatureIsReadOnceHoweverOftenAvailabilityIsAsked` still green over it.
+    let reads = ReadCounter()
+    let client = PrivilegedHelperClient(signature: RunningSignature {
+        reads.bump()
+        return nil
+    })
+
+    for _ in 0..<5 {
+        #expect(client.availability() == .unavailable,
+                "an absent team identifier stopped closing the gate")
+    }
+
+    #expect(reads.value == 1, """
+        an absent team identifier was re-read \(reads.value) times: the cache \
+        remembers a reading that found something and forgets one that did not, \
+        which is the state every unsigned build is permanently in.
+        """)
+}
+
+@Test func everyClientBuiltTheOrdinaryWayAnswersFromOneProcessWideReading() throws {
+    // The WIRING, and it is a separate fact from the two above: a cache that
+    // memoises perfectly and is rebuilt inside `PrivilegedHelperClient()` caches
+    // nothing at all. `PreferencesView` builds one on a stored property and
+    // `ServingModel` holds another, so a per-instance cache would leave the
+    // window paying the COLD read — 5.39 ms measured, ~7x a warm one — on every
+    // open.
+    //
+    // Named bug: `public init() { self.init(signature: RunningSignature(...)) }`.
+    // Both checks above stay green over it, because each hands in an instance of
+    // its own; only the shared one can see this.
+    //
+    // `== 1` and not `>= 1`, and it holds whatever else ran first: a shared cache
+    // reads once for the life of the process however many checks asked, and a
+    // per-instance one never touches `shared`, so it reads 0. An `availability()`
+    // that skipped the cache and called `runningTeamIdentifier()` directly reads
+    // 0 as well.
+    _ = PrivilegedHelperClient().availability()
+    _ = PrivilegedHelperClient().availability()
+
+    #expect(RunningSignature.shared.readCount == 1, """
+        the process-wide signature reading was made \
+        \(RunningSignature.shared.readCount) times across two clients built the \
+        ordinary way
+        """)
+}
+
 // MARK: - What the button says, before and after a click
 
 @Test func theArmedStatusCarriesTheGRANTEDHoldAndNotTheRequestedOne() throws {
