@@ -181,12 +181,23 @@ extension SMAppService: HelperRegistering {
 /// file that composes the stale-helper advisory — so `ServingModel` cannot ask
 /// macOS the question and the answer has to arrive through a type it may hold.
 ///
-/// It is also the only route a check has to the `true` side. `availability()`
-/// reads THIS binary's signature, and under `swift test` the runner is
-/// linker-signed ad-hoc and names no team —
+/// **It was the only route a check had to the `true` side, and since issue #71i
+/// it is not.** `availability()` reads THIS binary's signature, and under
+/// `swift test` the runner is linker-signed ad-hoc and names no team —
 /// `theRunningBuildReadsItsOwnSignatureRatherThanAssumingOne` measures exactly
-/// that — so no arrangement of files in this repository produces a registered
-/// helper for the shipping implementation to report.
+/// that — so the shipping `registeredHelperIsActive()` closed its gate one line
+/// in and could report nothing but `false`. `PrivilegedHelperClient`'s `daemon`
+/// seam now drives that body directly, which is what
+/// `theRegistrationStateIsAskedAfreshOnEveryCallUnlikeTheSignature` needs: the
+/// rule that the registration is never remembered has no consequence to observe
+/// except the questions macOS was asked.
+///
+/// What is still out of reach is macOS itself. No check in this package asks
+/// `SMAppService` about a real job, because a registered daemon needs a
+/// code-signed bundle and an approval only the user can grant, and taking that
+/// approval away again means `sfltool resetbtm`. This protocol remains what
+/// `ServingModel` holds, and that is a boundary decision rather than a testing
+/// one: the file that composes the advisory may not name `SMAppService`.
 public protocol RegisteredHelperReporting: Sendable {
     /// `true` only while macOS reports this build's daemon as enabled.
     func registeredHelperIsActive() -> Bool
@@ -216,8 +227,12 @@ public protocol RegisteredHelperReporting: Sendable {
 /// that answer is precisely the one that changes while the app runs — the user
 /// enables the item in System Settings — and issue #71c exists because a stale
 /// reading of it tells them to `sudo`-install a legacy binary that is playing no
-/// part in the hold. `armingThroughTheHelperClearsTheStaleAdvisoryOnTheNextRefresh`
-/// holds that half.
+/// part in the hold.
+/// `theRegistrationStateIsAskedAfreshOnEveryCallUnlikeTheSignature` holds that
+/// half AT THIS LAYER, which is the only place it can be held: issue #71i exists
+/// because `armingThroughTheHelperClearsTheStaleAdvisoryOnTheNextRefresh` drives
+/// the `RegisteredHelperReporting` seam ONE LAYER UP, and stays green over a
+/// cache added inside `registeredHelperIsActive()` itself.
 ///
 /// A class, and shared, because the fact is a property of the PROCESS and not of
 /// any one client: `PreferencesView` builds a `PrivilegedHelperClient` on a
@@ -322,16 +337,48 @@ public struct PrivilegedHelperClient: Sendable, RegisteredHelperReporting {
     /// count the reads it did not make.
     let signature: RunningSignature
 
+    /// Where the answer to "is this build's daemon registered" comes from.
+    ///
+    /// **A closure returning the service, and NOT a stored service, because the
+    /// asymmetry with `signature` above is the point.** Holding one
+    /// `SMAppService` would be equally fresh — `.status` asks macOS every time
+    /// it is read — but it would put a remembered object beside a remembered
+    /// reading, in a file whose next reader has just been shown a cache. What
+    /// this spells instead is: ask again, every time.
+    ///
+    /// It is also the seam. `registeredHelperIsActive()`'s body was unreachable
+    /// to every check in this package before it existed — the `swift test`
+    /// runner names no team, so `availability()` closed the gate one line in —
+    /// and the rule that the answer is never remembered has no observable
+    /// consequence except the questions that were asked.
+    ///
+    /// **It reaches the READ and deliberately not `register()`**, which spells
+    /// `SMAppService.daemon(plistName:)` itself two methods below. The
+    /// duplication is the cheaper risk: both spellings name the same
+    /// `PrivilegedHelperIdentity.daemonPlistName` constant, so they cannot drift
+    /// apart over WHICH job they mean, while an injectable `register()` would be
+    /// a way to hand the one method that installs a root daemon a service of
+    /// somebody else's choosing. It would also buy no check — driving it needs a
+    /// double that either answers `.enabled` and proves nothing, or lets the
+    /// `swift test` runner attempt a real registration against the user's own
+    /// machine. `outcome(ofRegistering:)` is already the seam for what a click
+    /// SAYS, and it takes the service as a plain argument.
+    let daemon: @Sendable () -> any HelperRegistering
+
     /// Shares the process-wide reading, which is the only correct default.
     ///
     /// Every caller in the app layer builds one this way, and several build one
     /// per use — so a fresh cache here would be no cache at all.
     public init() {
-        self.signature = .shared
+        self.init(signature: .shared)
     }
 
-    init(signature: RunningSignature) {
+    init(signature: RunningSignature,
+         daemon: @escaping @Sendable () -> any HelperRegistering = {
+             SMAppService.daemon(plistName: PrivilegedHelperIdentity.daemonPlistName)
+         }) {
         self.signature = signature
+        self.daemon = daemon
     }
 
     /// The team identifier of the running code, read off the signature.
@@ -402,10 +449,16 @@ public struct PrivilegedHelperClient: Sendable, RegisteredHelperReporting {
     /// moment the user enables the item in System Settings — and issue #71c
     /// exists because a stale reading of it tells them to `sudo`-install a
     /// legacy binary that is playing no part in the hold.
+    ///
+    /// That half is now ENFORCED and not merely written down (issue #71i).
+    /// `theRegistrationStateIsAskedAfreshOnEveryCallUnlikeTheSignature` counts
+    /// the questions this puts to macOS and
+    /// `aHelperEnabledWhileTheAppRunsIsReportedWithoutARelaunch` moves the
+    /// registration between two calls, both through `daemon`. A rule the next
+    /// reader has to remember is the shape of defect this branch exists to fix.
     public func registeredHelperIsActive() -> Bool {
         guard availability() == .registrable else { return false }
-        return SMAppService.daemon(plistName: PrivilegedHelperIdentity.daemonPlistName)
-            .registrationState == .enabled
+        return daemon().registrationState == .enabled
     }
 
     /// Asks macOS to install the helper, and answers with what it did.
