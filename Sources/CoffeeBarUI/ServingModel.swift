@@ -665,8 +665,32 @@ public final class ServingModel {
     /// composes the sentence from a state, the other reports the state THIS
     /// model measured. The argument labels differ, so no call site is ambiguous,
     /// and `LidClosedPanel_test.swift` pins the static by name.
+    /// **Silent while the registered helper is the one running lid-closed mode
+    /// (issue #71c), and that gate is HERE rather than in the static above.**
+    /// The static composes a sentence from a state and stays a pure function of
+    /// the two things it is given; this is where the model reports what it
+    /// measured, and the registration is one of the things it measured. Measured
+    /// on 2026-08-17: a signed build whose helper had just granted the hold over
+    /// XPC was told lid-closed mode was running an older root binary, and to
+    /// `install(1)` over it — both false, and following the advice puts back the
+    /// manual root binary issue #71 exists to delete. The legacy file at
+    /// `privilegedProbePath` really was present and really was a different
+    /// build, which is all `PrivilegedHelper.state` can see; it plays no part in
+    /// a hold the registered helper is holding.
+    ///
+    /// **The whole advisory and not the `.stale` case alone.** `.unverifiable`
+    /// speaks about the same file, and on a Mac the registered helper is running
+    /// "reinstall the app" is advice about a file that is not in play. Silencing
+    /// one and not the other trades one wrong paragraph for another.
+    ///
+    /// **Nothing else about it changes.** On an unsigned build, and on a signed
+    /// one whose owner has never armed through the button, the `sudo` route is
+    /// the only route there is and every word of the sentence is what it was —
+    /// `withoutARegisteredHelperTheStaleAdvisoryIsWordForWordWhatItWas` holds
+    /// the whole string against a literal.
     public func staleHelperAdvisory(probeAt path: String) -> String? {
-        helperState.flatMap { Self.staleHelperAdvisory(state: $0, probeAt: path) }
+        guard !registeredHelperIsActive else { return nil }
+        return helperState.flatMap { Self.staleHelperAdvisory(state: $0, probeAt: path) }
     }
 
     /// `path` as exactly ONE operand of a shell command line.
