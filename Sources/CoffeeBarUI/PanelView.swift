@@ -401,13 +401,6 @@ public struct PanelView: View {
                 Task { await model.checkForUpdates() }
             }
 
-            // One line, not an About sheet. The panel is 260pt wide and already
-            // dense, and the DMG now reaches people who never saw the
-            // repository: this is the only route from the product to its terms.
-            Link(PanelView.legalLine(), destination: PanelView.legalURL())
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
             // The route to the Preferences window, and the only one this panel
             // offers. Display, Battery floor and Focus are THERE now, so this
             // link is the only way to reach three settings the panel used to
@@ -485,6 +478,28 @@ public struct PanelView: View {
 
             Button("Quit coffee-bar") { NSApplication.shared.terminate(nil) }
                 .keyboardShortcut("q")
+
+            // One line, not an About sheet. The panel is 260pt wide and already
+            // dense, and the DMG now reaches people who never saw the
+            // repository: this is the only route from the product to its terms.
+            //
+            // LAST, under the three controls rather than wedged between them.
+            // It sat between "Check now" and "Preferences…" until now, which
+            // split the controls into two groups with a sentence in the gap:
+            // a user scanning this column for Quit read past a licence to reach
+            // it. Nothing on this line is a control, and nothing that is not a
+            // control should interrupt the ones that are.
+            //
+            // `theLicenceLineIsDrawnUnderTheFooterControlsAndNotBetweenThem`
+            // holds that order and reads this file COMMENT-STRIPPED, so the
+            // paragraph you are reading cannot satisfy it. Moving the line back
+            // above the buttons turns it red, and
+            // `theLicenceLineIsRenderedAsUnconditionallyAsTheControlsItSitsUnder`
+            // holds the other half: last is not last if it is wrapped in a
+            // condition, or dropped inside the button above it.
+            Link(PanelView.legalLine(), destination: PanelView.legalURL())
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .padding(14)
         .frame(width: 260)
