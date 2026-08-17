@@ -35,18 +35,35 @@ import Testing
 ///   across a plain paragraph wrap.
 ///
 /// TWO separate mechanisms deliver that, and they are worth telling apart
-/// because the obvious one is not the one doing the work.
+/// because they cover DIFFERENT WRAP POSITIONS. Neither is redundant.
 ///
-/// The DETECTION comes from the gap between the tokens being `\W`-tolerant.
-/// `upToSixWords` steps over a newline, a `//` and a `>` alike, because none of
-/// them is a word character. Measured 2026-08-17, by making
-/// `consentClaimProse(_:)` line-local: BOTH wrapped fixtures were still found.
-/// So the normaliser is not what makes a wrapped claim visible, and an earlier
-/// draft of this comment saying it was, was wrong.
+/// This paragraph is on its third draft and the first two were both wrong, in
+/// opposite directions: one named the normaliser as what makes a wrapped claim
+/// visible, the next corrected it by naming the gap instead. Each was general
+/// where the truth is positional. So the split below is MEASURED from both
+/// sides, and each half names the experiment that produced it.
 ///
-/// The NORMALISER earns its place somewhere quieter: it fixes the SPAN this
-/// scan reports, and therefore the span `trueStatementsThatMayKeepThisPhrasing`
-/// is compared against. Without it, the day somebody re-wraps `SECURITY.md`'s
+/// **A wrap BETWEEN the tokens is caught by the GAP.** `upToSixWords` is
+/// `\W`-tolerant, so it steps over a newline, a `//` and a `>` alike, because
+/// none of them is a word character. Measured 2026-08-17 by deleting the
+/// marker-stripping from `consentClaimProse(_:)`: the `main.swift` fixture was
+/// still found, as `macOS presenting // its own authorisation prompt`. The
+/// claim stayed VISIBLE and only the reported span grew the `//`.
+///
+/// **A wrap INSIDE the noun phrase is caught only by the NORMALISER.**
+/// `authorisationNoun` carries its own `[\s\-]+` between the qualifier and the
+/// noun, and that character class cannot step over a `///`. Measured 2026-08-17
+/// by planting a claim in `Sources/CoffeeBarPower/ProbeVerb.swift` that wraps
+/// between `authorisation` and `sheet`, with a `///` in the gap: caught with
+/// marker-stripping intact, reported as `presents its own authorisation sheet`,
+/// and MISSED entirely without it — zero offenders, the scan green. That
+/// sentence names no OS subject, so `operatingSystemSubject` never fires and no
+/// other pattern reaches it: for that shape the normaliser is the whole of the
+/// detection, not a tidier span on a claim the gap already caught.
+///
+/// The normaliser also does a second, quieter job: it fixes the SPAN this scan
+/// reports, and therefore the span `trueStatementsThatMayKeepThisPhrasing` is
+/// compared against. Without it, the day somebody re-wraps `SECURITY.md`'s
 /// true sentence across its comma, the matched span grows a newline, stops
 /// equalling its allowlist entry, and this guard goes red on a sentence that is
 /// true. That is why `aClaimSplitAcrossALineBreakIsStillFound()` asserts the
@@ -82,10 +99,14 @@ import Testing
 /// file, not to a line, not to a surrounding window. Two consequences, both
 /// deliberate:
 ///
-/// - A path-keyed exemption would excuse every future sentence in that file.
-///   These three strings are true wherever they appear, because each states
-///   that a prompt is absent, so binding them to a path would buy brittleness
-///   and no safety.
+/// - A path-keyed exemption would excuse every future sentence in that file,
+///   so the key is the span instead. That is a choice for SIMPLICITY, and not
+///   because the strings are safe to exempt wherever they appear. They are not.
+///   An exempt span can be embedded in a longer sentence that asserts the very
+///   thing the span denies, and the sentence then goes through — measured, with
+///   a working example, at limit 5 below. Span-keying buys less than it looks
+///   like it buys, and the honest reason to keep it is that the alternatives
+///   measured worse.
 /// - The comparison is CASE SENSITIVE and whole-span. A re-cased or re-worded
 ///   near-miss is not exempt and turns this red. That is the intent: the
 ///   allowlist names the sentences that exist, not a family they belong to.
@@ -111,6 +132,42 @@ import Testing
 /// 4. **Untracked and binary files.** The corpus is `trackedTextFiles()`. An
 ///    untracked scratch file is nobody's problem, and a file the scan cannot
 ///    read as UTF-8 is reported rather than skipped in silence.
+/// 5. **A false sentence built around an exempt span.** The allowlist compares
+///    the MATCHED SPAN and nothing around it, so a sentence that quotes a true
+///    negated clause and then contradicts it walks straight through. The shape
+///    to watch for in review: a true negated clause quoted inside a sentence
+///    whose surrounding claim is false. Measured 2026-08-17 — planting "The
+///    approval prompt macOS does not show for the `sudo` path is the one it
+///    shows when you register the helper" in `docs/BUILDING.md` left the whole
+///    suite GREEN, because the only spans it matches are two of the three
+///    exempted ones. Attribution was proven rather than assumed: with
+///    `trueStatementsThatMayKeepThisPhrasing` emptied, that same sentence
+///    reports two offenders, so it is the exemption laundering the claim and
+///    not a gap in the patterns. Tightening was considered and rejected on
+///    measurement, not taste. Requiring the span to be a whole clause would
+///    turn this guard RED on `SECURITY.md`'s own true sentence, where "shows no
+///    authorization prompt" sits mid-clause between "The app" and a comma.
+///    Keying the exemption to a (path, span) pair leaves the identical trick
+///    available inside the two files that own the exemptions, which is a
+///    half-fix bought with a signature change in three tests. A documented hole
+///    beats a hole that looks patched.
+/// 6. **Near-synonyms for the noun.** `dialogue`, `alert`, `window`, `panel`,
+///    `modal` and `popup` are in neither `authorisationNoun` nor
+///    `bareConsentNoun`, and `\bdialog\b` cannot match `dialogue` because `u`
+///    is a word character where the boundary has to be. Measured 2026-08-17:
+///    "macOS displays an authorisation dialogue naming the app, and shows a
+///    consent window you must accept", planted in `docs/BUILDING.md`, is NOT
+///    caught.
+///
+///    Left open on purpose. An independent census during review of #71 ran a
+///    deliberately wider net over this same tree — those nouns, more verbs,
+///    ten-word gaps — and reported 189 candidate spans across 47 files with no
+///    fourteenth site among them: ordinary SwiftUI `window`/`panel`/`sheet`
+///    prose, agent-session transcripts saying "permission prompt" about a tool,
+///    and this guard's own fixtures. Widening trades a contrived bypass for a
+///    steady stream of false positives on prose that is fine, and a guard that
+///    cries wolf gets deleted. The noun list stays at the words the thirteen
+///    were actually written with.
 
 // MARK: - Reading prose with the author's line breaks taken out
 
