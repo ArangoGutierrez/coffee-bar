@@ -2031,7 +2031,13 @@ public final class ServingModel {
         }
 
         do {
-            if try sleepHold.sleepIsDisabled() {
+            // AWAITED, not merely called. The read forks `/usr/bin/pmset` and
+            // waits for it, and this body runs on the main actor: a synchronous
+            // read here freezes the window for as long as the child takes,
+            // bounded at 30 seconds rather than at the 10 ms it usually is. The
+            // `await` releases the actor and the ORDER survives it untouched,
+            // because the unregister below cannot start until this has answered.
+            if try await sleepHold.sleepIsDisabled() {
                 return .refused(Self.sleepStillHeldRefusal)
             }
         } catch {

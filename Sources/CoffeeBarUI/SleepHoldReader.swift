@@ -27,7 +27,19 @@ public protocol SleepHoldReporting: Sendable {
     /// that puts this setting back, and "I could not find out" is not evidence
     /// the machine is free. `PmsetSleepDisabledController.isEnabled()` refuses
     /// the same collapse one layer down, for the same reason.
-    func sleepIsDisabled() throws -> Bool
+    ///
+    /// **ASYNC because the only real answer comes from a subprocess.** The sole
+    /// caller is `ServingModel.removeRegisteredHelper()`, and `ServingModel` is
+    /// `@MainActor`: a synchronous requirement here forces the fork-and-wait
+    /// onto the thread that draws the window, for as long as
+    /// `CommandRunning.defaultTimeout` allows. Stating it on the PROTOCOL rather
+    /// than offloading at the call site puts the obligation where the next
+    /// conformer and the next caller both have to meet it, and the `await` the
+    /// compiler then demands is what keeps the removal's order intact: the
+    /// unregister cannot begin until this has answered.
+    /// `theSleepFlagIsReadOffTheMainActorRatherThanBlockingIt` measures it on
+    /// the shipped reader.
+    func sleepIsDisabled() async throws -> Bool
 }
 
 /// Reads the flag by asking `pmset`, through the power layer's controller.
@@ -53,7 +65,27 @@ public struct PmsetSleepHoldReader: SleepHoldReporting {
         self.runner = runner
     }
 
-    public func sleepIsDisabled() throws -> Bool {
-        try PmsetSleepDisabledController(runner: runner).isEnabled()
+    /// **A THREAD OF ITS OWN, and not `Task.detached`.** `CommandRunning.run`
+    /// blocks its caller until the child has exited and both drain threads have
+    /// read to EOF, bounded at 30 seconds. Swift's cooperative pool is sized
+    /// from the core count, so parking one of its threads on a subprocess is
+    /// the hazard `SystemCommandRunner.drain` already documents against
+    /// `DispatchQueue.global()` — measured there as a 3-core runner frozen for
+    /// 30 s by six process-spawning callers. `Thread.detachNewThread` blocks
+    /// nothing that anything else needs, and this runs once per click on a
+    /// button, not on a timer.
+    ///
+    /// The continuation is resumed exactly once, on whichever way out the read
+    /// takes: `Result` captures the throw rather than letting it escape a
+    /// closure that has no other route back.
+    public func sleepIsDisabled() async throws -> Bool {
+        let runner = self.runner
+        return try await withCheckedThrowingContinuation { continuation in
+            Thread.detachNewThread {
+                continuation.resume(with: Result {
+                    try PmsetSleepDisabledController(runner: runner).isEnabled()
+                })
+            }
+        }
     }
 }
