@@ -76,10 +76,13 @@ import CoffeeBarTestSupport
 ///    are recognised. Reading the team out of a fixture file, or assembling the
 ///    string, defeats this.
 /// 3. **A future entry point spelled differently.** The calls recognised are
-///    `.register()`, `.arm(seconds:` and the direct
+///    `.register()`, `.arm(seconds:`, `.unregisterHelper()` and the direct
 ///    `SMAppService.daemon(`/`.agent(`/`.loginItem(` constructions. A new method
 ///    on `PrivilegedHelperClient` that reaches the real service under another
 ///    name is unguarded until it is added to `registrationReachingCall`.
+///    `ServingModel.removeRegisteredHelper()` is deliberately NOT on that list:
+///    it reaches the client only through the `HelperUnregistering` seam, whose
+///    default is spelled in `ServingModel.swift` and not in any test.
 /// 4. **Text inside a string literal.** The lexer strips comments and KEEPS
 ///    string literals on purpose, so a fixture STRING containing
 ///    `client.register()` beside a real-team signature reads as a real call and
@@ -128,6 +131,17 @@ private let realTeamSignatureSource = [
 private let registrationReachingCall = [
     "\\.\\s*register\\s*\\(\\s*\\)",
     "\\.\\s*arm\\s*\\(\\s*seconds\\s*:",
+    // Issue #71's removal path, and it is the same hazard pointed the other
+    // way. `unregisterHelper()` opens with the same `availability()` guard and,
+    // past it, reaches the `daemon` seam whose DEFAULT is the real
+    // `SMAppService`. A test that hands in the real team and takes that default
+    // unregisters the maintainer's helper for real, which costs a manual
+    // approval cycle in System Settings to undo.
+    //
+    // The leading `.` does the same work it does above: two files declare
+    // `func unregisterHelper() throws` on a `HelperUnregistering` double, and a
+    // declaration is not a call.
+    "\\.\\s*unregisterHelper\\s*\\(\\s*\\)",
 ]
 
 /// Building a REAL `SMAppService` inside a test, which is an offence on its own.
@@ -473,4 +487,58 @@ func realRegistrationHazards(in source: String) -> [String] {
         """
     #expect(realRegistrationHazards(in: theClosedGate).isEmpty,
             "a stub signature yielding nil was reported; that build cannot register anything")
+}
+
+@Test func theRemovalEntryPointIsGuardedTheSameWayTheRegistrationOneIs() {
+    // Issue #71's removal path, added to `registrationReachingCall` for the
+    // reason limit 3 above predicted: a new method on `PrivilegedHelperClient`
+    // that reaches the real service is unguarded until it is listed.
+    //
+    // `unregisterHelper()` is worse than `register()` in one respect and better
+    // in another. Better: it installs nothing. Worse: what it takes away is an
+    // approval the maintainer granted by hand in System Settings, and getting it
+    // back is a manual cycle there — the same cost `sfltool resetbtm` carries,
+    // arrived at without the reset.
+    let theDangerousRemoval = """
+        @Test func removingTheHelperTellsTheUserWhatHappened() throws {
+            let client = PrivilegedHelperClient(
+                signature: RunningSignature { PrivilegedHelperIdentity.teamIdentifier })
+            try client.unregisterHelper()
+        }
+        """
+    let hazards = realRegistrationHazards(in: theDangerousRemoval)
+    #expect(hazards.count == 1,
+            "the removal route was reported \(hazards.count) time(s): \(hazards)")
+    #expect(hazards.first?.hasPrefix("removingTheHelperTellsTheUserWhatHappened:") == true,
+            "the report does not name the offending function: \(hazards)")
+
+    // A double DECLARING the seam method. The leading `.` in the pattern is what
+    // holds these apart, exactly as it does for `register()`. Named bug:
+    // dropping it turns every `HelperUnregistering` double in the suite into an
+    // offender, and the guard gets deleted by the first person it annoys.
+    let theDoubleThatDeclaresIt = """
+        private final class FakeHelper: RegisteredHelperReporting, HelperUnregistering {
+            func registeredHelperIsActive() -> Bool { true }
+            func unregisterHelper() throws {}
+        }
+        @Test func theHelperIsUnregisteredOnlyAfterTheHoldIsReleased() {
+            let helper = FakeHelper()
+            let model = ServingModel(registration: helper, removal: helper)
+            #expect(model.removeRegisteredHelper() == .removed)
+        }
+        """
+    #expect(realRegistrationHazards(in: theDoubleThatDeclaresIt).isEmpty,
+            "a double DECLARING unregisterHelper() was read as CALLING it")
+
+    // Driving the CLOSED gate, which is what `HelperRemoval_test.swift` really
+    // does and which is SAFE: a build naming no team never reaches the service.
+    let theClosedRemovalGate = """
+        @Test func anUnsignableBuildNeverAsksMacOSToUnregisterAnything() {
+            let client = PrivilegedHelperClient(signature: RunningSignature { nil },
+                                                daemon: { RecordingService() })
+            #expect(throws: (any Error).self) { try client.unregisterHelper() }
+        }
+        """
+    #expect(realRegistrationHazards(in: theClosedRemovalGate).isEmpty,
+            "the closed-gate removal check was reported; a nil team reaches nothing")
 }

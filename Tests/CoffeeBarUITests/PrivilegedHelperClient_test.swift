@@ -295,6 +295,17 @@ private final class CountingRegistration: HelperRegistering, @unchecked Sendable
             listed under Login Items & Extensions having clicked nothing
             """)
     }
+
+    /// A read must not unregister either, and this direction is the worse of
+    /// the two. Registering a daemon the user did not ask for is a nag they can
+    /// undo; taking one off on a 30-second timer removes the process that is
+    /// holding lid-closed mode, mid-hold, on a Mac with the lid shut.
+    func unregister() throws {
+        Issue.record("""
+            a read on the refresh timer unregistered the daemon: whatever hold \
+            it was supervising is now held by nothing
+            """)
+    }
 }
 
 @Test func theRegistrationStateIsAskedAfreshOnEveryCallUnlikeTheSignature() {
