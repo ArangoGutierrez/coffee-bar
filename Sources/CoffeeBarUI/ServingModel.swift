@@ -937,17 +937,35 @@ public final class ServingModel {
     /// of the things it measured.
     ///
     /// **What went wrong, observed on signed 0.3.0-rc2 with the helper
-    /// registered.** Every clause of the paragraph is false on that machine, and
-    /// each in its own direction: it tells the user to `install(1)` the probe by
-    /// hand, which is the manual path issue #71 exists to delete; to arm it
-    /// themselves, which the button below the paragraph does; and that
-    /// coffee-bar cannot show them whether it is armed, which the panel was
-    /// disproving as they read it. The last is the sharpest — the app denying it
-    /// can do something the user can watch it doing.
+    /// registered.** Two of its three clauses are flatly false there. It tells
+    /// the user to `install(1)` the probe by hand, which is the manual path
+    /// issue #71 exists to delete, and to arm it themselves, which the button
+    /// below the paragraph has already done. Following the first puts the manual
+    /// root binary back, so this is work that user must not do rather than work
+    /// they merely need not do.
     ///
-    /// **`nil` rather than a shortened sentence.** Nothing in it survives on
-    /// that machine: the install, the arming and the limitation are the whole
-    /// paragraph. `HelperArmOutcome.statusLine` is what speaks on that surface
+    /// **The third clause is OVER-BROAD rather than false, and the difference is
+    /// worth keeping straight.** `HelperArmOutcome.statusLine` does report what
+    /// a click armed — "Lid-closed mode is armed for N. coffee-bar's helper is
+    /// supervising it and will put the setting back." — so "coffee-bar cannot
+    /// show you whether it is armed" is untrue at that moment. It is true again
+    /// a moment later: that line is `@State` in `PreferencesView`, `nil` until a
+    /// click and gone on the next launch, and `LidClosedControl` carries exactly
+    /// two verbs, `arm` and `revert`, with no status verb to ask. This app still
+    /// cannot read the root-owned journal, so `lidClosedReportCommand` remains
+    /// the way to ask at an arbitrary moment. The LIMITATION survives; the
+    /// blanket phrasing does not.
+    ///
+    /// Nothing in the Serving panel bears on this either way. Issue #56 took
+    /// lid-closed mode out of that surface entirely, and the boundary guard in
+    /// `AppLayerBoundary_test.swift` keeps it out, so no argument here may rest
+    /// on what the panel shows. (Named in prose rather than cited as a symbol
+    /// deliberately: `everyLongIdentifierACommentCitesExistsSomewhereInTheTree`
+    /// cannot resolve that test's name — see the note on its own declaration.)
+    ///
+    /// **`nil` and not a shortened sentence.** The install and the arming are
+    /// the paragraph's spine and both have to go; what is left is a caveat with
+    /// no subject. `HelperArmOutcome.statusLine` is what speaks on that surface
     /// instead, and it reports the hold this app actually obtained.
     ///
     /// **Nothing else about it changes**, which is the half that keeps this from

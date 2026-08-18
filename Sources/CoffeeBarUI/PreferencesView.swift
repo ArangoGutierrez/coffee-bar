@@ -248,10 +248,16 @@ public struct PreferencesView: View {
                 // for a reason that stopped being true. The claim was that
                 // there is no state to condition it on; issue #71 is that
                 // state. On a Mac whose hold the registered helper is holding
-                // this paragraph names an install the button replaced, an arm
-                // command the button replaced, and — the sharpest — that
-                // "coffee-bar cannot show you whether it is armed", which it
-                // can and does, a few rows up.
+                // this paragraph names an install the button replaced and an arm
+                // command the button replaced — work that user must not do,
+                // since following the install puts the manual root binary back.
+                // Its third clause is over-broad rather than false: the status
+                // line BELOW reports what a click armed, but only until the next
+                // launch, and this app still cannot read the root-owned journal
+                // to answer the question later.
+                // `ServingModel.lidClosedSummary(probeAt:holdingFor:)` carries
+                // that argument in full, including why nothing in the Serving
+                // panel bears on it.
                 //
                 // The GATE IS IN THE MODEL and is not written here, exactly as
                 // `staleHelperAdvisory` below is. `registeredHelperIsActive` is

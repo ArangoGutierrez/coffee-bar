@@ -2393,6 +2393,20 @@ private func httpsAddresses(in code: String) -> [String] {
     // END attention-list scroll tripwire.
 }
 
+// THIS TEST CANNOT BE CITED BY NAME FROM A `///` COMMENT IN `Sources`, and the
+// reason is a defect in a neighbour rather than anything about this check.
+// `everyLongIdentifierACommentCitesExistsSomewhereInTheTree` resolves a citation
+// against every declaration in the tree, stripped by a local
+// `codeWithoutComments` in `ProcGovernor_test.swift` that tracks `//` and `/* */`
+// but NOT string literals. The lexer fixture table earlier in THIS file contains
+// `"let glob = \"/*\""` — a `/*` inside a string — so that stripper opens a block
+// comment it never closes and swallows every declaration below it, this one
+// included. Measured by replaying the stripper over this file: the names
+// declared at lines 805 to 1722 survive and everything after is gone.
+//
+// So a comment in `Sources` naming this test goes red with "declared nowhere".
+// Name it in prose until that stripper learns string literals; the shipping
+// `swiftCodeWithoutComments` in `CoffeeBarTestSupport` already does.
 @Test func theLidClosedSummaryIsInThePreferencesWindowAndNotInThePanel() throws {
     // TWO SURFACES, and the negative half is the point of issue #56.
     //
@@ -2446,9 +2460,8 @@ private func httpsAddresses(in code: String) -> [String] {
     // on the grounds that "the sentence depends on no instance state", which
     // held until issue #71 put an arm button under it: on a Mac whose hold the
     // REGISTERED helper is holding, the paragraph names a manual install that
-    // exists to be deleted, an arm command the button has replaced, and a
-    // limitation the window disproves a few rows down. The state that says so is
-    // the one thing an instance has and a static cannot read.
+    // exists to be deleted and an arm command the button has replaced. The state
+    // that says so is the one thing an instance has and a static cannot read.
     //
     // `ServingModel` keeps the static — `LidClosedPanel_test.swift` holds the
     // wording against it and the model composes its answer FROM it — and the

@@ -2890,10 +2890,13 @@ private final class StubRegisteredHelper: RegisteredHelperReporting, @unchecked 
 // registered. Two paragraphs render above the arm button and both describe the
 // product as it was before issue #71 gave that button a mechanism:
 //
-//   `lidClosedSummary` tells the user to `sudo install` the probe, to arm it
-//   themselves with `sudo … arm --ttl`, and — the sharpest of the three — that
-//   coffee-bar CANNOT show whether it is armed, so run `sudo … report` to find
-//   out. The window is showing them the hold as they read it.
+//   `lidClosedSummary` tells the user to `sudo install` the probe and to arm it
+//   themselves with `sudo … arm --ttl`. Both are work a user with a registered
+//   helper must not do — the install puts the manual root binary back — and the
+//   button below the paragraph has already done the arming. Its third clause,
+//   that coffee-bar CANNOT show whether it is armed, is over-broad rather than
+//   false: `HelperArmOutcome.statusLine` reports what a click armed, and the app
+//   still cannot read the root-owned journal to answer at an arbitrary moment.
 //
 //   `powerScopeNote` says a lid-closed hold "is armed by the root command
 //   below". It is armed by the button below.
@@ -2906,10 +2909,9 @@ private final class StubRegisteredHelper: RegisteredHelperReporting, @unchecked 
 @MainActor
 @Test func theLidClosedSummaryIsSilentWhileTheRegisteredHelperIsTheOneHoldingTheMachine() {
     // Named bug this catches: the paragraph rendered on a Mac whose hold the
-    // registered helper is already holding. Every clause is then wrong in a
-    // different direction — it names a manual install issue #71 exists to
-    // delete, an arm command the button has replaced, and a limitation the
-    // window disproves a few rows further down.
+    // registered helper is already holding. It names a manual install issue #71
+    // exists to delete and an arm command the button has replaced, and the first
+    // of those puts the manual root binary back if the user follows it.
     //
     // The gate is the same seam #71c uses and is read the same way: the model
     // asks `registration` on every `refresh()` and this reads what it stored.
@@ -2929,9 +2931,9 @@ private final class StubRegisteredHelper: RegisteredHelperReporting, @unchecked 
     #expect(model.lidClosedSummary(probeAt: installedElsewhere,
                                    holdingFor: 4 * 60 * 60) == nil, """
         the window told a user whose hold the REGISTERED helper is holding to \
-        install a root probe by hand, to arm it themselves, and that coffee-bar \
-        cannot show them whether it is armed — while the button below and the \
-        panel were showing them exactly that:
+        install a root probe by hand and to arm it themselves, with the button \
+        that had already armed it directly below — and the install it names puts \
+        back the manual root binary issue #71 exists to delete:
           \(model.lidClosedSummary(probeAt: installedElsewhere, holdingFor: 4 * 60 * 60) ?? "")
         """)
 }
