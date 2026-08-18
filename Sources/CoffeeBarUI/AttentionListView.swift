@@ -11,9 +11,10 @@ import CoffeeBarCore
 /// disagree with it. This draws what it is handed.
 ///
 /// `Text(verbatim:)` for every session-derived string, deliberately. Design §7
-/// calls that text attacker-influenced — `repoName` comes off a `cwd` on the
-/// wire and `lastMessage` off a permission `reason` — and `verbatim` renders it
-/// as characters rather than letting `Text` interpret it as markdown.
+/// calls that text attacker-influenced — the name a row draws is derived from a
+/// `cwd` on the wire and `lastMessage` comes off a permission `reason` — and
+/// `verbatim` renders it as characters rather than letting `Text` interpret it
+/// as markdown.
 struct AttentionListView: View {
     let sessions: [AgentSession]
 
@@ -102,6 +103,14 @@ struct AttentionListView: View {
         + CGFloat(visibleRowCount - 1) * rowSpacing
 
     var body: some View {
+        // One name per row, decided in `CoffeeBarCore` where a check can read
+        // it — M1 design §5.4 forbids asserting on rendered AppKit text — and
+        // derived for the WHOLE list at once. Two sessions working in the same
+        // checkout draw the same name, and telling them apart needs to see both
+        // rows, which no per-row call can. This view still draws what it is
+        // handed.
+        let names = SessionLabel.rowNames(for: sessions)
+
         // The rows scroll inside a bounded container rather than growing the
         // panel, and that is the defect: with roughly twelve sessions waiting
         // the list ran past the bottom of the screen, taking the battery
@@ -127,10 +136,13 @@ struct AttentionListView: View {
                     ForEach(sessions) { session in
                         VStack(alignment: .leading, spacing: AttentionListView.lineSpacing) {
                             // The session id is the fallback because every
-                            // session has one; `repoName` is nil for an event
-                            // that carried no `cwd`, and a row with no name at
-                            // all would be a row the user cannot act on.
-                            Text(verbatim: session.repoName ?? session.sessionID)
+                            // session has one, and a row with no name at all
+                            // would be a row the user cannot act on. It drew
+                            // `repoName` here once — the basename of whatever
+                            // directory the session runs in, which is not the
+                            // repository name and was "release-v020" for a
+                            // worktree and "stayconnected" twice over.
+                            Text(verbatim: names[session.id] ?? session.sessionID)
                                 .font(.caption).bold()
 
                             // Read off the state rather than composed from free
