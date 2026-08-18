@@ -289,17 +289,42 @@ than quietly dropped.** Lid-closed mode installs a `LaunchDaemon` —
 promise does not change: coffee-bar ships no kernel extension and will not.
 
 The one that matters most is the one that does not change either. **coffee-bar
-never elevates its own privilege.** The root path in v0.2 is opt-in, and *you*
-are the one who takes it: you type `sudo coffee-bar-probe arm` in your own
-shell. The app shows no authorization prompt, installs no privileged helper of
-its own, and has no route to becoming root. It cannot elevate itself, and it
-cannot ask you to elevate it.
+never elevates its own privilege.** The app process never becomes root, in any
+version, and it never asks you for a password. What it can do, since v0.3, is
+ask *macOS* to install and run a separate job as root on your behalf, through
+`SMAppService`. macOS runs that job only after you have enabled it by hand, and
+the sections below set out what it may do and how each end authenticates the
+other.
 
-The menu bar app itself still holds only the unprivileged assertion. It cannot
-arm lid-closed mode, cannot install that daemon, and cannot revert one. It
-prints the command for you to run — the same posture it already takes with hook
-configuration, where it prints the snippet and refuses to write
-`~/.claude/settings.json` for you.
+**Two sentences that were true in v0.2 change in v0.3, and they are restated
+here rather than quietly dropped.** They read: "The app shows no authorization
+prompt, installs no privileged helper of its own, and has no route to becoming
+root." and "It cannot arm lid-closed mode, cannot install that daemon, and
+cannot revert one." On a Developer ID signed build the middle clause of the
+first is now false, and the whole of the second is: the app asks macOS to
+install `com.coffeebar.probehelper`, arming lid-closed mode is a button rather
+than a command you type, and taking the helper back off reverts the hold before
+it unregisters the job.
+
+**What did not change is the part that carries the security.** There is still no
+authorization prompt, and still no password, ever. A registration gets no modal:
+macOS refuses the first attempt outright and files the request under
+coffee-bar's name in System Settings › General › Login Items & Extensions, where
+*you* have to find the switch and turn it on. Until you do, nothing of
+coffee-bar's runs as root. The app still has no route to becoming root itself —
+`AuthorizationExecuteWithPrivileges` and `NSAppleScript "with administrator
+privileges"` would each take your password inside coffee-bar's own process, and
+`theAppLayerNeverReachesForPrivilegeEscalation` refuses them, and seven more
+names, for every file in the app layer. What changed is who collects the
+consent, not whether it is required.
+
+**The `sudo` route is not deprecated, and for many installs it is the only one.**
+A build that carries no team identifier registers nothing and is never offered
+the button — that is every Homebrew install, which compiles on your own machine
+by design, and anything built by `scripts/build-app.sh`. There the menu bar app
+holds only the unprivileged assertion and prints the command for you to run, the
+same posture it already takes with hook configuration, where it prints the
+snippet and refuses to write `~/.claude/settings.json` for you.
 
 You can see exactly what it holds, at any time, with:
 
