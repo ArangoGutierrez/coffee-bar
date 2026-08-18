@@ -2884,6 +2884,214 @@ private final class StubRegisteredHelper: RegisteredHelperReporting, @unchecked 
         """)
 }
 
+// MARK: - Issue #71k: the two paragraphs above the button
+
+// The defect, observed by the maintainer on signed 0.3.0-rc2 with the helper
+// registered. Two paragraphs render above the arm button and both describe the
+// product as it was before issue #71 gave that button a mechanism:
+//
+//   `lidClosedSummary` tells the user to `sudo install` the probe, to arm it
+//   themselves with `sudo … arm --ttl`, and — the sharpest of the three — that
+//   coffee-bar CANNOT show whether it is armed, so run `sudo … report` to find
+//   out. The window is showing them the hold as they read it.
+//
+//   `powerScopeNote` says a lid-closed hold "is armed by the root command
+//   below". It is armed by the button below.
+//
+// #71c silenced the stale ADVISORY and that silence does reach this window.
+// These are two OTHER strings, and nothing here asserted either against the
+// registered-helper world — which is how both stayed readable, as this file's
+// whole design intends, and went false anyway.
+
+@MainActor
+@Test func theLidClosedSummaryIsSilentWhileTheRegisteredHelperIsTheOneHoldingTheMachine() {
+    // Named bug this catches: the paragraph rendered on a Mac whose hold the
+    // registered helper is already holding. Every clause is then wrong in a
+    // different direction — it names a manual install issue #71 exists to
+    // delete, an arm command the button has replaced, and a limitation the
+    // window disproves a few rows further down.
+    //
+    // The gate is the same seam #71c uses and is read the same way: the model
+    // asks `registration` on every `refresh()` and this reads what it stored.
+    // A second reading here would agree with the first until it did not.
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth(),
+                             registration: StubRegisteredHelper(active: true),
+                             settings: FakeSettings())
+    model.refresh()
+
+    // The premise, pinned, for the reason the stale-advisory checks above pin
+    // theirs: without it a silence could be a model that never asked.
+    #expect(model.registeredHelperIsActive,
+            "precondition: the model asked whether the registered helper is active")
+
+    #expect(model.lidClosedSummary(probeAt: installedElsewhere,
+                                   holdingFor: 4 * 60 * 60) == nil, """
+        the window told a user whose hold the REGISTERED helper is holding to \
+        install a root probe by hand, to arm it themselves, and that coffee-bar \
+        cannot show them whether it is armed — while the button below and the \
+        panel were showing them exactly that:
+          \(model.lidClosedSummary(probeAt: installedElsewhere, holdingFor: 4 * 60 * 60) ?? "")
+        """)
+}
+
+@MainActor
+@Test func withoutARegisteredHelperTheLidClosedSummaryIsWordForWordWhatItWas() throws {
+    // The other half of the rule, and the half that keeps the fix from being a
+    // deletion. On an unsigned build, and on a signed one whose owner has never
+    // clicked the button, the `sudo` route is the only route to lid-closed mode
+    // and every clause of this paragraph is true.
+    //
+    // THE WHOLE PARAGRAPH against a literal, for the reason
+    // `withoutARegisteredHelperTheStaleAdvisoryIsWordForWordWhatItWas` gives:
+    // `cad2577` on this branch passed two `contains(...)` assertions over a
+    // message that named no action at all, because a substring check cannot see
+    // what was dropped around it. This goes red if a single word moves, which
+    // is the point — "unchanged, word for word" is the requirement.
+    //
+    // FOUR HOURS, which is neither `ProbeVerb.defaultTTLSeconds` nor the
+    // ceiling, so the literal below also fails a summary that ignores its own
+    // argument — the #74 defect, one indirection along.
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth(),
+                             registration: StubRegisteredHelper(active: false),
+                             settings: FakeSettings())
+    model.refresh()
+
+    #expect(model.registeredHelperIsActive == false,
+            "precondition: no registered helper on this machine")
+
+    let summary = try #require(model.lidClosedSummary(probeAt: installedElsewhere,
+                                                      holdingFor: 4 * 60 * 60), """
+        the fix silenced the paragraph on a machine that has no registered \
+        helper, so the only route this build has to lid-closed mode is now \
+        documented nowhere the user will look
+        """)
+    #expect(summary == """
+        Lid-closed mode needs root, so you install the probe where root can trust it \
+        with sudo install -o root -g wheel -m 755 \
+        /Volumes/Spare/CoffeeBar.app/Contents/MacOS/coffee-bar-probe \
+        /Library/PrivilegedHelperTools/coffee-bar-probe and arm it yourself with \
+        sudo /Library/PrivilegedHelperTools/coffee-bar-probe arm --ttl 14400, which \
+        holds for 4 hours. coffee-bar cannot show you whether it is armed — the \
+        journal belongs to root and this app runs as you — so run \
+        sudo /Library/PrivilegedHelperTools/coffee-bar-probe report to find out.
+        """, """
+        the paragraph a user without a registered helper reads has changed:
+          \(summary)
+        """)
+}
+
+@MainActor
+@Test func armingThroughTheHelperSilencesTheLidClosedParagraphOnTheNextRefresh() {
+    // Named bug this catches: reading the registration ONCE, in `init`. The
+    // click that makes this paragraph false happens in the Preferences window of
+    // a running app, and the paragraph sits directly above the button that was
+    // clicked — a value frozen at launch leaves the user reading instructions
+    // their own click just disproved, which is what
+    // `armingThroughTheHelperClearsTheStaleAdvisoryOnTheNextRefresh` names for
+    // the advisory below it.
+    let machine = StubRegisteredHelper(active: false)
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth(),
+                             registration: machine,
+                             settings: FakeSettings())
+    model.refresh()
+    #expect(model.lidClosedSummary(probeAt: installedElsewhere, holdingFor: 4 * 60 * 60) != nil,
+            "precondition: the CLI route is documented on a machine that has only that route")
+
+    // The user clicks "Arm lid-closed mode" and macOS registers the daemon.
+    // Nothing else about the machine moved.
+    machine.set(active: true)
+    model.refresh()
+
+    #expect(model.lidClosedSummary(probeAt: installedElsewhere,
+                                   holdingFor: 4 * 60 * 60) == nil, """
+        the paragraph outlived the click that made it false, so a user who armed \
+        through the button goes on being told to install a root probe by hand \
+        until coffee-bar is relaunched:
+          \(model.lidClosedSummary(probeAt: installedElsewhere, holdingFor: 4 * 60 * 60) ?? "")
+        """)
+}
+
+@MainActor
+@Test func theScopeNoteNamesNoMechanismForArmingALidClosedHold() {
+    // The second paragraph, and it is CORRECTED rather than silenced: what the
+    // battery floor governs, that the lid-closed daemon reads no preference of
+    // the user's, and how the chosen hold reaches it are all still true and all
+    // still worth saying. The MECHANISM claim is what went false.
+    //
+    // NOT made to vary, and that is the trap this check exists beside.
+    // `powerScopeNote` is a static so that it has no instance to read a setting
+    // from, which is what makes the substitution
+    // `theScopeNoteDescribesTheDaemonWhileTheReadoutDescribesTheUser` refuses
+    // UNWRITABLE rather than merely refused. A note gated on the registration
+    // would buy a true sentence by dismantling that guarantee, so the repair is
+    // a wording true in both worlds.
+    //
+    // Named bug this catches: the summary above gated and this left alone. The
+    // user then clicks the button, watches the paragraph naming the command
+    // disappear, and is left with a sentence pointing at "the root command
+    // below" — below which there is now nothing.
+    let armed = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth(),
+                             registration: StubRegisteredHelper(active: true),
+                             settings: FakeSettings())
+    armed.refresh()
+
+    // The premise, MEASURED rather than asserted in prose: on a machine with a
+    // registered helper the paragraph this note pointed at is not rendered at
+    // all, so "below" names nothing the reader can see.
+    #expect(armed.lidClosedSummary(probeAt: installedElsewhere,
+                                   holdingFor: 4 * 60 * 60) == nil,
+            "precondition: the lid-closed paragraph is silent while the helper is registered")
+
+    // LOWERCASED, so a mechanism that opens a sentence is caught too.
+    let note = ServingModel.powerScopeNote.lowercased()
+    for mechanism in ["armed by", "the root command", "command below", "the button"] {
+        #expect(!note.contains(mechanism), """
+            the scope note says "\(mechanism)", which names ONE of the two ways a \
+            lid-closed hold gets armed. This sentence is a static precisely so it \
+            cannot vary with the machine, so a mechanism named here is wrong on \
+            every machine in the other state. It reads:
+            \(ServingModel.powerScopeNote)
+            """)
+    }
+
+    // The command itself, not only the words that point at it. A note that
+    // printed `lidClosedCommand` outright would name the CLI route without any
+    // of the phrases above.
+    #expect(!ServingModel.powerScopeNote.contains(ServingModel.lidClosedCommand), """
+        the scope note prints \(ServingModel.lidClosedCommand). That is the CLI \
+        route, and the paragraph that carries it is silent whenever the \
+        registered helper is the one holding the machine. It reads:
+        \(ServingModel.powerScopeNote)
+        """)
+
+    // ANTI-VACUITY, and the substance the correction had to keep. Every
+    // assertion above is a negative, and a DELETED note satisfies all of them —
+    // which would be issue #73 reopened with the paragraph removed rather than
+    // repaired. These two are the note's two claims: which holds the battery
+    // floor governs, and the one shape the chosen hold takes on its way to the
+    // daemon. The floor VALUE is held by
+    // `theScopeNoteNamesTheFloorTheLidClosedDaemonActuallyEnforces`, which
+    // derives it by running the ladder rather than by reading the constant back.
+    #expect(note.contains("battery floor"), """
+        the scope note no longer names the battery floor, so nothing under the \
+        two Power sliders says which holds that floor governs. Issue #73. It reads:
+        \(ServingModel.powerScopeNote)
+        """)
+    #expect(ServingModel.powerScopeNote.contains(ProbeVerb.ttlFlag), """
+        the scope note no longer names \(ProbeVerb.ttlFlag), so it says nothing \
+        about how the Lid-closed hold slider reaches the daemon. It reads:
+        \(ServingModel.powerScopeNote)
+        """)
+}
+
 // MARK: - Issue #74: the lid-closed hold the user chose
 
 @MainActor
