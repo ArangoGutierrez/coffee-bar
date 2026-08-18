@@ -43,6 +43,13 @@ public struct PreferencesView: View {
     /// The result of the last click, or nil before there has been one.
     @State private var helperStatus: String?
 
+    /// Whether a removal is waiting on the helper (issue #71).
+    ///
+    /// Separate from `armingInFlight` for the reason stated at the control: the
+    /// two report different things, and one flag would put the spinner beside
+    /// whichever button was not pressed.
+    @State private var removalInFlight = false
+
     /// A click in flight. The button is disabled meanwhile: `register()` is a
     /// round trip to macOS that can end waiting on an approval, and a second
     /// press behind it queues a second root request against a decision the user
@@ -300,10 +307,63 @@ public struct PreferencesView: View {
                             armingInFlight = false
                         }
                     }
-                    .disabled(armingInFlight || helperAvailability == .unavailable)
+                    .disabled(armingInFlight || removalInFlight
+                              || helperAvailability == .unavailable)
 
                     if armingInFlight {
                         ProgressView().controlSize(.small)
+                    }
+
+                    // THE REMOVAL CONTROL, and issue #71's last acceptance line.
+                    // An install with no uninstall is a trap, and this one
+                    // installs a ROOT daemon: without a control here the only
+                    // way back is System Settings, or `sfltool resetbtm` for a
+                    // user who cannot find the switch.
+                    //
+                    // CONDITIONAL, unlike the button above it, and the two
+                    // differ for a reason rather than by accident. The arm
+                    // button is offered on every build because a build that
+                    // cannot register still has something to say — its title
+                    // and its sentence change to the `sudo` route. This one has
+                    // nothing to offer a Mac with no registered helper: the
+                    // click could only refuse, and a control whose every press
+                    // is an error is worse than no control.
+                    //
+                    // `model.registeredHelperIsActive` and not a fresh ask.
+                    // That property is written on every `refresh()`, which is
+                    // a launchd query deliberately kept off the render path,
+                    // and the model re-reads it the moment a removal succeeds
+                    // so the control goes away without waiting for the tick.
+                    //
+                    // The whole sequence is `model.removeRegisteredHelper()`:
+                    // release the hold, read `SleepDisabled` back, and only
+                    // then unregister. Nothing about that order is decided
+                    // here, deliberately. It needs the assertion and the
+                    // machine's power setting, and a window is not where a
+                    // safety property belongs.
+                    //
+                    // ASYNCHRONOUS, and with an in-flight flag of its own,
+                    // exactly like the arm button above. The first step of a
+                    // removal asks the helper to end its hold over XPC, so this
+                    // click waits on a root daemon the same way arming does. A
+                    // second flag rather than reusing `armingInFlight`, because
+                    // the two report different things to the user and a shared
+                    // one would show a spinner beside the wrong control.
+                    //
+                    // Each disables the other. Arming and removing are opposite
+                    // requests to the same daemon, and letting a click on one
+                    // land while the other is in flight is how a helper gets
+                    // unregistered between the register and the arm.
+                    if model.registeredHelperIsActive {
+                        Button(ServingModel.removeHelperLabel) {
+                            removalInFlight = true
+                            Task {
+                                helperStatus =
+                                    await model.removeRegisteredHelper().statusLine
+                                removalInFlight = false
+                            }
+                        }
+                        .disabled(armingInFlight || removalInFlight)
                     }
                 }
 

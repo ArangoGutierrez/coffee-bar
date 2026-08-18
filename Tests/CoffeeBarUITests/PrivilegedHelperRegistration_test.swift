@@ -67,6 +67,16 @@ private final class StubRegistration: HelperRegistering, @unchecked Sendable {
         hasRegistered = true
         if let failure { throw failure }
     }
+
+    /// Deciding what a REGISTRATION says to the user is this double's whole
+    /// job, and none of that path may take a registration off. Recorded rather
+    /// than left empty so the failure names the route it came in by.
+    func unregister() throws {
+        Issue.record("""
+            composing the message for a registration attempt unregistered the \
+            daemon instead
+            """)
+    }
 }
 
 /// The refusal sentence, or a failure naming what came back instead.
