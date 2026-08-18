@@ -236,33 +236,106 @@ puts it to sleep, because an assertion does not survive that — the lid is a
 different mechanism, and overriding it means changing a system setting rather
 than asking for a hold.</p>
 
-<p>That is what lid-closed mode does, and it is deliberately not part of the
-menu-bar app. Changing that setting needs root, and coffee-bar never elevates its
-own privilege, so there is no control anywhere in the app that arms it. You run a
-command yourself, which is the same posture the app takes with hooks: it prints
-what to paste and edits none of your files.</p>
+<p>That is what lid-closed mode does, and it is the one part of the product that
+involves root at all.
+coffee-bar's everyday work needs no root and no password, and lid-closed mode is the one opt-in extra where macOS runs a small coffee-bar helper as root after you approve it in System Settings, still with no password.</p>
 
-<p>The command is <code>coffee-bar-probe</code>, and it ships inside the app
-bundle beside coffee-bar itself. Nothing puts it on your <code>PATH</code>, so
-you invoke it by its full path. From the disk image that is
-<code>/Applications/CoffeeBar.app/Contents/MacOS/coffee-bar-probe</code>.</p>
+<p>That distinction is worth being exact about, because it is the whole posture.
+The app process never elevates: it takes no credentials, runs no interpreter as
+root, and has no route to raising its own privilege. What it can do is ask macOS
+to install a separate, very small helper — and it is <strong>macOS</strong> that
+installs that helper, runs it, and refuses to run it until you have said yes
+yourself.</p>
 
-<p><strong>You cannot arm it where it ships.</strong> Arming installs a launchd
-job that root runs and keeps running, so the probe refuses unless its own file is
-owned by root and sits in directories nobody else can write. No install location
-qualifies: macOS ships <code>/Applications</code> writable by every administrator
-account, and a Homebrew prefix, a build tree and a copy on your Desktop all belong
-to you. In any of them another process could swap the binary that root is about to
-run, and that is the refusal doing its job rather than a fault.</p>
+<h3>Arming it from the Preferences window</h3>
 
-<p>So the mode is two commands. The first copies the probe to
+<p>On a build signed by coffee-bar's developer — the notarised disk image — the
+Preferences window carries an <strong>Arm lid-closed mode</strong> button under
+Power, beside the hold length. Clicking it asks macOS to register the helper.
+That is the whole flow, and there is no command to type.</p>
+
+<p><strong>Nothing appears on screen asking you to approve it.</strong> macOS
+files the helper away switched off, and the switch is one you have to go and
+find: open System Settings, then General, then Login Items &amp; Extensions, and
+turn coffee-bar on there. No dialog, no authorization sheet, and no password —
+not at the click, not at the approval, not afterwards. A window waiting for a
+prompt is waiting for one nothing will send, and until that switch is on the
+helper is installed and inert.</p>
+
+<p>Once it is on, the helper does what the command route does: it records what it
+is about to change, holds the setting, and puts it back when the time is up. The
+window reports the hold the <em>helper</em> recorded rather than the number the
+slider showed, so what you are told is what was actually taken.</p>
+
+<h3>What coffee-bar can tell you about a hold, and what it cannot</h3>
+
+<p>coffee-bar tells you lid-closed mode is armed at the moment you arm it from the Preferences window, and it cannot answer the question later, because the journal that records the hold belongs to root and this app runs as you.</p>
+
+<p>The second half is measured rather than assumed. The journal is a root-owned
+file inside a root-owned directory this app has no execute permission on, so it
+cannot read the file, read its permissions, or learn whether it exists at all.
+Loosening those permissions to give the window a live reading was considered and
+rejected: they are the security property that makes a root-owned file safe to
+hand to a root process, and they outrank a nicer window.</p>
+
+<p>So the answer at any later moment — after a restart, or on a Mac you did not
+arm yourself — comes from
+<code>sudo /Library/PrivilegedHelperTools/coffee-bar-probe report</code>, which
+prints what is armed, since when, and until when.</p>
+
+<h3>Removing the helper</h3>
+
+<p>The same window takes it away again. <strong>Remove the helper</strong> ends
+the hold first and unregisters second, and that order is the point: unregistering
+a helper that is still holding a setting would leave the setting changed with
+nothing left to put it back. If the hold cannot be ended, the removal stops and
+says so rather than carrying on and hoping.</p>
+
+<h3>How long a hold lasts</h3>
+
+<p>An armed hold lasts 8 hours, and then the setting goes back. The Preferences
+window lets you choose a different length and carries your choice into whichever
+route you arm by; on the command route that same choice is <code>--ttl</code>,
+which takes a number of seconds. Either way the ceiling is 24 hours. Nothing
+here watches your work, so the hold cannot end early when the agent finishes,
+and the time you ask for is what a machine you have walked away from will
+spend.</p>
+
+<p>That is deliberately long, and the reason is what actually ends a hold on a
+laptop. The watchdog checks the battery before it checks the clock: on battery
+the hold ends at 15% however much time is left, so a machine shut in a bag is
+bounded by charge rather than by the number above. On mains power there is
+nothing to protect, and a short hold there only ended the long unattended run
+this mode exists for.</p>
+
+<p>The display is forced off rather than left to sleep on its own. A closed lid
+over a lit panel is heat with nowhere to go, and it burns the battery this whole
+feature exists to save.</p>
+
+<h3>The command route, for an unsigned build</h3>
+
+<p>A build coffee-bar's developer did not sign cannot register a helper, and
+<strong>a Homebrew install is unsigned by design</strong> — the formula compiles
+the source on your own machine, so the bundle carries no team identifier and
+macOS has nothing to pin a helper to. On those builds the button is disabled,
+and the window says why and names the command instead.</p>
+
+<p>That route is not deprecated, it is unchanged, and it arms the same mode.
+It is two commands, because <strong>you cannot arm the probe where it
+ships.</strong> Arming installs a launchd job that root runs and keeps running,
+so the probe refuses unless its own file is owned by root and sits in
+directories nobody else can write. No install location qualifies: macOS ships
+<code>/Applications</code> writable by every administrator account, and a
+Homebrew prefix, a build tree and a copy on your Desktop all belong to you. In
+any of them another process could swap the binary that root is about to run, and
+that is the refusal doing its job rather than a fault.</p>
+
+<p>So the first command copies the probe to
 <code>/Library/PrivilegedHelperTools</code>, which macOS keeps root-owned for
 binaries a root process runs; the second arms that copy. Only the source path
 depends on where you installed coffee-bar, and the Preferences window prints the
 pair with the path this copy actually has — it asks the running app where it is,
 which this page cannot do. Prefer the window's version if the two disagree.</p>
-
-<h3>Arming it</h3>
 
 <p><code>sudo install -o root -g wheel -m 755 /Applications/CoffeeBar.app/Contents/MacOS/coffee-bar-probe /Library/PrivilegedHelperTools/coffee-bar-probe</code>
 puts the copy in place, owned by root and writable by nobody else.
@@ -277,56 +350,16 @@ and forces the display off. The order matters: nothing is changed until the
 record is on disk and the watchdog that undoes it is loaded, so a process killed
 half way through leaves no held setting behind it.</p>
 
-<p>An armed hold lasts 8 hours and then the watchdog puts your setting back.
-<code>--ttl</code> takes a number of seconds and buys more or less, up to a
-ceiling of 24 hours. Nothing here watches your work, so the hold cannot end
-early when the agent finishes, and the time you ask for is what a machine you
-have walked away from will spend.</p>
-
-<p>That is deliberately long, and the reason is what actually ends a hold on a
-laptop. The watchdog checks the battery before it checks the clock: on battery
-the hold ends at 15% however much time is left, so a machine shut in a bag is
-bounded by charge rather than by the number above. On mains power there is
-nothing to protect, and a short hold there only ended the long unattended run
-this mode exists for. Preferences lets you set the length you want, and writes
-it into the command it prints for you to run.</p>
-
-<p>The display is forced off rather than left to sleep on its own. A closed lid
-over a lit panel is heat with nowhere to go, and it burns the battery this whole
-feature exists to save.</p>
-
-<h3>Why coffee-bar cannot tell you whether it is armed</h3>
-
-<p>coffee-bar cannot show you whether lid-closed mode is armed, because the journal that records it belongs to root and this app runs as you.</p>
-
-<p>That is measured rather than assumed. The journal is a root-owned file inside
-a root-owned directory the app has no execute permission on, so it cannot read
-the file, read its permissions, or learn whether it exists at all. Loosening
-those permissions to give the panel something to display was considered and
-rejected: they are the security property that makes a root-owned file safe to
-hand to a root process, and they outrank a nicer window.</p>
-
-<p>So the app states the limit instead of inventing a reading, and the Preferences
-window carries the short version of this page beside the other power settings.
-The answer itself comes from <code>sudo /Library/PrivilegedHelperTools/coffee-bar-probe report</code>, which
-prints what is armed, since when, and until when.</p>
-
-<h3>Ending it early</h3>
-
 <p><code>sudo /Library/PrivilegedHelperTools/coffee-bar-probe revert</code> restores the sleep setting you had
 and removes the watchdog. You do not need it for an ordinary hold, which ends on
 its own.</p>
 
-<h3>Removing the helper</h3>
-
 <p><code>revert</code> undoes the hold, but it does not remove the copy of the
 probe you installed by hand. That file is root-owned and stays where you put it
-until you delete it:</p>
-
-<p><code>sudo rm /Library/PrivilegedHelperTools/coffee-bar-probe</code></p>
-
-<p>Run <code>revert</code> first. Deleting the probe while a hold is armed
-leaves the sleep setting changed with nothing left to put it back.</p>
+until you delete it with
+<code>sudo rm /Library/PrivilegedHelperTools/coffee-bar-probe</code>. Run
+<code>revert</code> first: deleting the probe while a hold is armed leaves the
+sleep setting changed with nothing left to put it back.</p>
 
 <h2 class="eyebrow">Waiting on you</h2>
 
@@ -422,7 +455,15 @@ two answers never merge into one.</p>
       "name": "Can coffee-bar tell me whether lid-closed mode is armed?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "coffee-bar cannot show you whether lid-closed mode is armed, because the journal that records it belongs to root and this app runs as you."
+        "text": "coffee-bar tells you lid-closed mode is armed at the moment you arm it from the Preferences window, and it cannot answer the question later, because the journal that records the hold belongs to root and this app runs as you."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Does coffee-bar need root or my password?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "coffee-bar's everyday work needs no root and no password, and lid-closed mode is the one opt-in extra where macOS runs a small coffee-bar helper as root after you approve it in System Settings, still with no password."
       }
     },
     {

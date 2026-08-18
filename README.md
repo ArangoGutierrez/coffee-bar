@@ -52,6 +52,40 @@ exist; it reads session state from agent hooks and from nothing else.
 It has no Dock icon and opens no window. Look for the cup at the right end of
 the menu bar.
 
+## Lid-closed mode
+
+Everything above holds the Mac awake with the **lid open**. Closing the lid still
+sleeps it, because a power assertion does not survive the lid — overriding it
+means changing a system setting, and that needs root.
+
+coffee-bar's everyday work needs no root and no password, and the app never
+elevates its own privilege. Lid-closed mode is an opt-in extra, and the only part of the product that involves root at all.
+
+- **One button on a signed build.** The notarised DMG carries an
+  **Arm lid-closed mode** button in the Preferences window, under Power. coffee-bar
+  asks macOS to install a small privileged helper, and **macOS runs that helper,
+  not coffee-bar.** The app process never elevates: it takes no credentials and
+  runs no interpreter as root.
+- **Approval is yours, and nothing prompts you for it.** macOS files the helper
+  away switched off, and you turn it on under System Settings → General → Login
+  Items & Extensions. There is no dialog to accept and **no password, at any
+  point.** If you are waiting for something to pop up, nothing will.
+- **It is removable from the same window**, and removal ends the hold before it
+  unregisters, so the sleep setting is never left changed with nothing to put it
+  back.
+- **On an unsigned build the button is disabled.** A Homebrew install is
+  unsigned by design: the formula compiles the source on your machine, so the
+  bundle carries no team identifier and macOS has nothing to pin a helper to.
+  Those builds arm the mode with `sudo coffee-bar-probe arm`, the route it has
+  always had. That route is **not deprecated**.
+
+coffee-bar tells you the mode is armed at the moment you arm it from the
+Preferences window. It cannot answer that question afterwards — the journal
+belongs to root and the app runs as you — so the probe's own `report` verb is
+what answers it later.
+[How lid-closed mode works](https://arangogutierrez.github.io/coffee-bar/docs.html)
+has the whole flow, both routes, and the reasoning.
+
 ## Documentation
 
 | | |
