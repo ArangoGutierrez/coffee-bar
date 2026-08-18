@@ -163,6 +163,20 @@ public enum HelperRemovalOutcome: Equatable, Sendable {
     }
 }
 
+/// What asking the helper to end its hold did.
+///
+/// The step BEFORE a removal, and a type of its own for the reason
+/// `HelperRemovalOutcome` is one: it answers a different question, and the model
+/// turns a refusal here into a removal refusal with its own sentence around it.
+public enum HelperRevertOutcome: Equatable, Sendable {
+    /// The helper put the setting back. `wasArmed` is what IT reported, and
+    /// `false` is not a failure: it means there was no hold to end, which is
+    /// the ordinary state of a Mac whose lid has not been shut.
+    case reverted(wasArmed: Bool)
+    /// It did not. The sentence is the helper's own, or this layer's.
+    case refused(String)
+}
+
 /// Where a registration stands, as this file needs to know it.
 ///
 /// A local enum rather than `SMAppService.Status`, and that is a boundary
@@ -247,22 +261,35 @@ public protocol RegisteredHelperReporting: Sendable {
     func registeredHelperIsActive() -> Bool
 }
 
-/// Taking the registration off, behind the same boundary the read is behind
-/// (issue #71).
+/// The two things a removal does to the helper, behind the same boundary the
+/// read is behind (issue #71).
 ///
-/// **A SECOND protocol rather than a method on `RegisteredHelperReporting`, and
+/// **A SECOND protocol rather than methods on `RegisteredHelperReporting`, and
 /// the split is the point.** That one carries an ANSWER across the boundary;
-/// this one carries an ACTION that removes a root daemon. A conformer written
-/// for a preview or a fixture has to opt into the second deliberately, and the
+/// this one carries ACTIONS that reach a root daemon. A conformer written for a
+/// preview or a fixture has to opt into the second deliberately, and the
 /// composition root reads as two decisions because it is making two.
 ///
 /// **The model holds this; it does not implement it.** `ServingModel` decides
-/// WHEN a removal is safe, because that decision needs the assertion and the
-/// machine's sleep setting and neither belongs in the file that talks to macOS.
-/// The shipping conformer is `PrivilegedHelperClient`, one type over, which
-/// knows how and never when.
-public protocol HelperUnregistering: Sendable {
-    /// Asks macOS to stop running this build's daemon.
+/// WHEN each step is safe and in what order, because that decision needs the
+/// machine's sleep setting read back between them, and that does not belong in
+/// the file that talks to macOS. The shipping conformer is
+/// `PrivilegedHelperClient`, one type over, which knows how and never when.
+public protocol HelperRemovalControlling: Sendable {
+    /// Asks the helper to put the sleep setting back. Step ONE.
+    ///
+    /// **The helper and not this process, because only the helper can.** The
+    /// setting is `SleepDisabled`, written system-wide by root through `pmset`;
+    /// the assertion this app holds is a different mechanism and dropping it
+    /// clears nothing. A removal built on the app's own release could never
+    /// verify anything while a hold was in force.
+    ///
+    /// Answers rather than throwing, because a refusal here carries the
+    /// HELPER's words about a machine this process cannot inspect, and those go
+    /// to the user verbatim.
+    func revert() async -> HelperRevertOutcome
+
+    /// Asks macOS to stop running this build's daemon. Step THREE.
     ///
     /// Throws rather than answering, because every failure here is one the user
     /// has to be told about VERBATIM: a job macOS says is not registered, a
@@ -414,7 +441,7 @@ final class RunningSignature: @unchecked Sendable {
 /// **It holds no connection object.** `PrivilegedHelperChannel` is opaque, so
 /// there is nowhere in this file to resume a connection unpinned — which is why
 /// the entitlement can be one symbol wide.
-public struct PrivilegedHelperClient: Sendable, RegisteredHelperReporting, HelperUnregistering {
+public struct PrivilegedHelperClient: Sendable, RegisteredHelperReporting, HelperRemovalControlling {
     /// Where the answer to "what team signed this binary" comes from.
     ///
     /// A seam, the third in this file and there for the same reason as the other
@@ -723,6 +750,64 @@ public struct PrivilegedHelperClient: Sendable, RegisteredHelperReporting, Helpe
             }
         }
     }
+
+    /// Asks the helper to put the sleep setting back.
+    ///
+    /// Step ONE of `ServingModel.removeRegisteredHelper()`, and the reason it
+    /// has to be the helper is that `SleepDisabled` is written by root. The
+    /// privileged side of this call already existed for the CLI's `revert`
+    /// verb — `PrivilegedHelperService.revert(reply:)` over the same
+    /// `LidClosedControl` interface — so nothing new is exposed across the XPC
+    /// boundary by this method. What was missing was a caller in the app.
+    ///
+    /// **It does NOT register first, unlike `arm(seconds:)`.** That method
+    /// opens with `register()` because arming a machine that has never been
+    /// armed has to install the daemon to do it. Reverting has the opposite
+    /// precondition: there is nothing to end unless a helper is already
+    /// running, and registering one in order to ask it to stop would install a
+    /// root daemon on the way to removing one.
+    ///
+    /// **The `guard` is the same one `register()` and `unregisterHelper()` open
+    /// with, and here it is the one that matters most.** Past it this method
+    /// opens a channel to a ROOT DAEMON and asks it to change a system power
+    /// setting. A build naming no team is not the peer
+    /// `PrivilegedHelperIdentity.helperPeerRequirement` trusts, so the call
+    /// could only fail at the pin — but it would fail there having already
+    /// reached out, and `swift test` must not be one deleted line from touching
+    /// a live machine. `noTestCanMakeTheSuiteRegisterTheHelperForReal` lists
+    /// `.revert()` in `privilegedPathReachingCall` for exactly this.
+    ///
+    /// The channel is opened per request and invalidated after, for the reason
+    /// `arm(seconds:)` gives: a long-lived connection to a root daemon is a
+    /// long-lived thing to attack.
+    public func revert() async -> HelperRevertOutcome {
+        guard availability() == .registrable else {
+            return .refused(HelperAvailability.unavailable.explanation)
+        }
+
+        let channel = PrivilegedHelperChannel()
+        defer { channel.invalidate() }
+
+        return await withCheckedContinuation { continuation in
+            let resume = OneShot(continuation)
+            guard let control = channel.control(onFailure: { error in
+                // The pin lands here, exactly as it does for `arm`.
+                resume.finish(.refused("The helper did not answer, or is not the "
+                                       + "one this build trusts: \(error.localizedDescription)"))
+            }) else {
+                resume.finish(.refused("The helper is not reachable."))
+                return
+            }
+
+            control.revert { wasArmed, message in
+                if let message {
+                    resume.finish(.refused(message))
+                } else {
+                    resume.finish(.reverted(wasArmed: wasArmed))
+                }
+            }
+        }
+    }
 }
 
 /// Resumes a continuation exactly once.
@@ -732,15 +817,20 @@ public struct PrivilegedHelperClient: Sendable, RegisteredHelperReporting, Helpe
 /// that failed the pin — and resuming a `CheckedContinuation` twice is a crash,
 /// not a warning. The button would take the app down on precisely the failure
 /// the pin exists to produce.
-private final class OneShot: @unchecked Sendable {
+///
+/// GENERIC over the outcome since issue #71 added a second caller, rather than
+/// copied for it. Two channel calls with two hand-written one-shots is two
+/// places for the double-resume crash to come back, and the second copy is the
+/// one nobody re-reads.
+private final class OneShot<Outcome: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
-    private var continuation: CheckedContinuation<HelperArmOutcome, Never>?
+    private var continuation: CheckedContinuation<Outcome, Never>?
 
-    init(_ continuation: CheckedContinuation<HelperArmOutcome, Never>) {
+    init(_ continuation: CheckedContinuation<Outcome, Never>) {
         self.continuation = continuation
     }
 
-    func finish(_ outcome: HelperArmOutcome) {
+    func finish(_ outcome: Outcome) {
         lock.lock()
         let pending = continuation
         continuation = nil

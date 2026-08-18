@@ -32,25 +32,27 @@ public final class ServingModel {
     /// it. `RegisteredHelperReporting` is what carries that answer across the
     /// boundary without moving the entitlement.
     private let registration: any RegisteredHelperReporting
-    /// How a registration is taken back off (issue #71).
+    /// How the helper is asked to end its hold, and how the registration is
+    /// taken back off (issue #71).
     ///
     /// A SEAM and a SECOND one, beside `registration` rather than folded into
-    /// it, because the two are a read and an action: the file that reports
-    /// whether macOS runs the daemon and the file that asks macOS to stop are
+    /// it, because those are a read and these are actions: the file that reports
+    /// whether macOS runs the daemon and the file that reaches the daemon are
     /// the same type in the shipping app, and that is a fact about
     /// `PrivilegedHelperClient` rather than a rule this model should encode.
     /// A conformer built for a preview implements the read and opts out of the
-    /// action.
-    private let removal: any HelperUnregistering
-    /// Whether this machine's sleep is disabled, read back after the release.
+    /// rest.
+    private let removal: any HelperRemovalControlling
+    /// Whether this machine's sleep is disabled, read back after the revert.
     ///
     /// **The VERIFICATION in "removal is verified", and the reason it is a
-    /// separate reading rather than a return value.** Nothing this model holds
-    /// can report that the release worked: `AssertionHolding.release()` answers
-    /// nothing, and it is not what set `SleepDisabled` in the first place. That
-    /// flag is the root helper's, held for lid-closed mode, and it is the one
-    /// that strands a machine — so the removal reads the MACHINE rather than
-    /// trusting its own call.
+    /// separate reading rather than the revert's own answer.** The helper
+    /// reports what it BELIEVES it did, across an XPC boundary, about a setting
+    /// this process cannot write and did not observe. Reading `pmset` afterwards
+    /// asks the machine instead, and the two can disagree: a reply saying the
+    /// hold ended over a flag that is still set means something other than this
+    /// helper is holding it, and that is precisely the state in which removing
+    /// the helper strands the Mac.
     private let sleepHold: any SleepHoldReporting
     private let listener: any IngestListening
     private let settings: any SettingsStoring
@@ -1267,7 +1269,7 @@ public final class ServingModel {
                 health: any HookHealthProviding = HookHealthReader(),
                 helper: any PrivilegedHelperStateProviding = PrivilegedHelperReader(),
                 registration: any RegisteredHelperReporting = PrivilegedHelperClient(),
-                removal: any HelperUnregistering = PrivilegedHelperClient(),
+                removal: any HelperRemovalControlling = PrivilegedHelperClient(),
                 sleepHold: any SleepHoldReporting = PmsetSleepHoldReader(),
                 settings: any SettingsStoring = UserDefaultsSettingsStore(),
                 listener: any IngestListening = UnixSocketIngestListener(),
@@ -1925,28 +1927,45 @@ public final class ServingModel {
     /// mode still works afterwards, by the `sudo` route it always worked by.
     static let removeHelperLabel = "Remove the helper"
 
+    /// What the user is told when the HELPER refused to end its hold.
+    ///
+    /// The helper's own words are carried through, for the reason
+    /// `HelperArmOutcome.statusLine` passes a refusal through verbatim: the
+    /// sentence is about a machine this process cannot inspect, and a house
+    /// phrasing throws away the only thing that says what to fix.
+    static func revertRefusedRefusal(_ reason: String) -> String {
+        "coffee-bar did not remove the helper, because the helper could not end "
+        + "its hold. Removing it now would leave the sleep setting where it is "
+        + "with nothing on this Mac able to put it back. \(reason)"
+    }
+
     /// What the user is told when the machine is still held.
     ///
     /// It names `SleepDisabled` because the user's next action depends on
     /// knowing WHICH thing is still set: this is the setting `pmset -g` prints
     /// and the one a hold puts there. A house sentence like "removal failed"
     /// leaves them with a Mac that will not sleep and nothing to search for.
+    ///
+    /// The state it describes is a helper that REPORTED success over a machine
+    /// that disagrees, which is why the sentence does not tell the user to end
+    /// a hold: the hold this helper knows about has already been ended.
     static let sleepStillHeldRefusal =
-        "coffee-bar did not remove the helper: this machine's SleepDisabled "
-        + "setting is still on, and the helper is what puts it back. End the "
-        + "lid-closed hold first, then remove it."
+        "coffee-bar did not remove the helper: it reported the hold ended, but "
+        + "this Mac's SleepDisabled setting is still on. Something other than "
+        + "this helper is holding it, and removing the helper would leave "
+        + "nothing able to put it back."
 
     /// What the user is told when the reading itself failed.
     ///
     /// A DIFFERENT sentence from the one above, and the difference is the whole
-    /// of it. "The flag is set" tells the user to end a hold; "the flag could
-    /// not be read" tells them something is wrong with the machine's power
-    /// settings, and a hold may not be involved at all. One message for both
-    /// sends half of them after a hold that does not exist.
+    /// of it. "The flag is still set" points at another holder; "the flag could
+    /// not be read" points at this Mac's power settings, and a hold may not be
+    /// involved at all. One message for both sends half of them after the wrong
+    /// fault.
     static func sleepUnreadableRefusal(_ error: any Error) -> String {
-        "coffee-bar could not read this machine's SleepDisabled setting, so it "
-        + "did not remove the helper: an unread setting is not evidence the "
-        + "machine is free. \(error.localizedDescription)"
+        "coffee-bar could not read this Mac's SleepDisabled setting, so it did "
+        + "not remove the helper: an unread setting is not evidence the machine "
+        + "is free. \(error.localizedDescription)"
     }
 
     /// What the user is told when there was nothing registered to remove.
@@ -1954,7 +1973,7 @@ public final class ServingModel {
         "macOS is not running a helper registered by this copy of coffee-bar, "
         + "so there is nothing here to remove."
 
-    /// Releases the hold, confirms the machine can sleep, and only then asks
+    /// Ends the helper's hold, confirms this Mac can sleep, and only then asks
     /// macOS to stop running the helper.
     ///
     /// **THE ORDER IS THE SAFETY PROPERTY.** Unregister first and the daemon
@@ -1962,37 +1981,44 @@ public final class ServingModel {
     /// `GuardedJournalReader` describes as an open-ended hold, with the one
     /// thing that could end it removed. The machine cannot sleep, the journal
     /// says nothing about why, and the only route back is a root shell.
-    /// `theHelperIsUnregisteredOnlyAfterTheHoldIsReleasedAndTheFlagIsReadClear`
+    /// `theHelperIsUnregisteredOnlyAfterTheHoldIsRevertedAndTheFlagIsReadClear`
     /// asserts the three steps as one sequence, because "each of them happened"
     /// is green over the reversal.
     ///
-    /// **The release is UNCONDITIONAL.** `isServing` is this app's record of
-    /// what IOKit last answered, and `refresh()` documents why the two can
-    /// disagree — the controller decides what should happen, IOKit decides what
-    /// did. A `release()` skipped on the strength of the record leaves a live
-    /// assertion behind exactly when they differ.
+    /// **The HELPER reverts, and not this process, because only the helper
+    /// can.** `SleepDisabled` is a system-wide setting written by root through
+    /// `pmset`. `AssertionHolding` is the IOKit assertion THIS process holds and
+    /// is a different mechanism entirely: releasing it clears no flag, so a
+    /// sequence built on it could never verify anything while a hold was in
+    /// force and would refuse instead of removing. The app's own assertion is
+    /// deliberately untouched here — whether coffee-bar holds sleep for a
+    /// working agent has nothing to do with whether the privileged helper is
+    /// installed, `refresh()` owns that decision, and
+    /// `theRemovalLeavesTheAppsOwnAssertionAlone` holds the line.
     ///
-    /// **The verification READS THE MACHINE.** Not the return of the release,
-    /// which there is none of, and not this model's own state.
-    /// `AssertionHolding.release()` drops the app's IOKit assertion; it does
-    /// not clear the root helper's `SleepDisabled`, and that flag is the one
-    /// that survives the app being quit. So the question put to `pmset` is the
-    /// question actually at issue: can this machine sleep once coffee-bar's
-    /// helper is gone?
+    /// **A revert the helper REFUSED aborts, and this is the case with teeth.**
+    /// The helper is the only thing on the machine that can put the setting
+    /// back. Carrying on to the unregister after it has said no deletes exactly
+    /// that.
     ///
-    /// **A read that FAILED aborts, and this is the case with a name.** A
-    /// `try?` here would turn "I could not find out" into "there is nothing
-    /// holding it" and unregister anyway. `PmsetSleepDisabledController` refuses
-    /// that collapse one layer down for the same reason: it throws on a value
-    /// it cannot interpret rather than reporting the flag unset.
+    /// **The verification READS THE MACHINE**, rather than believing the reply.
+    /// The helper reports what it thinks it did, across a process boundary,
+    /// about a setting this process cannot write. A reply saying the hold ended
+    /// over a flag that is still set means something else is holding it.
     ///
-    /// **Nothing is touched when there is nothing to remove.** The window
-    /// offers this control only while a helper is registered, but a click can
-    /// still arrive against a stale render, and releasing a hold the user is
-    /// relying on to take off a helper that is not there is a side effect they
-    /// did not ask for.
+    /// **A read that FAILED aborts too.** A `try?` here would turn "I could not
+    /// find out" into "there is nothing holding it" and unregister anyway.
+    /// `PmsetSleepDisabledController` refuses that collapse one layer down for
+    /// the same reason: it throws on a value it cannot interpret rather than
+    /// reporting the flag unset.
+    ///
+    /// **Nothing is touched when there is nothing to remove.** The window offers
+    /// this control only while a helper is registered, but a click can still
+    /// arrive against a stale render, and opening a channel to a root daemon
+    /// that is not there is not something to do on the strength of a stale
+    /// value.
     @discardableResult
-    public func removeRegisteredHelper() -> HelperRemovalOutcome {
+    public func removeRegisteredHelper() async -> HelperRemovalOutcome {
         // ASKED afresh rather than read off `registeredHelperIsActive`, which
         // is only written in `refresh()` and can be up to 30 seconds old. The
         // stored value drives the WINDOW; this decides whether to act.
@@ -2000,8 +2026,9 @@ public final class ServingModel {
             return .refused(Self.nothingRegisteredRefusal)
         }
 
-        holder.release()
-        isServing = false
+        if case .refused(let reason) = await removal.revert() {
+            return .refused(Self.revertRefusedRefusal(reason))
+        }
 
         do {
             if try sleepHold.sleepIsDisabled() {

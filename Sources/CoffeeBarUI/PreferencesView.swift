@@ -43,6 +43,13 @@ public struct PreferencesView: View {
     /// The result of the last click, or nil before there has been one.
     @State private var helperStatus: String?
 
+    /// Whether a removal is waiting on the helper (issue #71).
+    ///
+    /// Separate from `armingInFlight` for the reason stated at the control: the
+    /// two report different things, and one flag would put the spinner beside
+    /// whichever button was not pressed.
+    @State private var removalInFlight = false
+
     /// A click in flight. The button is disabled meanwhile: `register()` is a
     /// round trip to macOS that can end waiting on an approval, and a second
     /// press behind it queues a second root request against a decision the user
@@ -300,7 +307,8 @@ public struct PreferencesView: View {
                             armingInFlight = false
                         }
                     }
-                    .disabled(armingInFlight || helperAvailability == .unavailable)
+                    .disabled(armingInFlight || removalInFlight
+                              || helperAvailability == .unavailable)
 
                     if armingInFlight {
                         ProgressView().controlSize(.small)
@@ -334,19 +342,28 @@ public struct PreferencesView: View {
                     // machine's power setting, and a window is not where a
                     // safety property belongs.
                     //
-                    // Synchronous, unlike the arm button. Nothing here opens
-                    // an XPC channel: the release is local and the removal is a
-                    // single call into the registration seam, so there is no
-                    // continuation to wait on and no second in-flight flag to
-                    // keep honest. The API that call reaches is named in
-                    // `PrivilegedHelperClient` and deliberately nowhere else,
-                    // including in prose here, for the reason the paragraph
-                    // above the arm button gives.
+                    // ASYNCHRONOUS, and with an in-flight flag of its own,
+                    // exactly like the arm button above. The first step of a
+                    // removal asks the helper to end its hold over XPC, so this
+                    // click waits on a root daemon the same way arming does. A
+                    // second flag rather than reusing `armingInFlight`, because
+                    // the two report different things to the user and a shared
+                    // one would show a spinner beside the wrong control.
+                    //
+                    // Each disables the other. Arming and removing are opposite
+                    // requests to the same daemon, and letting a click on one
+                    // land while the other is in flight is how a helper gets
+                    // unregistered between the register and the arm.
                     if model.registeredHelperIsActive {
                         Button(ServingModel.removeHelperLabel) {
-                            helperStatus = model.removeRegisteredHelper().statusLine
+                            removalInFlight = true
+                            Task {
+                                helperStatus =
+                                    await model.removeRegisteredHelper().statusLine
+                                removalInFlight = false
+                            }
                         }
-                        .disabled(armingInFlight)
+                        .disabled(armingInFlight || removalInFlight)
                     }
                 }
 
