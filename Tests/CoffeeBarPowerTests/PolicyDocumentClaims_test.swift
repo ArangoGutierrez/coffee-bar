@@ -1177,3 +1177,200 @@ private func citedFile(named name: String) -> URL? {
         than the tree holds
         """)
 }
+
+// MARK: - Guard: a retired capability promise cannot outlive the capability
+
+/// One thing the shipped app does, and the declaration that proves it does.
+///
+/// The capability is DERIVED and never typed. Writing `let appCanArm = true`
+/// here would restate the defect this guard exists to catch rather than detect
+/// it, and it would keep asserting the same thing on the day the button is
+/// taken out again.
+private struct ShippedHelperCapability {
+    /// What a reader would call it.
+    let what: String
+    /// A repo-relative path, never a basename.
+    let file: String
+    /// An exact declaration, matched as text. Never a call: a leading `.` before
+    /// any of these names is the shape `noTestCanMakeTheSuiteRegisterTheHelperForReal`
+    /// refuses, and a guard that spells one would file an item into the
+    /// maintainer's System Settings the first time the suite ran.
+    let declaration: String
+}
+
+/// The four things `SECURITY.md` said the app could not do, each read off the
+/// declaration that does it.
+///
+/// All four live in one file because #71 put them there: that file is the only
+/// place in the app layer entitled to name the registration API, and
+/// `theAppLayerNeverReachesForPrivilegeEscalation` holds the entitlement to
+/// exactly it. A capability that moves to a second file turns this red with a
+/// message saying so, which is the loud failure and not a false one.
+private let shippedHelperCapabilities = [
+    ShippedHelperCapability(
+        what: "installs the privileged helper",
+        file: "Sources/CoffeeBarUI/PrivilegedHelperClient.swift",
+        declaration: "public func register() -> HelperArmOutcome?"),
+    ShippedHelperCapability(
+        what: "arms lid-closed mode",
+        file: "Sources/CoffeeBarUI/PrivilegedHelperClient.swift",
+        declaration: "public func arm(seconds: Int) async -> HelperArmOutcome"),
+    ShippedHelperCapability(
+        what: "reverts a lid-closed hold",
+        file: "Sources/CoffeeBarUI/PrivilegedHelperClient.swift",
+        declaration: "public func revert() async -> HelperRevertOutcome"),
+    ShippedHelperCapability(
+        what: "takes the helper back off",
+        file: "Sources/CoffeeBarUI/PrivilegedHelperClient.swift",
+        declaration: "public func unregisterHelper() throws"),
+]
+
+/// The sentences `SECURITY.md` may no longer ASSERT, byte for byte.
+///
+/// **Whole sentences, never substrings, and the difference is the whole design.**
+/// The fix for a claim that has stopped being true is to restate it — the
+/// document says so about v0.2 in the paragraph above these — so the retired
+/// wording has to stay QUOTABLE while it stops being sayable. A substring test
+/// cannot tell the two apart: it goes red on the correction and on the defect
+/// alike, and the author's only way out is to delete the history. Comparing the
+/// whole sentence lets the document quote its own past, which is the behaviour
+/// this file is here to protect.
+///
+/// Each is written as `sentences(of:)` yields it: single spaces, trimmed. That
+/// is not a formatting nicety — a claim spelled with a stray double space would
+/// never match anything, and the guard would pass for ever.
+private let retiredElevationClaims = [
+    "The app shows no authorization prompt, installs no privileged helper of "
+        + "its own, and has no route to becoming root.",
+    "It cannot arm lid-closed mode, cannot install that daemon, and cannot "
+        + "revert one.",
+]
+
+/// One sentence reduced to the claim it makes, so emphasis cannot launder it.
+///
+/// Bold and italic markers go, and so does a leading blockquote marker. Neither
+/// changes what a sentence asserts, and both are one keystroke away from a claim
+/// this guard would otherwise walk past — `**It cannot arm lid-closed mode…**`
+/// reads to a user as the same promise and to a naive comparison as a different
+/// string.
+///
+/// KNOWN CONSEQUENCE, stated rather than discovered: quoting a retired claim as
+/// a standalone blockquoted sentence turns this red even though the surrounding
+/// paragraph disowns it. The document's own convention is to quote inline, which
+/// is what the paragraphs above and below do, and a bare blockquote of a false
+/// sentence is what a skimming reader takes for an assertion anyway.
+private func claimNormalised(_ sentence: String) -> String {
+    var s = sentence.trimmingCharacters(in: .whitespaces)
+    s = s.replacingOccurrences(of: "^>\\s*", with: "", options: .regularExpression)
+    s = s.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "*", with: "")
+    return s.trimmingCharacters(in: .whitespaces)
+}
+
+/// Which of the retired claims `prose` asserts as a sentence of its own.
+private func retiredClaimsAsserted(in prose: String) -> [String] {
+    let said = Set(sentences(of: prose).map { claimNormalised($0).lowercased() })
+    return retiredElevationClaims.filter { said.contains(claimNormalised($0).lowercased()) }
+}
+
+/// `SECURITY.md` does not deny a capability the app ships, and does not airbrush
+/// the denial it used to make.
+///
+/// **Named bug this catches.** `It never elevates its own privilege` was written
+/// for v0.2 and kept its v0.2 sentences after M5's successor shipped: the app
+/// "installs no privileged helper of its own" and "cannot arm lid-closed mode,
+/// cannot install that daemon, and cannot revert one", while the section three
+/// screens further down described the app installing, arming and reverting
+/// exactly that helper. One document, both claims, and nothing in the suite read
+/// either one. `noPolicyDocumentClaimsAMechanismThePrivilegedPathRefuses` reads
+/// API names and not capabilities; `noPublishedSurfacePromisesNoRootWhileTheProbeShipsARootVerb`
+/// asks a privilege sentence for a qualifier, and both of those sentences carry
+/// one — "the app" — so both went through it green.
+///
+/// **Why the capability half is derived from `Sources/`.** A retired claim is
+/// only retired while the code contradicts it. Were the button taken out again,
+/// "it cannot arm lid-closed mode" would go back to being TRUE, and a guard that
+/// kept refusing it would be forcing a false sentence into a security policy.
+/// The declarations are therefore asserted rather than assumed: lose one and
+/// this fails loudly, pointing at the claims that have to be revisited with it.
+///
+/// **What this CANNOT do.**
+///
+/// 1. It matches the sentences that were actually written, not the family they
+///    belong to. "The app installs no helper of its own" is a paraphrase and
+///    goes straight through. This is a regression guard on prose that shipped,
+///    not a semantic reader — the same limit `RegistrationConsentClaims_test.swift`
+///    states about paraphrase.
+/// 2. It proves a sentence is ABSENT, never that what replaced it is true. The
+///    replacement paragraph is prose, and no check here reads it for honesty.
+/// 3. The quotation half proves the retired wording is still ON the page, never
+///    that the sentence around it disowns it rather than endorsing it.
+@Test func noPolicyDocumentDeniesTheHelperTheAppNowInstallsArmsAndReverts() throws {
+    // 1. THE CAPABILITY, read off the code. Stated as an assertion and not an
+    //    `if`, for the reason the root-verb guard above gives: a capability
+    //    quietly removed would switch this guard off and leave the retired
+    //    claims below refused on nobody's authority.
+    for capability in shippedHelperCapabilities {
+        let source = try policyDocument(capability.file)
+        #expect(source.contains(capability.declaration), """
+            \(capability.file) no longer declares `\(capability.declaration)`, so \
+            this guard can no longer show that the app \(capability.what). Either \
+            the declaration moved — point this at it — or the capability went, in \
+            which case the sentences in `retiredElevationClaims` may be true again \
+            and have to be revisited WITH this check, not without it.
+            """)
+    }
+
+    // 2. THE CLAIM, refused as a whole sentence.
+    let prose = try readerFacingProse("SECURITY.md")
+    let asserted = retiredClaimsAsserted(in: prose)
+    #expect(asserted.isEmpty, """
+        SECURITY.md still asserts \(asserted.count) sentence(s) that the shipped \
+        app contradicts — it installs the helper, arms lid-closed mode and reverts \
+        a hold, all of which are declared in \
+        \(Set(shippedHelperCapabilities.map(\.file)).sorted()). Restate the claim \
+        the way the paragraph above restates v0.2's; do not delete it.
+        \(asserted.map { "  • \($0)" }.joined(separator: "\n"))
+        """)
+
+    // 3. THE CONTROL. Every check above is an ABSENCE, and an absence is what a
+    //    broken matcher reports too. This puts the retired claims into the prose
+    //    and requires all of them back: a normaliser that stopped normalising, a
+    //    claim written with a double space, a sentence splitter that stopped
+    //    splitting — each one is green at step 2 and red here.
+    let planted = prose + " " + retiredElevationClaims.joined(separator: " ")
+    #expect(Set(retiredClaimsAsserted(in: planted)) == Set(retiredElevationClaims), """
+        the retired claims were planted back into SECURITY.md's prose and \
+        \(retiredClaimsAsserted(in: planted).count) of \(retiredElevationClaims.count) \
+        came back. This guard cannot see the sentence it exists to refuse, so its \
+        silence at step 2 means nothing.
+        """)
+
+    // 4. THE HISTORY. The document promises, about v0.2, that a changed promise
+    //    is "restated here rather than quietly dropped". A correction that
+    //    deletes the old wording instead of quoting it leaves a reader diffing
+    //    two releases with no record that anything moved, and that is the
+    //    credibility this section trades on.
+    let onThePage = try policyDocument("SECURITY.md")
+        .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+    for claim in retiredElevationClaims {
+        #expect(onThePage.contains(claim), """
+            SECURITY.md no longer quotes the retired claim "\(claim)" anywhere. It \
+            was true of v0.2 and a reader who remembers it is owed the correction; \
+            quote it and say what changed, as the v0.2 paragraph does for v0.1.
+            """)
+    }
+
+    // 5. THE PROMISE THAT SURVIVES. The app process really does never become
+    //    root, and the failure mode of a correction like this one is to lose the
+    //    true half along with the false half.
+    #expect(onThePage.contains("### It never elevates its own privilege"), """
+        SECURITY.md has lost the heading `It never elevates its own privilege`. \
+        The promise is still true of the app process and two guards cite this \
+        heading by name.
+        """)
+    #expect(onThePage.contains("never elevates its own privilege."), """
+        SECURITY.md no longer states that coffee-bar never elevates its own \
+        privilege. macOS running a helper the user approved does not make that \
+        false, and dropping it answers a correction with a weaker document.
+        """)
+}
