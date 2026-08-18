@@ -111,15 +111,37 @@ derive_timeout() {
     printf '%s\n' "${raw//_/}"
 }
 
-# Prints every point in the timeline where the working count CHANGED, as
-# `<elapsed> <signed delta> <from>-><to>`.
+# Prints every point in the timeline where a count CHANGED, and names what the
+# change was: `<elapsed> working <a>-><b> attention <c>-><d> <joined|moved|left>`.
+#
+# WATCHING `working` ALONE IS NOT ENOUGH, and the 2026-08-18 run is what
+# established it. That count falls for two unrelated reasons and they are
+# indistinguishable in it:
+#
+#   - a session was RETIRED by the stale timeout, which is what this measures;
+#   - a real session blocked on its human and moved to `.awaitingInput`, which
+#     leaves the active set for a reason that has nothing to do with staleness.
+#
+# `attention` is where the second one lands and the first one does not, so
+# `working + attention` separates them: `left` means that sum FELL, which is a
+# session leaving the tracked set altogether, and `moved` means it held while
+# the session changed state. On a quiet machine every line is ours; on a busy
+# one, `left` is the only kind of line worth matching against a prediction.
+#
+# A reader watching `working` alone is also blind outright to a session leaving
+# from an attention state, which moves no `working` count at all.
 #
 # Changes only. A plateau of forty identical polls says nothing and printing it
 # would bury the three lines that matter.
 transitions() {
     awk -F, 'NR > 1 {
-        if (seen && $4 != prev) printf "%s %+d %d->%d\n", $3, $4 - prev, prev, $4
-        prev = $4; seen = 1
+        sum = $4 + $5
+        if (seen && ($4 != pw || $5 != pa)) {
+            delta = sum - psum
+            label = (delta > 0) ? "joined" : ((delta < 0) ? "left" : "moved")
+            printf "%s working %d->%d attention %d->%d %s\n", $3, pw, $4, pa, $5, label
+        }
+        pw = $4; pa = $5; psum = sum; seen = 1
     }' "$1"
 }
 
