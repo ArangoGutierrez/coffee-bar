@@ -27,7 +27,7 @@ is even viable on current macOS.
 | **M4** | Open-source repo hygiene — see M4 scope below | **v0.1 — cut here** |
 | **M5** | Lid-closed mode — root CLI (`sudo coffee-bar-probe arm`), `SleepDisabled`, launchd watchdog, guarded journal. No XPC | v0.2 |
 | **M6** | Power triage + telemetry (protected/demotable sets, restore-on-exit) | v0.2 |
-| **M7** | Token Tap — local OTLP token accounting (handoff §15) | v0.3 |
+| **M7** | Token Tap — local OTLP token accounting (handoff §15) | v0.4 |
 
 ## v0.1 definition of done
 
