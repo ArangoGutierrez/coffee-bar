@@ -305,6 +305,49 @@ public struct PreferencesView: View {
                     if armingInFlight {
                         ProgressView().controlSize(.small)
                     }
+
+                    // THE REMOVAL CONTROL, and issue #71's last acceptance line.
+                    // An install with no uninstall is a trap, and this one
+                    // installs a ROOT daemon: without a control here the only
+                    // way back is System Settings, or `sfltool resetbtm` for a
+                    // user who cannot find the switch.
+                    //
+                    // CONDITIONAL, unlike the button above it, and the two
+                    // differ for a reason rather than by accident. The arm
+                    // button is offered on every build because a build that
+                    // cannot register still has something to say — its title
+                    // and its sentence change to the `sudo` route. This one has
+                    // nothing to offer a Mac with no registered helper: the
+                    // click could only refuse, and a control whose every press
+                    // is an error is worse than no control.
+                    //
+                    // `model.registeredHelperIsActive` and not a fresh ask.
+                    // That property is written on every `refresh()`, which is
+                    // a launchd query deliberately kept off the render path,
+                    // and the model re-reads it the moment a removal succeeds
+                    // so the control goes away without waiting for the tick.
+                    //
+                    // The whole sequence is `model.removeRegisteredHelper()`:
+                    // release the hold, read `SleepDisabled` back, and only
+                    // then unregister. Nothing about that order is decided
+                    // here, deliberately. It needs the assertion and the
+                    // machine's power setting, and a window is not where a
+                    // safety property belongs.
+                    //
+                    // Synchronous, unlike the arm button. Nothing here opens
+                    // an XPC channel: the release is local and the removal is a
+                    // single call into the registration seam, so there is no
+                    // continuation to wait on and no second in-flight flag to
+                    // keep honest. The API that call reaches is named in
+                    // `PrivilegedHelperClient` and deliberately nowhere else,
+                    // including in prose here, for the reason the paragraph
+                    // above the arm button gives.
+                    if model.registeredHelperIsActive {
+                        Button(ServingModel.removeHelperLabel) {
+                            helperStatus = model.removeRegisteredHelper().statusLine
+                        }
+                        .disabled(armingInFlight)
+                    }
                 }
 
                 // The availability sentence always, the outcome only once there

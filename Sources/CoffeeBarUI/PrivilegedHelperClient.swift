@@ -130,6 +130,39 @@ public enum HelperArmOutcome: Equatable, Sendable {
     }
 }
 
+/// What a click on the REMOVAL control did.
+///
+/// A type of its own rather than a third case on `HelperArmOutcome`, because
+/// the two answer different questions and the window renders them in different
+/// places. Folding them together is how a refusal to remove ends up phrased as
+/// a failure to arm.
+public enum HelperRemovalOutcome: Equatable, Sendable {
+    /// macOS no longer runs this build's daemon.
+    case removed
+    /// It still does. The sentence says why, and what the user can do next.
+    case refused(String)
+
+    /// The line the window shows after a click.
+    ///
+    /// A refusal is passed through VERBATIM, for the reason `HelperArmOutcome`
+    /// gives: "end the lid-closed hold first" and "this machine's power
+    /// settings could not be read" need different things from the user, and a
+    /// house sentence makes them indistinguishable.
+    ///
+    /// Composed here rather than in the view, for the reason every other
+    /// sentence in this layer is: M1 design §5.4 forbids asserting on rendered
+    /// AppKit text.
+    public var statusLine: String {
+        switch self {
+        case .removed:
+            return "coffee-bar's helper has been removed. macOS no longer runs it, "
+                + "and lid-closed mode is back to the `sudo` route until you arm it again."
+        case .refused(let reason):
+            return reason
+        }
+    }
+}
+
 /// Where a registration stands, as this file needs to know it.
 ///
 /// A local enum rather than `SMAppService.Status`, and that is a boundary
@@ -161,6 +194,17 @@ enum HelperRegistrationState: Equatable, Sendable {
 protocol HelperRegistering {
     var registrationState: HelperRegistrationState { get }
     func register() throws
+
+    /// Issue #71's removal half. `SMAppService` declares
+    /// `unregisterAndReturnError:`, which imports under exactly this name and
+    /// signature, so the conformance below still adds no code and still cannot
+    /// drift.
+    ///
+    /// It throws `kSMErrorJobNotFound` for a job that is already gone, which is
+    /// the ordinary answer to a second click and is a refusal the caller has to
+    /// pass on rather than swallow: a removal that reports success for a helper
+    /// it did not touch is the same lie in the opposite direction.
+    func unregister() throws
 }
 
 extension SMAppService: HelperRegistering {
@@ -201,6 +245,50 @@ extension SMAppService: HelperRegistering {
 public protocol RegisteredHelperReporting: Sendable {
     /// `true` only while macOS reports this build's daemon as enabled.
     func registeredHelperIsActive() -> Bool
+}
+
+/// Taking the registration off, behind the same boundary the read is behind
+/// (issue #71).
+///
+/// **A SECOND protocol rather than a method on `RegisteredHelperReporting`, and
+/// the split is the point.** That one carries an ANSWER across the boundary;
+/// this one carries an ACTION that removes a root daemon. A conformer written
+/// for a preview or a fixture has to opt into the second deliberately, and the
+/// composition root reads as two decisions because it is making two.
+///
+/// **The model holds this; it does not implement it.** `ServingModel` decides
+/// WHEN a removal is safe, because that decision needs the assertion and the
+/// machine's sleep setting and neither belongs in the file that talks to macOS.
+/// The shipping conformer is `PrivilegedHelperClient`, one type over, which
+/// knows how and never when.
+public protocol HelperUnregistering: Sendable {
+    /// Asks macOS to stop running this build's daemon.
+    ///
+    /// Throws rather than answering, because every failure here is one the user
+    /// has to be told about VERBATIM: a job macOS says is not registered, a
+    /// build that could not have registered one, or a refusal from `launchd`
+    /// with its own words for what went wrong.
+    func unregisterHelper() throws
+}
+
+/// Why a removal never reached macOS at all.
+///
+/// `LocalizedError` rather than a bare `Error`, because the sentence goes
+/// straight to the user through `error.localizedDescription`, and the default
+/// bridging for a plain Swift enum produces "The operation couldn't be
+/// completed" plus a domain nobody can act on.
+public enum HelperRemovalRefusal: LocalizedError, Equatable {
+    /// This copy of coffee-bar names no team, or names somebody else's.
+    case thisBuildCouldNotHaveRegisteredIt
+
+    public var errorDescription: String? {
+        switch self {
+        case .thisBuildCouldNotHaveRegisteredIt:
+            return "This build is not signed by coffee-bar's developer, so it "
+                + "could not have registered a helper and must not take one off. "
+                + "Any helper macOS is running here was registered by a different copy."
+        }
+    }
 }
 
 /// This process's own team identifier, read once and answered from thereafter.
@@ -326,7 +414,7 @@ final class RunningSignature: @unchecked Sendable {
 /// **It holds no connection object.** `PrivilegedHelperChannel` is opaque, so
 /// there is nowhere in this file to resume a connection unpinned — which is why
 /// the entitlement can be one symbol wide.
-public struct PrivilegedHelperClient: Sendable, RegisteredHelperReporting {
+public struct PrivilegedHelperClient: Sendable, RegisteredHelperReporting, HelperUnregistering {
     /// Where the answer to "what team signed this binary" comes from.
     ///
     /// A seam, the third in this file and there for the same reason as the other
@@ -557,6 +645,47 @@ public struct PrivilegedHelperClient: Sendable, RegisteredHelperReporting {
     /// about one state.
     static let approvalGuidance = "Approve coffee-bar's helper in System Settings › "
         + "General › Login Items, then try again."
+
+    /// Asks macOS to stop running this build's daemon.
+    ///
+    /// **It decides nothing about WHEN.** `ServingModel.removeRegisteredHelper()`
+    /// owns the sequence, because the safety property is an order across three
+    /// things and two of them are not this file's: the assertion has to be
+    /// released and `SleepDisabled` has to be read back CLEAR before anything
+    /// gets unregistered. Reversed, the machine is left with sleep disabled and
+    /// the daemon that would have put it back removed. This method is the last
+    /// step of that sequence and knows only how to take it.
+    ///
+    /// **The `guard` is the same one `register()` opens with, and it is not
+    /// symmetry for its own sake.** A build naming no team, or somebody else's,
+    /// could not have registered THIS daemon — so the job macOS would answer
+    /// about belongs to whichever copy did, and unregistering it takes off a
+    /// helper this build has no business touching. Refusing early is the honest
+    /// answer, exactly as it is for arming.
+    ///
+    /// **Through the `daemon` seam, unlike `register()`, and the asymmetry is
+    /// deliberate.** That method spells `SMAppService.daemon(plistName:)`
+    /// inline because an injectable `register()` would hand the root INSTALL
+    /// path a service of somebody else's choosing. Removal installs nothing, so
+    /// that argument does not transfer, and what the seam buys instead is a
+    /// production path a check can drive — `anUnsignableBuildNeverAsksMacOSToUnregisterAnything`
+    /// hands in a recording service and measures that the closed gate asks it
+    /// for nothing at all.
+    ///
+    /// **DO NOT DRIVE THIS FROM A CHECK WITH A REAL TEAM IDENTIFIER.** Past the
+    /// guard, the seam's DEFAULT is the real `SMAppService`, and a test that
+    /// opens the gate unregisters the helper on whatever machine runs
+    /// `swift test`. What that costs is not a red test: it is the maintainer's
+    /// approval in System Settings › General › Login Items & Extensions, and
+    /// granting it again is a manual cycle there.
+    /// `noTestCanMakeTheSuiteRegisterTheHelperForReal` refuses the shape, with
+    /// `.unregisterHelper()` on its list of registration-reaching calls.
+    public func unregisterHelper() throws {
+        guard availability() == .registrable else {
+            throw HelperRemovalRefusal.thisBuildCouldNotHaveRegisteredIt
+        }
+        try daemon().unregister()
+    }
 
     /// Registers if needed, then asks the helper to hold sleep for `seconds`.
     ///
