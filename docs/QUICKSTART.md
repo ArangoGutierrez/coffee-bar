@@ -253,6 +253,59 @@ line appears while an agent works:
 `PreventUserIdleDisplaySleep`, named
 `"coffee-bar is keeping the display awake"`.
 
+## Optional: lid-closed mode
+
+The three steps above keep your Mac awake with the **lid open**. Closing the lid
+still sleeps it: a power assertion does not survive the lid, and overriding it
+means changing a system setting. That is the one part of coffee-bar that needs
+root, and it is opt-in. Everything above needs none.
+
+**On a signed build, the notarised DMG, it is one button.** Open Preferences…
+from the foot of the panel and, under **Power**, click
+**Arm lid-closed mode**. coffee-bar asks macOS to install a small privileged
+helper, and the app itself never elevates: **macOS runs that helper, not
+coffee-bar**, and it takes no credentials from you to do it.
+
+**Then go and approve it, because nothing will prompt you.** Open System
+Settings → General → Login Items & Extensions and turn coffee-bar on there.
+There is no dialog to accept and **no password at any point**. Until you flip
+that switch the helper is installed and will not run, and the button reports a
+refusal that reads like a bug and is not one.
+
+The window then tells you the hold is armed and for how long, taken from what
+the helper recorded rather than from the slider you set. **It cannot tell you
+again later** — the journal that records the hold belongs to root and coffee-bar
+runs as you — so ask the probe instead:
+
+    sudo /Library/PrivilegedHelperTools/coffee-bar-probe report
+
+**To take it away**, use **Remove the helper** in the same window. It ends the
+hold first and unregisters second, so your sleep setting is never left changed
+with nothing to put it back.
+
+### On an unsigned build
+
+**The button is disabled**, and a Homebrew install is unsigned by design: the
+formula compiles the source on your machine, so the bundle carries no team
+identifier and macOS has nothing to pin a helper to. The window says as much and
+names the command instead.
+
+Lid-closed mode still works there, by the route it has always had, and **that
+route is not deprecated**. It is two commands, because the probe refuses to arm
+itself from any directory you can write to — a launchd job runs it as root at
+every boot, so a binary somebody else could swap is root persistence:
+
+    sudo install -o root -g wheel -m 755 \
+      /Applications/CoffeeBar.app/Contents/MacOS/coffee-bar-probe \
+      /Library/PrivilegedHelperTools/coffee-bar-probe
+    sudo /Library/PrivilegedHelperTools/coffee-bar-probe arm
+
+A Homebrew install does not land in `/Applications`, so take the source path
+from the Preferences window rather than from this page: it asks the running app
+where it actually is, and this page cannot.
+[How coffee-bar works](https://arangogutierrez.github.io/coffee-bar/docs.html)
+explains both routes in full.
+
 ## Where to look in the UI
 
 coffee-bar has no Dock icon and opens no window. It is a menu-bar app, so after
@@ -306,6 +359,7 @@ frontmost.
 | Display | Preferences | Whether a hold covers the screen as well as the machine. |
 | Battery floor | Preferences | How much battery a hold may spend. |
 | Quiet everything else | Preferences | Whether processes you have named are demoted while an agent works. |
+| Arm lid-closed mode | Preferences | Whether the Mac may stay awake with the lid shut. Signed builds only. |
 
 The Battery floor control ships at 15%.
 On battery, coffee-bar does not hold at or below 15%.

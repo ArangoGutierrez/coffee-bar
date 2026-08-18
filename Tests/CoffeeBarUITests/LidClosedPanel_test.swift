@@ -1221,3 +1221,247 @@ private func shellSplit(of command: String) throws -> ShellSplit {
           \(unverifiable)
         """)
 }
+
+// MARK: - Issue #71: what the user-facing surfaces may claim about a hold
+
+/// The user-facing documents these three guards police, found on disk.
+///
+/// **Discovered rather than listed, and `DocsClaims_test.swift` records why in
+/// full:** a hardcoded list is a coverage hole with a friendly face, and it
+/// fails open the moment somebody adds a page. The Markdown half is named by
+/// hand for the reason that file gives, which is that a glob over the
+/// repository's Markdown sweeps in specs, plans and task briefs.
+///
+/// **A THIRD reading of these pages, and the split is deliberate.**
+/// `SiteClaims_test.swift` reads their markup, `DocsClaims_test.swift` reads
+/// their prose with `<code>` stripped. These read the RAW BYTES, which is the
+/// only reading that can see a claim in a JSON-LD block. Issue #71's near miss
+/// was exactly that: the false sentence sat twice in `site/docs.html`, once in
+/// the visible copy and once in the structured data a search engine quotes, and
+/// a guard built on stripped prose would have certified the page after a fix to
+/// one of them.
+private func lidClosedDocumentedSurfaces() -> [String] {
+    let markdown = ["CHANGELOG.md", "README.md", "SECURITY.md",
+                    "docs/BUILDING.md", "docs/QUICKSTART.md"]
+    let site = uiPackageRoot().appending(path: "site")
+    var pages: [String] = []
+    if let walker = FileManager.default.enumerator(atPath: site.path) {
+        for case let rel as String in walker where rel.hasSuffix(".html") {
+            pages.append("site/\(rel)")
+        }
+    }
+    return (markdown + pages).sorted()
+}
+
+/// One documented surface, as the bytes it ships.
+private func surfaceBytes(_ name: String) throws -> String {
+    try String(contentsOf: uiPackageRoot().appending(path: name), encoding: .utf8)
+}
+
+/// Sentences no user-facing surface of this product may state, verbatim.
+///
+/// **Whole sentences, never substrings, and that is not a style preference.**
+/// "cannot" and "armed" both appear in the sentence this product SHOULD say, so
+/// a guard keyed on either word fires on correct prose, and a guard that fires
+/// on correct prose gets routed around. Each entry below is the complete
+/// sentence, so it can only match the claim itself.
+private let refutedArmStateClaims = [
+    // SHIPPED, and it was published. `site/docs.html` carried it twice on
+    // `4bf259d`: once as visible copy and once inside the `FAQPage` JSON-LD.
+    // It is false because arming from the Preferences window makes the helper
+    // report what it recorded, and `HelperArmOutcome.armed` renders that as
+    // "Lid-closed mode is armed for ...". Nothing pinned it, which is why it
+    // survived a release cycle and reached a public announcement draft.
+    "coffee-bar cannot show you whether lid-closed mode is armed, because the journal that records it belongs to root and this app runs as you.",
+
+    // NEVER SHIPPED, and refused before it could. The v0.3 documentation brief
+    // asked for the correction to be written as "the panel shows it". The panel
+    // shows nothing about this mode:
+    // `theLidClosedSummaryIsInThePreferencesWindowAndNotInThePanel` in
+    // `AppLayerBoundary_test.swift` is a NEGATIVE guard holding it out, issue
+    // #56 removed the paragraph, and the helper's XPC protocol has no verb that
+    // could answer the question anyway. Correcting a false claim with a second
+    // false claim is the failure this entry exists against.
+    "The panel shows you whether lid-closed mode is armed.",
+]
+
+/// No user-facing surface repeats a claim about the hold this product refuted.
+///
+/// **Named bug this catches, and it is the reason issue #71 needed a guard at
+/// all.** The first sentence above was true of the build that shipped it and
+/// stopped being true when arming moved to a button. Nothing in 1224 tests read
+/// it, so it stayed on the site, went into the Preferences window, and was on
+/// its way into a public announcement. A false claim with no check behind it
+/// does not decay; it gets copied.
+///
+/// **What this CANNOT do, stated so nobody over-trusts it.** It matches
+/// sentences, so a REWORDING of the same falsehood passes. That is the price of
+/// a guard that never fires on correct prose, and it is deliberate: the
+/// alternative, keying on "cannot" plus "armed", is red against the true
+/// sentence this page is required to carry by
+/// `theSiteExplainsLidClosedModeAndStatesTheShippedHold`. It also reads
+/// documents only. The same claim inside `ServingModel.lidClosedSummary` is a
+/// user-facing surface too, and `theLidClosedSummaryCarriesBothTheCommandAndWhatTheAppCannotSee`
+/// is what reads that one.
+@Test func noUserFacingSurfaceRepeatsARefutedClaimAboutTheHold() throws {
+    let surfaces = lidClosedDocumentedSurfaces()
+
+    // ANTI-VACUITY. A discovery that returned nothing loops zero times and
+    // reports success, which is indistinguishable from every page being clean.
+    #expect(surfaces.count >= 10, """
+        the sweep found \(surfaces.count) documented surface(s): \(surfaces). \
+        The repository published 11 when this guard was written, so a list this \
+        short means discovery broke and every check below asserted nothing.
+        """)
+    for required in ["README.md", "docs/QUICKSTART.md", "site/docs.html", "site/index.html"] {
+        #expect(surfaces.contains(required), """
+            \(required) is not in the swept set, and it is one of the four \
+            surfaces issue #71's documentation pass rewrote. A sweep that \
+            cannot see it cannot hold it to anything.
+            """)
+    }
+
+    for name in surfaces {
+        let bytes = try surfaceBytes(name)
+        for claim in refutedArmStateClaims {
+            #expect(!bytes.contains(claim), """
+                \(name) states a claim about lid-closed mode that this product \
+                refuted: "\(claim)" Arming from the Preferences window makes the \
+                helper report what it recorded, and the panel carries no \
+                lid-closed surface at all. Check the JSON-LD block as well as \
+                the visible copy.
+                """)
+        }
+    }
+}
+
+/// The sentence `site/docs.html` is required to state instead, in BOTH copies.
+///
+/// It is the sentence the shipped build can keep. The first half is what
+/// `HelperArmOutcome.armed(seconds:)` renders after a click; the second half is
+/// the measurement that has not changed, and
+/// `theSiteExplainsLidClosedModeAndStatesTheShippedHold` requires the words
+/// "cannot" and "armed" to survive somewhere in the section, which this
+/// satisfies without overstating what the app can see.
+private let publishedArmStateClaim =
+    "coffee-bar tells you lid-closed mode is armed at the moment you arm it from the Preferences window, and it cannot answer the question later, because the journal that records the hold belongs to root and this app runs as you."
+
+/// The visible copy and the structured-data copy say the same thing.
+///
+/// **Named bug this catches, and it is the specific near miss of issue #71.**
+/// `site/docs.html` states this claim twice: once as a paragraph a reader sees
+/// and once as a `FAQPage` answer. The JSON-LD copy is the one a search engine
+/// quotes as the product's own words and the one no reader can see to check, so
+/// a maintainer who fixes the visible paragraph and stops has republished the
+/// falsehood to the surface with the widest reach and the least scrutiny.
+///
+/// `everyFAQAnswerOnTheDocsPageAlsoAppearsVisiblyOnIt` in
+/// `SiteClaims_test.swift` proves the two copies AGREE. It cannot prove they
+/// agree on something TRUE, and it is satisfied by two identical falsehoods.
+/// This pins the sentence itself, so softening it back requires editing this
+/// file and saying so.
+///
+/// **What this cannot do.** It reads the page on disk, so it proves the page
+/// SAYS this. It cannot prove the page was ever published.
+@Test func theDocsPageStatesTheArmStateClaimInBothOfItsCopies() throws {
+    let page = try surfaceBytes("site/docs.html")
+
+    let copies = page.components(separatedBy: publishedArmStateClaim).count - 1
+    #expect(copies == 2, """
+        site/docs.html carries \(copies) copy(ies) of the arm-state sentence, \
+        and it needs exactly two: the visible paragraph and the FAQ answer in \
+        the JSON-LD block. One copy means the two have drifted, and the copy \
+        left behind is the one a search engine quotes. The sentence is: \
+        "\(publishedArmStateClaim)"
+        """)
+
+    // The JSON-LD copy SPECIFICALLY, rather than trusting the count above. Two
+    // visible paragraphs and no structured data satisfies a bare count while
+    // leaving the answer engine reading whatever the block still says.
+    let ns = page as NSString
+    let block = try NSRegularExpression(pattern: "<script type=\"application/ld\\+json\">([\\s\\S]*?)</script>")
+    let found = block.matches(in: page, range: NSRange(location: 0, length: ns.length))
+    #expect(found.count == 1,
+            "site/docs.html has \(found.count) JSON-LD blocks; this guard needs exactly one")
+    let structured = found.first.map { ns.substring(with: $0.range(at: 1)) } ?? ""
+    #expect(structured.contains(publishedArmStateClaim), """
+        the JSON-LD block of site/docs.html does not carry the arm-state \
+        sentence. That block is what a search engine and a link preview quote, \
+        so a fix to the visible copy alone republishes the old claim to the \
+        surface with the widest reach.
+        """)
+}
+
+/// The surfaces that teach a reader how to arm the mode.
+///
+/// A literal, and short, because each name here is a page somebody has to
+/// REWRITE when the flow changes. `SECURITY.md` and `docs/BUILDING.md` name the
+/// command too and are deliberately absent: the first is a threat-model
+/// document bounding what the root path may do, the second tells a contributor
+/// how to build the binary. Neither is where a user goes to learn the feature,
+/// and holding a policy document to a tutorial's running order would produce a
+/// red that the honest fix is to ignore.
+private let armTeachingSurfaces = ["README.md", "docs/QUICKSTART.md", "site/docs.html"]
+
+/// No teaching surface presents the `sudo` route as the way to arm the mode.
+///
+/// **The invariant is ORDER, not presence, and that is the point.** The `sudo`
+/// route is not deprecated and every one of these pages is right to document
+/// it: on an unsigned build, which every Homebrew install is, it is the only
+/// route there is. What it must not be is the FIRST thing a reader meets, on a
+/// signed build where one button does the same work. A presence check cannot
+/// tell those two apart, because the page that gets this wrong contains both.
+///
+/// **Named bug this catches.** On `4bf259d` all three of these pages taught the
+/// command route and nothing else. `README.md` and `docs/QUICKSTART.md` did not
+/// mention lid-closed mode at all, and `site/docs.html` opened with
+/// `sudo install`. A reader on a signed build was sent to a root shell to do
+/// something a button does, and the button reached them nowhere.
+///
+/// **What this cannot do.** It proves the button is named first. It cannot
+/// prove the sentence around it is true, or that the unsigned case is labelled
+/// as such; `noUserFacingSurfaceRepeatsARefutedClaimAboutTheHold` and a reader
+/// are what cover that.
+@Test func everyTeachingSurfaceNamesTheButtonBeforeTheSudoRoute() throws {
+    // From the product, never a copy. The title is what the window renders, so
+    // a rename moves this guard with it instead of leaving it pinned to a
+    // string no build shows.
+    let button = HelperAvailability.registrable.buttonTitle
+    #expect(button == "Arm lid-closed mode",
+            "the arm button is titled \"\(button)\"; these pages name it in prose and have to be reread")
+
+    for name in armTeachingSurfaces {
+        let bytes = try surfaceBytes(name)
+
+        // The VERB, in the short and the fully-qualified spelling both. The
+        // pages differ on whether they print the full path, and a guard keyed
+        // on one spelling reads the other page as teaching no command at all.
+        guard let sudoAt = bytes.range(of: "coffee-bar-probe arm")?.lowerBound else {
+            // A page that teaches no command has no ordering to get wrong. It
+            // still has to name the button, or the feature reaches nobody.
+            #expect(bytes.contains(button), """
+                \(name) names neither the command route nor the \"\(button)\" \
+                button, so it documents no way to arm lid-closed mode at all.
+                """)
+            continue
+        }
+
+        guard let buttonAt = bytes.range(of: button)?.lowerBound else {
+            #expect(Bool(false), """
+                \(name) teaches "coffee-bar-probe arm" and never names the \
+                \"\(button)\" button. On a signed build that sends the reader to \
+                a root shell for something one click does, and it is how the \
+                pre-#71 world survives a release that changed it.
+                """)
+            continue
+        }
+
+        #expect(buttonAt < sudoAt, """
+            \(name) prints "coffee-bar-probe arm" before it names the \
+            \"\(button)\" button, which presents the root command as the way to \
+            arm the mode. The command route is not deprecated and belongs on \
+            this page, labelled as the route for an unsigned build, AFTER the \
+            button.
+            """)
+    }
+}
