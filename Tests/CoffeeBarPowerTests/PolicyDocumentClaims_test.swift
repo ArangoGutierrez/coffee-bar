@@ -1246,29 +1246,52 @@ private let retiredElevationClaims = [
         + "revert one.",
 ]
 
-/// One sentence reduced to the claim it makes, so emphasis cannot launder it.
+/// Emphasis taken off BEFORE the prose is cut into sentences, which is the only
+/// place it does anything.
 ///
-/// Bold and italic markers go, and so does a leading blockquote marker. Neither
-/// changes what a sentence asserts, and both are one keystroke away from a claim
-/// this guard would otherwise walk past — `**It cannot arm lid-closed mode…**`
-/// reads to a user as the same promise and to a naive comparison as a different
-/// string.
+/// **Measured, not assumed.** Stripping `**` from each finished sentence was the
+/// first draft, and it caught nothing: planting
+/// `**It cannot arm lid-closed mode, cannot install that daemon, and cannot
+/// revert one.**` as its own paragraph left this guard GREEN. `sentences(of:)`
+/// ends a sentence at a full stop followed by WHITESPACE, deliberately, so that
+/// `v0.1` survives; a bolded sentence puts a `*` there instead. The claim was
+/// therefore never a sentence of its own to normalise, and it ran on into the
+/// paragraph after it. Taking the markers off first restores the boundary, and
+/// the same planted paragraph is red.
+///
+/// Quotation marks are deliberately KEPT. They are what tells a document
+/// quoting its own retired wording from a document still asserting it, and that
+/// distinction is the reason these claims are matched whole. Stripping `"` here
+/// would turn the correction red along with the defect.
+///
+/// `_underscore_` italics are not stripped. This tree writes emphasis with
+/// asterisks, and `_` is a word character in the file names both documents are
+/// full of: `JournalStore_test.swift` would be mangled to buy a laundering route
+/// nobody has used.
+private func emphasisRemoved(_ prose: String) -> String {
+    prose.replacingOccurrences(of: "*", with: "")
+}
+
+/// One sentence reduced to the claim it makes.
+///
+/// A leading blockquote marker goes, for the reason emphasis does: `> It cannot
+/// arm lid-closed mode…` asserts to a skimming reader exactly what the unmarked
+/// sentence asserts, and the marker is one keystroke.
 ///
 /// KNOWN CONSEQUENCE, stated rather than discovered: quoting a retired claim as
 /// a standalone blockquoted sentence turns this red even though the surrounding
 /// paragraph disowns it. The document's own convention is to quote inline, which
-/// is what the paragraphs above and below do, and a bare blockquote of a false
-/// sentence is what a skimming reader takes for an assertion anyway.
+/// is what the corrected section does, and a bare blockquote of a false sentence
+/// is what a skimming reader takes for an assertion anyway.
 private func claimNormalised(_ sentence: String) -> String {
-    var s = sentence.trimmingCharacters(in: .whitespaces)
-    s = s.replacingOccurrences(of: "^>\\s*", with: "", options: .regularExpression)
-    s = s.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "*", with: "")
+    let s = sentence.trimmingCharacters(in: .whitespaces)
+        .replacingOccurrences(of: "^>\\s*", with: "", options: .regularExpression)
     return s.trimmingCharacters(in: .whitespaces)
 }
 
 /// Which of the retired claims `prose` asserts as a sentence of its own.
 private func retiredClaimsAsserted(in prose: String) -> [String] {
-    let said = Set(sentences(of: prose).map { claimNormalised($0).lowercased() })
+    let said = Set(sentences(of: emphasisRemoved(prose)).map { claimNormalised($0).lowercased() })
     return retiredElevationClaims.filter { said.contains(claimNormalised($0).lowercased()) }
 }
 
