@@ -145,6 +145,34 @@ transitions() {
     }' "$1"
 }
 
+# Reads the two counts either side of a revive post and says what they mean.
+#
+# THE PROBE THAT SETTLES WHAT COUNTING CANNOT. Re-posting a tool event for an
+# already-injected session id raises `working` only if that session had LEFT the
+# active set; one still `.working` is advanced to `.working` again and the count
+# does not move. So the delta answers "was this session retired" directly,
+# without needing to have caught the moment it happened.
+#
+# It is the answer to the one case the 2026-08-18 run could not attribute: a
+# fall of one and two concurrent joins land in the same poll and net to a rise,
+# so no `left` line appears for a session that did retire.
+#
+# `inconclusive` is not padding. A real session moving in the same instant is
+# exactly what this cannot see through, and a delta that is neither 0 nor 1 has
+# to say so rather than pick a side. A delta of 0 is the weaker of the two
+# readings for the same reason: it is also what a revive plus a simultaneous
+# departure looks like.
+probe_verdict() {
+    local before=$1 after=$2
+    if [ "$after" -eq $((before + 1)) ]; then
+        printf 'retired\n'
+    elif [ "$after" -eq "$before" ]; then
+        printf 'active\n'
+    else
+        printf 'inconclusive\n'
+    fi
+}
+
 # FULL only when the count reached zero AND the hold was released.
 #
 # Both, never either. A count at zero with the assertion still held is the
@@ -168,6 +196,7 @@ STAGGER=60
 POLL=15
 MAX_WAIT=1800
 CONTROL_POLLS=20
+PROBE=no
 OUT=""
 SOCKET=""
 
@@ -180,6 +209,10 @@ usage: t8-crashed-agent-hold-release.sh [options]
   --poll P            seconds between /status reads (default 15)
   --max-wait W        seconds to observe after the last post (default 1800)
   --control-polls C   reads in the observer-effect control burst (default 20)
+  --probe-retirement  after observing, re-post to each synthetic session to
+                      settle whether it was retired. REVIVES them, so they
+                      hold for one more timeout. For busy machines, where a
+                      fall can be masked by concurrent joins.
   --out DIR           where the timeline goes (default under $TMPDIR)
   --socket PATH       ingest socket (default: derived from the source)
 
@@ -199,6 +232,7 @@ main() {
             --poll) POLL=$2; shift 2 ;;
             --max-wait) MAX_WAIT=$2; shift 2 ;;
             --control-polls) CONTROL_POLLS=$2; shift 2 ;;
+            --probe-retirement) PROBE=yes; shift ;;
             --out) OUT=$2; shift 2 ;;
             --socket) SOCKET=$2; shift 2 ;;
             -h|--help) usage; exit 0 ;;
@@ -363,12 +397,41 @@ main() {
     transitions "$csv"
     note "── end ──"
     note ""
+
+    # ── 5b. Post-hoc probe, opt in ──────────────────────────────────────────
+    # AFTER the observation, never during it: a revive puts the session back in
+    # the active set and starts a fresh timeout, which would corrupt the very
+    # measurement above.
+    local probe_all_retired=yes
+    if [ "$PROBE" = yes ]; then
+        note "── retirement probe (revives each synthetic session) ──"
+        local b a v
+        for ((i = 1; i <= SESSIONS; i++)); do
+            id="coffeebar-acceptance-t8-$started-$$-$i"
+            b=$(json_field "$(read_status)" working) || fail "no count before probing $i"
+            post_event "$id" PreToolUse || fail "probe post for $id failed"
+            a=$(json_field "$(read_status)" working) || fail "no count after probing $i"
+            v=$(probe_verdict "$b" "$a")
+            note "  session $i: working $b -> $a  =>  $v"
+            [ "$v" = active ] && probe_all_retired=no
+        done
+        note "  Those sessions are live again and retire once more on the same"
+        note "  ${working_timeout}s timeout. Nothing further is posted to them."
+        note ""
+    fi
     note "baseline working      $baseline"
     note "peak working          $peak"
     note "lowest working seen   $min_seen"
     note "observed for          ${elapsed}s of a ${MAX_WAIT}s budget"
     [ -n "$zero_at" ] && note "working reached 0 at  +${zero_at}s after the last post"
     [ -n "$release_at" ] && note "hold released at      +${release_at}s after the last post"
+
+    if [ "$probe_all_retired" = no ]; then
+        note "FAIL: a synthetic session was STILL IN THE ACTIVE SET after"
+        note "${elapsed}s of silence, and workingTimeout is ${working_timeout}s."
+        note "A crashed agent is pinning this machine."
+        exit 3
+    fi
 
     local result; result=$(verdict "$reached_zero" "$released" "$observed_drop")
     note ""
