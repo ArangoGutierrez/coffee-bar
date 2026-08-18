@@ -121,6 +121,26 @@ printf 'iso,epoch,elapsed,working,attention,holding\n' > "$TMP/empty.csv"
 check "transitions on a header-only file prints nothing" "" \
     "$(transitions "$TMP/empty.csv")"
 
+# ── probe_verdict ────────────────────────────────────────────────────────────
+# The post-hoc probe that settles what counting alone cannot. Re-posting a tool
+# event for a session id that was already injected raises `working` only if that
+# session had LEFT the active set; a session still `.working` is advanced to
+# `.working` again and the count does not move. Measured against the live
+# 0.3.0-rc2 build on 2026-08-18: reviving the run's session 3 took working 3->4,
+# and a brand-new id took 4->5.
+#
+# Arguments are the counts either side of the post.
+check "probe_verdict: a rise means the session had been retired" \
+    "retired" "$(probe_verdict 3 4)"
+check "probe_verdict: no movement means it was still active" \
+    "active" "$(probe_verdict 3 3)"
+# A concurrent real session moving in the same instant is the one thing this
+# cannot see through, and it must say so rather than pick a side.
+check "probe_verdict: a jump of two is inconclusive" \
+    "inconclusive" "$(probe_verdict 3 5)"
+check "probe_verdict: a fall is inconclusive" \
+    "inconclusive" "$(probe_verdict 3 2)"
+
 # ── verdict ──────────────────────────────────────────────────────────────────
 # Arguments: reached_zero, holding_released, observed_drop.
 check "verdict FULL needs the count at zero AND the hold released" \
