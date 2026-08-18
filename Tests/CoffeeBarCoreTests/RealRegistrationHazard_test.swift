@@ -82,7 +82,8 @@ import CoffeeBarTestSupport
 ///    another name is unguarded until it is added to
 ///    `privilegedPathReachingCall`.
 ///    `ServingModel.removeRegisteredHelper()` is deliberately NOT on that list:
-///    it reaches the client only through the `HelperUnregistering` seam, whose
+///    it reaches the client only through the `HelperRemovalControlling` seam,
+///    whose
 ///    default is spelled in `ServingModel.swift` and not in any test.
 /// 4. **Text inside a string literal.** The lexer strips comments and KEEPS
 ///    string literals on purpose, so a fixture STRING containing
@@ -151,9 +152,11 @@ private let privilegedPathReachingCall = [
     // unregisters the maintainer's helper for real, which costs a manual
     // approval cycle in System Settings to undo.
     //
-    // The leading `.` does the same work it does above: two files declare
-    // `func unregisterHelper() throws` on a `HelperUnregistering` double, and a
-    // declaration is not a call.
+    // The leading `.` does the same work it does above:
+    // `HelperRemoval_test.swift` declares `func unregisterHelper() throws` on a
+    // `HelperRemovalControlling` double, and a declaration is not a call. It is
+    // the only real one in the tree: the other spellings live inside the fixture
+    // STRINGS in this file, which is limit 4 above and not a second double.
     "\\.\\s*unregisterHelper\\s*\\(\\s*\\)",
     // Issue #71's revert, and the ONE entry here that reaches no registration.
     // Past `availability()` it opens a channel to the root daemon and asks it
@@ -532,10 +535,10 @@ func realRegistrationHazards(in source: String) -> [String] {
 
     // A double DECLARING the seam method. The leading `.` in the pattern is what
     // holds these apart, exactly as it does for `register()`. Named bug:
-    // dropping it turns every `HelperUnregistering` double in the suite into an
+    // dropping it turns every `HelperRemovalControlling` double in the suite into an
     // offender, and the guard gets deleted by the first person it annoys.
     let theDoubleThatDeclaresIt = """
-        private final class FakeHelper: RegisteredHelperReporting, HelperUnregistering {
+        private final class FakeHelper: RegisteredHelperReporting, HelperRemovalControlling {
             func registeredHelperIsActive() -> Bool { true }
             func unregisterHelper() throws {}
         }

@@ -564,9 +564,18 @@ private func modelForRemoval(log: RemovalLog,
         Issue.record("expected a refusal, got \(outcome)")
         return
     }
-    #expect(reason.contains("not signed"), """
-        the refusal does not say the build is unsigned, so the user reads a \
-        channel failure instead of the reason there is no channel: \(reason)
+    // The EXACT sentence, and the substring it replaces was not a stylistic
+    // choice. `HelperRemovalRefusal.thisBuildCouldNotHaveRegisteredIt` opens
+    // with the same words -- "This build is not signed by coffee-bar's
+    // developer, so it" -- and then says something else entirely: that it "must
+    // not take one off". `contains("not signed")` cannot tell the two apart, so
+    // the plausible copy-paste (returning the UNREGISTER refusal from `revert()`)
+    // stays green while the user is told coffee-bar declined to remove
+    // something, at a moment when nothing was being removed.
+    #expect(reason == HelperAvailability.unavailable.explanation, """
+        the refusal is not the availability sentence, so the user reads a \
+        channel failure, or a refusal about a removal, instead of the reason \
+        there is no channel: \(reason)
         """)
 }
 
