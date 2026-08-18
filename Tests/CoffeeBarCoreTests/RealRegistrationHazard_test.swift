@@ -76,10 +76,11 @@ import CoffeeBarTestSupport
 ///    are recognised. Reading the team out of a fixture file, or assembling the
 ///    string, defeats this.
 /// 3. **A future entry point spelled differently.** The calls recognised are
-///    `.register()`, `.arm(seconds:`, `.unregisterHelper()` and the direct
-///    `SMAppService.daemon(`/`.agent(`/`.loginItem(` constructions. A new method
-///    on `PrivilegedHelperClient` that reaches the real service under another
-///    name is unguarded until it is added to `registrationReachingCall`.
+///    `.register()`, `.arm(seconds:`, `.unregisterHelper()`, `.revert()` and the
+///    direct `SMAppService.daemon(`/`.agent(`/`.loginItem(` constructions. A new
+///    method on `PrivilegedHelperClient` that reaches the real service under
+///    another name is unguarded until it is added to
+///    `privilegedPathReachingCall`.
 ///    `ServingModel.removeRegisteredHelper()` is deliberately NOT on that list:
 ///    it reaches the client only through the `HelperUnregistering` seam, whose
 ///    default is spelled in `ServingModel.swift` and not in any test.
@@ -105,7 +106,7 @@ import CoffeeBarTestSupport
 /// The signals that make a scope dangerous, and the spellings they are found by.
 ///
 /// Two independent halves. `realTeamSignature` opens the gate in
-/// `availability()`; `registrationReachingCall` walks through it. Neither is an
+/// `availability()`; `privilegedPathReachingCall` walks through it. Neither is an
 /// offence on its own and the suite contains the first one four times over.
 private let realTeamSignatureSource = [
     // A `RunningSignature` handed the real team, in any body shape — the
@@ -119,16 +120,28 @@ private let realTeamSignatureSource = [
     "signature\\s*:\\s*\\.shared",
 ]
 
-/// A call that can reach `try service.register()` on a service this package did
+/// A call that can reach the REAL privileged path on something this package did
 /// not substitute.
 ///
-/// A leading `.` is required and it is load-bearing: two test files declare
-/// `func register() throws` on a `HelperRegistering` double, and a declaration
-/// is not a call. `arm` is matched with its `seconds:` label ONLY —
+/// **Renamed from `registrationReachingCall` when issue #71's removal landed,
+/// because the set genuinely widened.** Three of these reach
+/// `SMAppService` — `register()`, `arm(seconds:)` and `unregisterHelper()`. The
+/// fourth, `revert()`, reaches no registration at all: it opens a channel to the
+/// ROOT DAEMON and asks it to change a system power setting. Both are
+/// machine-wide side effects from `swift test`, which is what this file is
+/// about, and a list named for only one of them would invite the next author to
+/// leave the other off.
+///
+/// A leading `.` is required and it is load-bearing: three test files declare
+/// `func register() throws` or `func revert() async -> …` on a double, and a
+/// declaration is not a call. `arm` is matched with its `seconds:` label ONLY —
 /// `PrivilegedHelperService.arm(ttlSeconds:)` is a different type on the other
 /// side of the XPC boundary and is driven ~20 times in `CoffeeBarPowerTests`,
-/// which must stay green.
-private let registrationReachingCall = [
+/// which must stay green. `revert` is matched with EMPTY parentheses only, for
+/// the same reason: `WatchdogDecision.revert(_:)` is an enum case driven ~30
+/// times in `CoffeeBarCoreTests` and always carries an argument, and the
+/// service's own `revert(reply:)` takes a closure.
+private let privilegedPathReachingCall = [
     "\\.\\s*register\\s*\\(\\s*\\)",
     "\\.\\s*arm\\s*\\(\\s*seconds\\s*:",
     // Issue #71's removal path, and it is the same hazard pointed the other
@@ -142,6 +155,11 @@ private let registrationReachingCall = [
     // `func unregisterHelper() throws` on a `HelperUnregistering` double, and a
     // declaration is not a call.
     "\\.\\s*unregisterHelper\\s*\\(\\s*\\)",
+    // Issue #71's revert, and the ONE entry here that reaches no registration.
+    // Past `availability()` it opens a channel to the root daemon and asks it
+    // to put `SleepDisabled` back. On a Mac with an approved helper that is a
+    // live change to a system power setting, made by a test run.
+    "\\.\\s*revert\\s*\\(\\s*\\)",
 ]
 
 /// Building a REAL `SMAppService` inside a test, which is an offence on its own.
@@ -223,7 +241,7 @@ func realRegistrationHazards(in source: String) -> [String] {
     for scope in [fileLevel] + functions {
         let code = scope == fileLevel ? fileLevel : fileLevel + "\n" + scope
         guard anyMatch(realTeamSignatureSource, in: code),
-              anyMatch(registrationReachingCall, in: code) else { continue }
+              anyMatch(privilegedPathReachingCall, in: code) else { continue }
 
         let name = scope.range(of: "func\\s+\\w+", options: .regularExpression)
             .map { String(scope[$0]).replacingOccurrences(of: "func ", with: "") }
@@ -490,7 +508,7 @@ func realRegistrationHazards(in source: String) -> [String] {
 }
 
 @Test func theRemovalEntryPointIsGuardedTheSameWayTheRegistrationOneIs() {
-    // Issue #71's removal path, added to `registrationReachingCall` for the
+    // Issue #71's removal path, added to `privilegedPathReachingCall` for the
     // reason limit 3 above predicted: a new method on `PrivilegedHelperClient`
     // that reaches the real service is unguarded until it is listed.
     //
@@ -541,4 +559,59 @@ func realRegistrationHazards(in source: String) -> [String] {
         """
     #expect(realRegistrationHazards(in: theClosedRemovalGate).isEmpty,
             "the closed-gate removal check was reported; a nil team reaches nothing")
+}
+
+@Test func theRevertRouteIsGuardedEvenThoughItRegistersNothing() {
+    // `revert()` is the entry point on this list that reaches no registration.
+    // Past `availability()` it opens a channel to the ROOT DAEMON and asks it to
+    // put `SleepDisabled` back — a live change to a system power setting, made
+    // by a test run, on any machine whose helper is approved. That is the same
+    // class of harm the rest of this file refuses, arrived at by a different
+    // door, which is why the list was renamed rather than extended quietly.
+    let theDangerousRevert = """
+        @Test func revertingEndsTheHold() async {
+            let client = PrivilegedHelperClient(
+                signature: RunningSignature { PrivilegedHelperIdentity.teamIdentifier })
+            _ = await client.revert()
+        }
+        """
+    let hazards = realRegistrationHazards(in: theDangerousRevert)
+    #expect(hazards.count == 1,
+            "the revert route was reported \(hazards.count) time(s): \(hazards)")
+
+    // `WatchdogDecision.revert(_:)` is an enum CASE, driven ~30 times in this
+    // very target, and it always carries an argument. Named bug: matching a bare
+    // `.revert(` and reddening the whole decision suite.
+    let theDecisionCase = """
+        @Test func aTTLThatHasExpiredReverts() {
+            #expect(decide(inputs(age: 3601, ttl: 3600)) == .revert(.ttlExpired))
+            #expect(decide(inputs(boot: true)) == .revert(.dirtyJournalAtBoot))
+        }
+        """
+    #expect(realRegistrationHazards(in: theDecisionCase).isEmpty,
+            "WatchdogDecision.revert(_:) was mistaken for the client's revert()")
+
+    // The service's own `revert(reply:)`, on the other side of the XPC boundary.
+    // It takes a closure, so it never presents empty parentheses either.
+    let theServiceRevert = """
+        @Test func revertPutsTheSettingBack() {
+            let service = PrivilegedHelperService(journal: journal)
+            service.revert { wasArmed, message in
+                #expect(message == nil)
+            }
+        }
+        """
+    #expect(realRegistrationHazards(in: theServiceRevert).isEmpty,
+            "PrivilegedHelperService.revert(reply:) was mistaken for the client's revert()")
+
+    // A double DECLARING the seam method, which is what every check in
+    // `HelperRemoval_test.swift` does. The leading `.` holds them apart.
+    let theDoubleThatDeclaresIt = """
+        private final class FakeHelper: HelperRemovalControlling {
+            func revert() async -> HelperRevertOutcome { .reverted(wasArmed: true) }
+            func unregisterHelper() throws {}
+        }
+        """
+    #expect(realRegistrationHazards(in: theDoubleThatDeclaresIt).isEmpty,
+            "a double DECLARING revert() was read as CALLING it")
 }

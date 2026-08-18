@@ -12,29 +12,38 @@ import CoffeeBarTestSupport
 // removal is verified".
 //
 // **The ORDER is the safety property, and it is the whole of this file.** A
-// removal that unregisters first and releases afterwards leaves the machine in
+// removal that unregisters first and reverts afterwards leaves the machine in
 // exactly the state `GuardedJournalReader` documents — `SleepDisabled` set with
 // no record of why — with the one thing that could put it back now removed. The
 // Mac cannot sleep and nothing is left to fix it, short of a root shell.
 //
-// So the sequence is: release the hold, READ the flag back, and only then ask
-// macOS to unregister. Every check below is stated over the order or over the
-// abort, because a removal that does all three steps in the wrong order passes
-// every "did it call unregister" assertion there is.
+// So the sequence is: ask the HELPER to revert, read the flag back, and only
+// then ask macOS to unregister. Every check below is stated over the order or
+// over an abort, because a removal that does all three steps in the wrong order
+// passes every "did it call unregister" assertion there is.
 //
-// NOTHING HERE REACHES macOS. Every model is handed doubles for both halves of
-// the helper seam, and the one check that drives `PrivilegedHelperClient`
-// itself drives the CLOSED gate — a build whose signature names no team, which
-// is what the `swift test` runner is.
+// **WHICH hold is reverted, because an earlier draft of this file got it
+// wrong.** `AssertionHolding.release()` drops the IOKit assertion THIS PROCESS
+// holds. `SleepDisabled` is a system-wide setting written by ROOT through
+// `pmset`, and only the privileged helper can put it back. Releasing the app's
+// assertion cannot clear it, so a sequence built on `release()` could never
+// verify anything mid-hold and refused instead of removing.
+// `theRemovalLeavesTheAppsOwnAssertionAlone` pins the correction from the other
+// side: the app's assertion is not this control's business at all.
+//
+// NOTHING HERE REACHES macOS OR THE ROOT DAEMON. Every model is handed doubles
+// for both halves of the helper seam, and the two checks that drive
+// `PrivilegedHelperClient` itself drive the CLOSED gate — a build whose
+// signature names no team, which is what the `swift test` runner is.
 
 // MARK: - Test doubles
 
 /// Every step of a removal, in the order it actually happened.
 ///
-/// A shared log across three unrelated doubles, and that is the point: the
-/// invariant is not "each step happened" but "they happened in this order". A
-/// call counter on each double separately is green over the reversal this file
-/// exists to catch.
+/// A shared log across unrelated doubles, and that is the point: the invariant
+/// is not "each step happened" but "they happened in this order". A call counter
+/// on each double separately is green over the reversal this file exists to
+/// catch.
 private final class RemovalLog: @unchecked Sendable {
     private let lock = NSLock()
     private var steps: [String] = []
@@ -64,7 +73,11 @@ private final class RemovalLog: @unchecked Sendable {
     }
 }
 
-/// The IOKit assertion, recording the release rather than performing one.
+/// The IOKit assertion, recording what was asked of it rather than asking it.
+///
+/// Present so that a removal which touched the app's own assertion would be
+/// VISIBLE, not because the sequence uses one. See
+/// `theRemovalLeavesTheAppsOwnAssertionAlone`.
 private final class LoggingHolder: AssertionHolding, @unchecked Sendable {
     private let log: RemovalLog
 
@@ -107,22 +120,28 @@ private enum UnreadableFlag: Error {
     case thePmsetOutputMadeNoSense
 }
 
-/// Both halves of the helper seam in one object, which is how the shipping app
-/// is wired: `PrivilegedHelperClient` reports the registration AND takes it off.
+/// Both halves of the removal seam in one object, which is how the shipping app
+/// is wired: `PrivilegedHelperClient` reports the registration, asks the helper
+/// to revert, and takes the registration off.
 ///
 /// It flips itself to inactive on a successful unregister, so a model that
 /// remembered the answer from `init` is visible to a check.
-private final class FakeHelper: RegisteredHelperReporting, HelperUnregistering,
+private final class FakeHelper: RegisteredHelperReporting, HelperRemovalControlling,
                                 @unchecked Sendable {
     private let lock = NSLock()
     private let log: RemovalLog
-    private let failing: Bool
+    private let revertRefusal: String?
+    private let unregisterFails: Bool
     private var active: Bool
 
-    init(log: RemovalLog, active: Bool, failing: Bool = false) {
+    init(log: RemovalLog,
+         active: Bool,
+         revertRefusal: String? = nil,
+         unregisterFails: Bool = false) {
         self.log = log
         self.active = active
-        self.failing = failing
+        self.revertRefusal = revertRefusal
+        self.unregisterFails = unregisterFails
     }
 
     /// Deliberately UNLOGGED. The model is entitled to ask this as often as it
@@ -133,9 +152,15 @@ private final class FakeHelper: RegisteredHelperReporting, HelperUnregistering,
         return active
     }
 
+    func revert() async -> HelperRevertOutcome {
+        log.record("revert")
+        if let revertRefusal { return .refused(revertRefusal) }
+        return .reverted(wasArmed: true)
+    }
+
     func unregisterHelper() throws {
         log.record("unregister")
-        if failing { throw UnregisterFailed.macOSDeclined }
+        if unregisterFails { throw UnregisterFailed.macOSDeclined }
         lock.lock()
         defer { lock.unlock() }
         active = false
@@ -251,9 +276,9 @@ private func modelForRemoval(log: RemovalLog,
 // MARK: - The order, which is the safety property
 
 @MainActor
-@Test func theHelperIsUnregisteredOnlyAfterTheHoldIsReleasedAndTheFlagIsReadClear() {
+@Test func theHelperIsUnregisteredOnlyAfterTheHoldIsRevertedAndTheFlagIsReadClear() async {
     // THE check this feature turns on. Its mutant is the obvious mistake and it
-    // is one line: unregister first, release afterwards. Every "was unregister
+    // is one move: unregister first, revert afterwards. Every "was unregister
     // called" assertion stays green over that, and the machine it leaves behind
     // is the one `GuardedJournalReader` describes — `SleepDisabled` set, no
     // journal saying why, and the daemon that would have put it back gone.
@@ -265,9 +290,9 @@ private func modelForRemoval(log: RemovalLog,
     let helper = FakeHelper(log: log, active: true)
     let model = modelForRemoval(log: log, helper: helper, sleepDisabled: false)
 
-    let outcome = model.removeRegisteredHelper()
+    let outcome = await model.removeRegisteredHelper()
 
-    #expect(log.recorded == ["release", "read SleepDisabled", "unregister"], """
+    #expect(log.recorded == ["revert", "read SleepDisabled", "unregister"], """
         the removal ran its steps as \(log.recorded). The order is the safety \
         property: unregistering before the flag is confirmed clear leaves \
         SleepDisabled set with the only thing that could clear it removed.
@@ -277,22 +302,56 @@ private func modelForRemoval(log: RemovalLog,
 }
 
 @MainActor
-@Test func aSleepFlagStillSetAfterTheReleaseAbortsTheRemoval() {
-    // Named bug: reading the flag, ignoring the answer, and unregistering
-    // anyway — a verification that is performed and not ACTED on. This is the
-    // case that strands the machine, so it is stated on its own rather than
-    // folded into the order check above.
+@Test func aRevertTheHelperRefusedAbortsTheRemoval() async {
+    // The case that strands the machine, and it is REAL rather than
+    // hypothetical: the helper is the only thing that can put `SleepDisabled`
+    // back, and a revert it refused means the setting is still where it was.
+    // Carrying on to the unregister deletes the one process able to fix that.
     //
-    // The state is real rather than contrived: the registered helper holds
-    // lid-closed mode by setting `SleepDisabled`, and a user who clicks Remove
-    // while a hold is in force is exactly the person this refusal is for.
+    // Named bug: `_ = await removal.revert()`, or a `switch` whose refusal case
+    // falls through. Either compiles, and every later assertion in this file
+    // stays green over both.
+    let log = RemovalLog()
+    let helper = FakeHelper(log: log, active: true,
+                            revertRefusal: "the journal is owned by uid 501")
+    let model = modelForRemoval(log: log, helper: helper, sleepDisabled: false)
+
+    let outcome = await model.removeRegisteredHelper()
+
+    #expect(log.recorded == ["revert"], """
+        the removal ran \(log.recorded) after the helper refused to end its \
+        hold. Nothing may follow a revert that did not happen: the flag is \
+        still set and the helper is the only thing that can clear it.
+        """)
+    #expect(outcome != .removed,
+            "a removal whose revert was refused reported .removed")
+
+    // The helper's OWN words reach the user. "Removal failed" hides the one
+    // sentence that says what to fix, which is the argument
+    // `HelperArmOutcome.statusLine` already makes for passing a refusal through
+    // verbatim.
+    #expect(outcome.statusLine.contains("the journal is owned by uid 501"), """
+        the refusal dropped the helper's own explanation, so the user is told \
+        the removal failed and not why: \(outcome.statusLine)
+        """)
+}
+
+@MainActor
+@Test func aSleepFlagStillSetAfterTheRevertAbortsTheRemoval() async {
+    // Named bug: reading the flag, ignoring the answer, and unregistering
+    // anyway — a verification that is performed and not ACTED on.
+    //
+    // The state this describes is a helper that REPORTED success and a machine
+    // that disagrees, which is exactly why the verification reads `pmset` rather
+    // than trusting the reply. Something else is holding the setting, and
+    // removing the helper would leave nothing on the machine able to clear it.
     let log = RemovalLog()
     let helper = FakeHelper(log: log, active: true)
     let model = modelForRemoval(log: log, helper: helper, sleepDisabled: true)
 
-    let outcome = model.removeRegisteredHelper()
+    let outcome = await model.removeRegisteredHelper()
 
-    #expect(log.recorded == ["release", "read SleepDisabled"], """
+    #expect(log.recorded == ["revert", "read SleepDisabled"], """
         the removal ran \(log.recorded) with the machine's sleep still \
         disabled. Unregistering here removes the daemon that puts the setting \
         back, and nothing else on the machine will.
@@ -311,7 +370,7 @@ private func modelForRemoval(log: RemovalLog,
 }
 
 @MainActor
-@Test func aSleepFlagThatCannotBeReadAbortsTheRemovalRatherThanAssumingItIsClear() {
+@Test func aSleepFlagThatCannotBeReadAbortsTheRemovalRatherThanAssumingItIsClear() async {
     // Named bug, and it is one character: `try?`. Collapsing the read's failure
     // to `nil` — or to `false` — turns "I could not find out" into "there is
     // nothing holding it", which is the exact reasoning
@@ -322,9 +381,9 @@ private func modelForRemoval(log: RemovalLog,
     let helper = FakeHelper(log: log, active: true)
     let model = modelForRemoval(log: log, helper: helper, sleepDisabled: nil)
 
-    let outcome = model.removeRegisteredHelper()
+    let outcome = await model.removeRegisteredHelper()
 
-    #expect(log.recorded == ["release", "read SleepDisabled"], """
+    #expect(log.recorded == ["revert", "read SleepDisabled"], """
         the removal ran \(log.recorded) without ever learning whether the \
         machine's sleep was disabled. A read that failed is not a read that \
         answered no.
@@ -333,86 +392,88 @@ private func modelForRemoval(log: RemovalLog,
             "a removal that could not verify anything reported .removed")
 
     // A DIFFERENT sentence from the one above, because the two states need
-    // different actions from the user: "end the hold" versus "something is
-    // wrong with this machine's power settings". One message for both is the
-    // shape this discriminates against.
+    // different actions from the user: "something else is holding the setting"
+    // versus "this machine's power settings could not be read at all". One
+    // message for both is the shape this discriminates against.
     #expect(outcome.statusLine.contains("could not read"), """
         the refusal for an UNREADABLE flag reads the same as the refusal for a \
-        flag that is set, so the user is told to end a hold that may not exist: \
+        flag that is set, so the user is sent after the wrong fault: \
         \(outcome.statusLine)
         """)
 }
 
 @MainActor
-@Test func theHoldIsReleasedEvenWhenTheModelBelievesItIsHoldingNothing() {
-    // Named bug: `if isServing { holder.release() }`. `isServing` is the app's
-    // record of what IOKit last did, and a `release()` skipped on the strength
-    // of it leaves a live assertion behind whenever the two disagree — which is
-    // precisely the state `refresh()` documents as possible, because the
-    // controller decides what SHOULD happen and IOKit is what actually
-    // answered.
+@Test func theRemovalLeavesTheAppsOwnAssertionAlone() async {
+    // THE CORRECTION, pinned from the side it can be pinned from.
     //
-    // The model here has never served: nothing called `refresh()`, so
-    // `isServing` is its `init` value.
+    // An earlier draft of this sequence opened with `holder.release()`, on the
+    // reasoning that a removal should let go of the hold first. That conflates
+    // two mechanisms: `AssertionHolding` is the IOKit assertion THIS PROCESS
+    // holds, and `SleepDisabled` is a system setting only root can write. The
+    // release cannot clear the flag, so it bought no safety — and it is a side
+    // effect the user did not ask for, because whether coffee-bar holds sleep
+    // for a working agent has nothing to do with whether the privileged helper
+    // is installed. `refresh()` owns that decision and would re-acquire on the
+    // next tick anyway.
+    //
+    // Named bug: re-adding `holder.release()` to this sequence.
     let log = RemovalLog()
     let helper = FakeHelper(log: log, active: true)
     let model = modelForRemoval(log: log, helper: helper, sleepDisabled: false)
 
-    #expect(model.isServing == false,
-            "precondition: this model has never acquired an assertion")
+    #expect(await model.removeRegisteredHelper() == .removed,
+            "precondition: the removal completed")
 
-    _ = model.removeRegisteredHelper()
-
-    #expect(log.recorded.first == "release", """
-        the removal's first act was \(log.recorded.first ?? "nothing"). The \
-        release is unconditional: the app's belief about what it holds is not \
-        what IOKit holds.
+    #expect(!log.recorded.contains("release"), """
+        the removal touched the app's own IOKit assertion: \(log.recorded). \
+        That is a different hold from the one being ended, and dropping it \
+        stops coffee-bar holding sleep for a working agent as a side effect of \
+        uninstalling a helper.
         """)
+    #expect(!log.recorded.contains("acquire"),
+            "the removal acquired an assertion: \(log.recorded)")
 }
 
 @MainActor
-@Test func removalIsRefusedWhenMacOSReportsNoRegisteredHelper() {
+@Test func removalIsRefusedWhenMacOSReportsNoRegisteredHelper() async {
     // The window offers the control only while a helper is registered, and this
     // is the model-side half of that: a click that arrives anyway — a stale
     // window, or a registration dropped between the render and the click — must
-    // not release the user's hold to remove something that is not there.
+    // not open a channel to a root daemon that is not there.
     //
-    // NOTHING is touched, which is the assertion. Releasing an assertion the
-    // user is relying on, in service of a removal with no subject, is a side
-    // effect they did not ask for.
+    // NOTHING is touched, which is the assertion.
     let log = RemovalLog()
     let helper = FakeHelper(log: log, active: false)
     let model = modelForRemoval(log: log, helper: helper, sleepDisabled: false)
 
-    let outcome = model.removeRegisteredHelper()
+    let outcome = await model.removeRegisteredHelper()
 
     #expect(log.recorded == [], """
-        a removal with nothing to remove still did \(log.recorded) — the \
-        user's hold was released, and their machine may now sleep, to take off \
-        a helper macOS says is not registered.
+        a removal with nothing to remove still did \(log.recorded), against a \
+        helper macOS says is not registered.
         """)
     #expect(outcome != .removed,
             "the model claimed it removed a helper that was never registered")
 }
 
 @MainActor
-@Test func anUnregisterMacOSRefusedIsReportedRatherThanClaimedAsDone() {
+@Test func anUnregisterMacOSRefusedIsReportedRatherThanClaimedAsDone() async {
     // Named bug: `try? removal.unregisterHelper()` followed by `.removed`. The
     // window would tell the user the helper is gone while the daemon is still
     // registered and still running, and the control that could try again would
     // disappear with it, because the model would also have marked the
     // registration inactive.
     let log = RemovalLog()
-    let helper = FakeHelper(log: log, active: true, failing: true)
+    let helper = FakeHelper(log: log, active: true, unregisterFails: true)
     let model = modelForRemoval(log: log, helper: helper, sleepDisabled: false)
     // The property below is written in `refresh()` alone, so it has to have run
     // once for "the model still reports a registered helper" to mean anything.
     model.refresh()
     log.reset()
 
-    let outcome = model.removeRegisteredHelper()
+    let outcome = await model.removeRegisteredHelper()
 
-    #expect(log.recorded == ["release", "read SleepDisabled", "unregister"],
+    #expect(log.recorded == ["revert", "read SleepDisabled", "unregister"],
             "the removal ran \(log.recorded); the attempt itself must still happen")
     #expect(outcome != .removed,
             "an unregister macOS refused was reported to the user as .removed")
@@ -424,7 +485,7 @@ private func modelForRemoval(log: RemovalLog,
 }
 
 @MainActor
-@Test func theRemovalControlGoesAwayWithoutARelaunchOnceTheHelperIsGone() {
+@Test func theRemovalControlGoesAwayWithoutARelaunchOnceTheHelperIsGone() async {
     // Named bug: reading the registration only in `refresh()`, which runs on a
     // 30-second timer. The click that makes the answer false happens in the
     // Preferences window of a running app, so a value left until the next tick
@@ -440,7 +501,7 @@ private func modelForRemoval(log: RemovalLog,
     #expect(model.registeredHelperIsActive,
             "precondition: the model reports a registered helper before the click")
 
-    #expect(model.removeRegisteredHelper() == .removed,
+    #expect(await model.removeRegisteredHelper() == .removed,
             "precondition: the removal completed")
 
     // NO second `refresh()`. That is the whole check.
@@ -451,7 +512,7 @@ private func modelForRemoval(log: RemovalLog,
         """)
 }
 
-// MARK: - The gate on the client itself
+// MARK: - The gates on the client itself
 
 @Test func anUnsignableBuildNeverAsksMacOSToUnregisterAnything() {
     // The mirror of `register()`'s opening `guard`, and it is not decoration.
@@ -476,6 +537,36 @@ private func modelForRemoval(log: RemovalLog,
         a build that names no team asked macOS for \(service.asked). It cannot \
         have registered this daemon, so anything it takes off belongs to \
         somebody else.
+        """)
+}
+
+@Test func anUnsignableBuildNeverAsksTheLiveHelperToRevert() async {
+    // The SAME gate on the other new entry point, and here the consequence is
+    // not about macOS at all. Past this guard `revert()` opens a channel to a
+    // ROOT daemon and asks it to change a system power setting. On a machine
+    // with a registered helper that is a live side effect, and `swift test`
+    // must never be one click from it.
+    //
+    // **LIMIT, stated because it bounds what this check is worth.** It measures
+    // the OUTCOME and not the reachability: the refusal is the shape a build
+    // with no team gets, and this proves the method answers it. Nothing here
+    // can prove the channel was not opened, because the only way to observe
+    // that is to delete the guard and see what happens — against the live
+    // daemon. That mutant is deliberately not run, and this is what the live
+    // exercise has to cover instead.
+    let client = PrivilegedHelperClient(signature: RunningSignature { nil })
+
+    let outcome = await client.revert()
+
+    #expect(outcome != .reverted(wasArmed: true),
+            "a build that names no team reported a revert it cannot have performed")
+    guard case .refused(let reason) = outcome else {
+        Issue.record("expected a refusal, got \(outcome)")
+        return
+    }
+    #expect(reason.contains("not signed"), """
+        the refusal does not say the build is unsigned, so the user reads a \
+        channel failure instead of the reason there is no channel: \(reason)
         """)
 }
 
