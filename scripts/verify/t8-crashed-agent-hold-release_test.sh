@@ -86,21 +86,33 @@ derive_timeout "$TMP/StalePolicy.swift" napTimeout >/dev/null 2>&1
 check "derive_timeout fails on a constant that is not there" "3" "$?"
 
 # ── transitions ──────────────────────────────────────────────────────────────
-# elapsed,working — a rise, a plateau, then two falls.
+# THE DISCRIMINATOR THE 2026-08-18 RUN NEEDED. On a busy machine `working` falls
+# for two unrelated reasons, and the count alone cannot tell them apart:
+#
+#   - a session was RETIRED, which is what this acceptance measures;
+#   - a real session blocked on its human and moved to `.awaitingInput`, which
+#     leaves the active set and looks identical in `working`.
+#
+# `attention` separates them, because the second lands there and the first does
+# not: a retirement drops `working + attention`, a move preserves it. The run
+# recorded both within 90 s of each other: 15:49:03 working 8->7 with attention
+# 1->2 (a move), and 15:52:34 working 7->6 with attention 2->2 (a retirement).
+#
+# The fixture below is that pair, plus the case a `working`-only reader misses
+# COMPLETELY: a session leaving from an attention state changes no `working`
+# count at all.
 cat > "$TMP/timeline.csv" <<'CSV'
 iso,epoch,elapsed,working,attention,holding
-t,1,0,1,0,true
-t,2,30,4,0,true
-t,3,60,4,0,true
-t,4,90,4,0,true
-t,5,905,3,0,true
-t,6,935,3,0,true
-t,7,965,0,0,false
+t,1,0,0,0,true
+t,2,30,1,0,true
+t,3,60,1,0,true
+t,4,90,0,1,true
+t,5,905,0,0,true
 CSV
-check "transitions ignores a plateau and signs each step" \
-    "30 +3 1->4
-905 -1 4->3
-965 -3 3->0" \
+check "transitions ignores a plateau and names each movement" \
+    "30 working 0->1 attention 0->0 joined
+90 working 1->0 attention 0->1 moved
+905 working 0->0 attention 1->0 left" \
     "$(transitions "$TMP/timeline.csv")"
 
 # One row cannot contain a transition, and a header-only file must not emit the
