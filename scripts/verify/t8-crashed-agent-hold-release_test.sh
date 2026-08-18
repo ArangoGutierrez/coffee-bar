@@ -53,9 +53,12 @@ check "json_field reads a small number"    "1"     "$(json_field "$STATUS" atten
 check "json_field reads a bool"            "true"  "$(json_field "$STATUS" holding)"
 check "json_field reads a string"          "auto"  "$(json_field "$STATUS" intent)"
 
-# `version` is a SUFFIX of `schemaVersion`. A reader that matches the bare key
-# name reports the schema version as the app version.
-check "json_field does not match a suffix key" "0.3.0-rc2" "$(json_field "$STATUS" version)"
+# Both version-ish keys are in the real answer, so read the one that is asked
+# for. This is a regression assertion on the ACTUAL schema, not a claim about
+# the `[,{]` anchor: removing that anchor leaves this green, because JSON gives
+# a key-lookalike no way to appear inside a value — the quote that would open
+# it is escaped. The anchor is unguarded on purpose and its comment says so.
+check "json_field reads version, not schemaVersion" "0.3.0-rc2" "$(json_field "$STATUS" version)"
 
 # An absent key must FAIL, not return empty. Empty is what makes the harness
 # compare "" against "" for half an hour and call it stable.
@@ -76,7 +79,7 @@ SWIFT
 check "derive_timeout reads workingTimeout" "900" \
     "$(derive_timeout "$TMP/StalePolicy.swift" workingTimeout)"
 # THE bug this file exists for: 14_400 is fourteen thousand four hundred.
-check "derive_timeout expands a Swift underscore literal" "14400" \
+check "derive_timeout expands a Swift digit separator" "14400" \
     "$(derive_timeout "$TMP/StalePolicy.swift" blockedTimeout)"
 
 derive_timeout "$TMP/StalePolicy.swift" napTimeout >/dev/null 2>&1
