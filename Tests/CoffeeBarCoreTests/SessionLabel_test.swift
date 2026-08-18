@@ -54,10 +54,16 @@ private struct PathCase {
 
 /// One row per layout, each with the bug it catches.
 ///
-/// The last three are the STATED LIMITS rather than wishes. Two of them assert
-/// a value that is not what a human would ideally read, and they are here so
-/// that the limit is a decision somebody signed rather than a surprise in the
-/// menu bar.
+/// Every marker `SessionLabel` knows has a row here, and
+/// `everyMarkerTheParserKnowsHasARowProvingWhatItDraws` is what holds that: a
+/// marker added to the parser with nothing here saying what it draws turns
+/// that test red. The expectations stay literals, so the table never asserts
+/// the parser against itself.
+///
+/// The rows marked LIMIT are STATED limits rather than wishes. Four of them
+/// assert a value that is not what a human would ideally read, and they are
+/// here so the limit is a decision somebody signed rather than a surprise in
+/// the menu bar.
 private let pathCases: [PathCase] = [
     PathCase(path: "/Users/carlos/src/coffee-bar",
              expected: "coffee-bar",
@@ -79,6 +85,25 @@ private let pathCases: [PathCase] = [
              expected: "coffee-bar [hotfix-101]",
              why: ".wt is the sibling convention in the maintainer's toolkit"),
 
+    PathCase(path: "/Users/carlos/src/stayconnected/.claude/worktrees/w3",
+             expected: "stayconnected [w3]",
+             why: """
+                THE observed defect. src/stayconnected keeps its worktrees \
+                under .claude/worktrees/, so every session in it drew the leaf \
+                — which is how "stayconnected" came to appear twice in one panel
+                """),
+
+    PathCase(path: "/Users/carlos/src/coffee-bar/.claude/worktrees/wf_2f1a",
+             expected: "coffee-bar [wf_2f1a]",
+             why: """
+                a two-component marker: .claude is not a marker on its own and \
+                the pair .claude/worktrees is
+                """),
+
+    PathCase(path: "/Users/carlos/src/colombia/.orchestrate/worktrees/task-7",
+             expected: "colombia [task-7]",
+             why: "the second two-component marker, measured on this machine"),
+
     PathCase(path: "/Users/carlos/src/coffee-bar/.worktrees/release-v020/Sources/CoffeeBarUI",
              expected: "coffee-bar [release-v020]",
              why: """
@@ -86,9 +111,29 @@ private let pathCases: [PathCase] = [
                 CoffeeBarUI, which names neither the repository nor the worktree
                 """),
 
+    PathCase(path: "/Users/carlos/src/stayconnected/.claude/worktrees/w3/apps/web",
+             expected: "stayconnected [w3]",
+             why: """
+                the same, one marker component longer: the qualifier is the \
+                component after the WHOLE marker, not after its first
+                """),
+
     PathCase(path: "/Users/carlos/src/coffee-bar/.worktrees",
              expected: "coffee-bar",
              why: "the marker directory itself is not a name; the repository is"),
+
+    PathCase(path: "/Users/carlos/src/stayconnected/.claude/worktrees",
+             expected: "stayconnected",
+             why: "the same boundary for a two-component marker, one component further out"),
+
+    PathCase(path: "/Users/carlos/src/coffee-bar/.claude/hooks",
+             expected: "hooks",
+             why: """
+                the discriminating row: .claude alone is NOT a marker. Matching \
+                only a marker's first component would read this as \
+                "coffee-bar [hooks]" and rename half the dot-directories on the \
+                machine into worktrees
+                """),
 
     PathCase(path: "/.worktrees/orphan",
              expected: "orphan",
@@ -109,18 +154,27 @@ private let pathCases: [PathCase] = [
                 is indistinguishable from a repository, so the leaf stands
                 """),
 
-    PathCase(path: "/Users/carlos/src/coffee-bar/.claude/worktrees/wf_2f1a",
-             expected: "wf_2f1a",
-             why: """
-                LIMIT, and it is a layout this maintainer really uses: \
-                .claude/worktrees/ is a TWO-component marker and is not detected
-                """),
-
     PathCase(path: "/Users/carlos/src/coffee-bar-release-v020",
              expected: "coffee-bar-release-v020",
              why: """
                 LIMIT: a worktree checked out as a plain sibling directory \
                 (git worktree add ../name) carries no marker and cannot be seen
+                """),
+
+    PathCase(path: "/Users/carlos/.claude/worktrees/wf_2f1a",
+             expected: "carlos [wf_2f1a]",
+             why: """
+                LIMIT, and it is a real directory on this machine: what a \
+                marker names is whatever CONTAINS it, and here that is a home \
+                directory rather than a checkout. No I/O may confirm otherwise
+                """),
+
+    PathCase(path: "/Users/carlos/.codex/.worktrees/w1",
+             expected: ".codex [w1]",
+             why: """
+                LIMIT, the same shape one convention over: .codex/.worktrees/ \
+                puts the marker inside a tool directory, so the tool directory \
+                is what gets named
                 """),
 ]
 
@@ -136,14 +190,31 @@ private let pathCases: [PathCase] = [
     }
 }
 
-@Test func theTableCoversBothWorktreeMarkersAndTheNoNameCase() {
+@Test func everyMarkerTheParserKnowsHasARowProvingWhatItDraws() {
     // A table this long is easy to gut by deleting rows, and a shorter table
-    // still passes. These three are the ones the fix exists for.
-    #expect(pathCases.contains { $0.path.contains("/.worktrees/") })
-    #expect(pathCases.contains { $0.path.contains("/.wt/") })
-    #expect(pathCases.contains { $0.expected == nil })
-    #expect(pathCases.count == 11,
-            "the layout table is \(pathCases.count) rows; it was written with 11")
+    // still passes — and a marker ADDED to the parser with no row here would
+    // ship a layout nothing says the wording of.
+    //
+    // This reads `SessionLabel.worktreeMarkers` rather than restating it, and
+    // that is deliberate: the assertion is COVERAGE, not behaviour. What each
+    // layout draws is asserted against literals in the table above, so the
+    // parser is never held against itself. A count would say neither thing and
+    // would go stale the first time a row was added.
+    for marker in SessionLabel.worktreeMarkers {
+        let segment = "/" + marker.joined(separator: "/") + "/"
+        #expect(pathCases.contains { $0.path.contains(segment) }, """
+            SessionLabel detects \(segment) and no row in this table says what \
+            it draws, so the wording of that layout is shipped unasserted.
+            """)
+    }
+
+    // A loop over an empty collection asserts nothing at all.
+    #expect(!SessionLabel.worktreeMarkers.isEmpty,
+            "the parser knows no markers, so the loop above checked nothing")
+
+    // The fallback case, which no marker names.
+    #expect(pathCases.contains { $0.expected == nil },
+            "no row exercises a path that names nothing, so the fallback is unpinned")
 }
 
 // MARK: - Which tool the row belongs to
