@@ -278,6 +278,14 @@ Loosening those permissions to give the window a live reading was considered and
 rejected: they are the security property that makes a root-owned file safe to
 hand to a root process, and they outrank a nicer window.</p>
 
+<p>Nor is there a second route to the answer, and that is a design decision
+rather than an oversight. The channel between the app and the helper is
+deliberately tiny: it carries two messages, <code>arm</code> and
+<code>revert</code>, and there is no third that asks whether a hold is still in
+force. So even a signed build with its own helper running cannot poll it. The
+app is told the hold at the moment it is granted, and nothing after that reports
+a change.</p>
+
 <p>So the answer at any later moment — after a restart, or on a Mac you did not
 arm yourself — comes from
 <code>sudo /Library/PrivilegedHelperTools/coffee-bar-probe report</code>, which
