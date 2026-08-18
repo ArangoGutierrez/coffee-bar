@@ -39,12 +39,24 @@ public enum SessionLabel {
     /// not every agent tool's session id is a UUID.
     private static let shortIDLength = 8
 
-    /// The directory names a worktree is kept under, by convention.
+    /// The directory sequences a worktree is kept under, by convention.
     ///
-    /// `.worktrees/` is what `rules/git-workflow.md` prescribes and `.wt/` is
-    /// the sibling convention in the same toolkit. A CONVENTION, never a fact
-    /// about the disk — see `repositoryLabel(for:)`.
-    private static let worktreeMarkers: Set<String> = [".worktrees", ".wt"]
+    /// A SEQUENCE of components rather than a name, because a marker may be
+    /// more than one directory deep.
+    ///
+    /// Internal rather than private so `SessionLabel_test` can hold the layout
+    /// table against it: a marker added here with no row saying what it draws
+    /// turns `everyMarkerTheParserKnowsHasARowProvingWhatItDraws` red. What
+    /// each layout draws stays asserted against literals there, so the parser
+    /// is never held against itself.
+    ///
+    /// CONVENTIONS, never facts about the disk — see `repositoryLabel(for:)`.
+    static let worktreeMarkers: [[String]] = [
+        [".worktrees"],
+        [".wt"],
+        [".claude", "worktrees"],
+        [".orchestrate", "worktrees"],
+    ]
 
     /// The repository a path belongs to, with its worktree as a qualifier.
     ///
@@ -55,30 +67,41 @@ public enum SessionLabel {
     /// everything below reads a CONVENTION off a string, and the limits are
     /// stated rather than hidden.
     ///
-    /// **Detected**, a worktree under a one-component marker directory:
+    /// **Detected.** Four markers, two of them TWO components deep:
     ///
-    ///     …/coffee-bar/.worktrees/release-v020         → coffee-bar [release-v020]
-    ///     …/coffee-bar/.wt/hotfix-101                  → coffee-bar [hotfix-101]
-    ///     …/coffee-bar/.worktrees/release-v020/Sources → coffee-bar [release-v020]
-    ///     …/coffee-bar/.worktrees                      → coffee-bar
+    ///     …/coffee-bar/.worktrees/release-v020          → coffee-bar [release-v020]
+    ///     …/coffee-bar/.wt/hotfix-101                   → coffee-bar [hotfix-101]
+    ///     …/stayconnected/.claude/worktrees/w3          → stayconnected [w3]
+    ///     …/colombia/.orchestrate/worktrees/task-7      → colombia [task-7]
+    ///     …/coffee-bar/.worktrees/release-v020/Sources  → coffee-bar [release-v020]
+    ///     …/stayconnected/.claude/worktrees             → stayconnected
+    ///
+    /// EVERY component of a marker has to match: `.claude` alone is not one, so
+    /// `…/coffee-bar/.claude/hooks` reads "hooks" and stays a directory of
+    /// hooks. `.claude/worktrees/` and `.orchestrate/worktrees/` are what this
+    /// maintainer's agent tooling really uses, and `src/stayconnected` is one of
+    /// them — the checkout whose sessions drew two identical rows.
     ///
     /// The FIRST marker in the path wins, so the outermost directory is the one
-    /// named as the repository. That is the real checkout in both layouts, and
-    /// a worktree nested inside a worktree therefore reads as the outer one.
+    /// named as the repository. That is the real checkout in every layout here,
+    /// and a worktree nested inside a worktree therefore reads as the outer one.
     ///
-    /// **NOT detected.** Each of these draws its leaf directory instead, which
-    /// is what the row drew before this existed:
+    /// **NOT detected.** Each of these draws something other than a repository
+    /// name, and each is pinned by a row in `SessionLabel_test`'s table rather
+    /// than left to be discovered in the menu bar:
     ///
-    ///   * a TWO-component marker — `…/coffee-bar/.claude/worktrees/wf_2f1a`
-    ///     reads "wf_2f1a". A real layout in this maintainer's toolkit, left
-    ///     out because the brief named `.worktrees/` and `.wt/`; adding it is
-    ///     one more entry and one more table row.
     ///   * a worktree checked out as a plain sibling directory —
     ///     `git worktree add ../coffee-bar-release-v020` — which carries no
-    ///     marker to find.
+    ///     marker to find, so it draws its own name.
     ///   * a session started below a repository root and outside any worktree:
     ///     `…/coffee-bar/Sources` reads "Sources". Without touching the disk a
     ///     subdirectory cannot be told from a checkout.
+    ///   * a marker that is NOT inside a checkout at all. What a marker names is
+    ///     whatever CONTAINS it, so `/Users/carlos/.claude/worktrees/wf_2f1a`
+    ///     reads "carlos [wf_2f1a]" — a home directory — and
+    ///     `/Users/carlos/.codex/.worktrees/w1` reads ".codex [w1]". Both
+    ///     directories exist on this machine. Telling a checkout from a plain
+    ///     directory needs I/O, which this layer may not do.
     ///
     /// `nil` means the path names nothing at all — "/" is the whole of that
     /// case — and the caller falls back to the session id.
@@ -91,17 +114,37 @@ public enum SessionLabel {
             .split(separator: "/", omittingEmptySubsequences: true)
             .map(String.init)
 
-        // `marker > 0` because a marker with nothing before it names no
-        // repository: "/.worktrees/orphan" has only the leaf to offer.
-        guard let marker = parts.firstIndex(where: worktreeMarkers.contains),
-              marker > 0
-        else { return parts.last }
+        // Left to right, so the OUTERMOST marker wins. `index > 0` because a
+        // marker with nothing before it names no repository: "/.worktrees/orphan"
+        // has only the leaf to offer.
+        for index in parts.indices where index > 0 {
+            guard let length = markerLength(in: parts, at: index) else { continue }
 
-        let repository = parts[marker - 1]
-        // The marker directory itself is not a name. A session sitting in
-        // `…/coffee-bar/.worktrees` is in the repository and in no worktree.
-        guard marker + 1 < parts.count else { return repository }
-        return "\(repository) [\(parts[marker + 1])]"
+            let repository = parts[index - 1]
+            // The component after the WHOLE marker, which is why the length
+            // comes back from the match rather than being assumed to be one.
+            let qualifier = index + length
+            // The marker directory itself is not a name. A session sitting in
+            // `…/coffee-bar/.worktrees` is in the repository and in no worktree.
+            guard qualifier < parts.count else { return repository }
+            return "\(repository) [\(parts[qualifier])]"
+        }
+        return parts.last
+    }
+
+    /// How many components of `parts` at `index` are a worktree marker, or nil.
+    ///
+    /// Every component of the marker has to match. `.claude` alone is not a
+    /// marker — `…/coffee-bar/.claude/hooks` is a directory of hooks, not a
+    /// worktree — and matching a marker's first component alone would rename
+    /// half the dot-directories on the machine into worktrees.
+    private static func markerLength(in parts: [String], at index: Int) -> Int? {
+        for marker in worktreeMarkers where index + marker.count <= parts.count {
+            if Array(parts[index ..< index + marker.count]) == marker {
+                return marker.count
+            }
+        }
+        return nil
     }
 
     /// One row's name: the tool, then what it is working on.
