@@ -108,7 +108,7 @@ private final class LoggingSleepHold: SleepHoldReporting, @unchecked Sendable {
         self.disabled = disabled
     }
 
-    func sleepIsDisabled() throws -> Bool {
+    func sleepIsDisabled() async throws -> Bool {
         log.record("read SleepDisabled")
         guard let disabled else { throw UnreadableFlag.thePmsetOutputMadeNoSense }
         return disabled
@@ -634,4 +634,101 @@ private func removalSurfaceCode() throws -> String {
         .deletingLastPathComponent()    // the package root
     let view = root.appending(path: "Sources/CoffeeBarUI/PreferencesView.swift")
     return swiftCodeWithoutComments(try String(contentsOf: view, encoding: .utf8))
+}
+
+// MARK: - Where the pmset read runs
+
+/// A `CommandRunning` that runs nothing and remembers WHERE it was asked to.
+///
+/// `Thread.isMainThread` is sampled inside `run`, which is the exact instant the
+/// real `SystemCommandRunner` forks `/usr/bin/pmset` and blocks its caller until
+/// the child and both drain threads are finished. Sampling anywhere else — at
+/// construction, or after the `await` has already hopped back — measures a
+/// different question and answers it green.
+private final class ThreadWitnessRunner: CommandRunning, @unchecked Sendable {
+    private let lock = NSLock()
+    private var sawMain = false
+    private var calls = 0
+
+    func run(_ executable: String, _ arguments: [String],
+             timeout: TimeInterval) throws -> CommandResult {
+        let onMain = Thread.isMainThread
+        lock.lock()
+        defer { lock.unlock() }
+        calls += 1
+        sawMain = sawMain || onMain
+        // A `pmset -g` that says the machine is free. The value is irrelevant to
+        // what this measures, but it has to PARSE: a controller that threw would
+        // return before the witness could be read on some future rewrite.
+        return CommandResult(exitCode: 0, stdout: "SleepDisabled\t\t0\n", stderr: "")
+    }
+
+    var ranOnMainThread: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return sawMain
+    }
+
+    var callCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return calls
+    }
+}
+
+/// `Thread.isMainThread` sampled through a SYNCHRONOUS call, deliberately.
+///
+/// The property is unavailable from asynchronous contexts, and the reason is a
+/// good one: an `async` body can resume on a different thread after every
+/// suspension point, so the answer describes an instant and not a function.
+/// A synchronous call pins that instant, which is exactly what the premise
+/// below needs — `pump()` in `IngestListener_test.swift` reads it the same way
+/// and for the same reason.
+private func runningOnTheMainThread() -> Bool { Thread.isMainThread }
+
+@MainActor
+@Test func theSleepFlagIsReadOffTheMainActorRatherThanBlockingIt() async throws {
+    // Named bug: `try sleepHold.sleepIsDisabled()` called straight from the
+    // `@MainActor` body of `removeRegisteredHelper()`. That is what shipped in
+    // the first two rounds of this branch, and what it costs is not visible in
+    // any other check here — every order and abort assertion in this file stays
+    // green over it, because the SEQUENCE is right and only the THREAD is wrong.
+    //
+    // The cost, measured: `/usr/bin/pmset -g` is about 10 ms typical, and
+    // `SystemCommandRunner.run` bounds itself at 30 s rather than at 10 ms. Both
+    // numbers land on the thread that draws the window, immediately after the
+    // user clicks Remove. #71h removed a 5.72 ms main-actor block from this same
+    // line of work; putting a 30-second-worst-case subprocess back on it is that
+    // fix undone twice over.
+    //
+    // This drives the REAL `PmsetSleepHoldReader` and fakes one layer down, at
+    // `CommandRunning`, so what is measured is the shipped reader's own
+    // isolation and not a double's.
+    let runner = ThreadWitnessRunner()
+    let reader = PmsetSleepHoldReader(runner: runner)
+
+    // THE PREMISE, asserted rather than assumed. Without this the check passes
+    // for the wrong reason the day Swift Testing stops running `@MainActor`
+    // bodies on the main thread: a caller that was never on the main actor
+    // cannot demonstrate anything about leaving it.
+    #expect(runningOnTheMainThread(), """
+        this check is not running on the main thread, so it is not driving the \
+        reader the way the Preferences window does and cannot see the block it \
+        exists to catch.
+        """)
+
+    let disabled = try await reader.sleepIsDisabled()
+
+    #expect(runner.callCount == 1,
+            "the reader ran pmset \(runner.callCount) times to answer one question")
+    #expect(disabled == false,
+            "the reader did not return the witness's own reading, so the path measured below is not the real one")
+
+    #expect(runner.ranOnMainThread == false, """
+        the pmset subprocess was spawned and waited for ON THE MAIN THREAD. \
+        `removeRegisteredHelper()` runs on the main actor, and a blocking read \
+        there freezes the window for as long as the child takes, bounded at 30 \
+        seconds by `CommandRunning.defaultTimeout` and not by how quick pmset \
+        usually is.
+        """)
 }
