@@ -191,8 +191,13 @@ public struct PreferencesView: View {
                 // floor" — so it goes beneath both, where it can address them
                 // together.
                 //
-                // ABOVE the lid-closed paragraph, because it says "the root
-                // command below" and that paragraph is where the command is.
+                // ABOVE the lid-closed paragraph, and since issue #71k that is
+                // about height rather than about a cross-reference. The note
+                // used to say "the root command below" and point at it; it
+                // names no mechanism now, and the paragraph below is silent
+                // whenever the registered helper is active — so a caption
+                // placed under it would slide up and down the window with a
+                // state it says nothing about.
                 // `theScopeNoteIsRenderedUnconditionallyUnderBothPowerControls`
                 // holds both halves of the ordering, and the reachability the
                 // page has already lost once: `if false { … }` around a control
@@ -226,9 +231,11 @@ public struct PreferencesView: View {
                 // section below, which prints a snippet and refuses to write
                 // the file.
                 //
-                // LAST IN THE SECTION, under the two real controls, because a
-                // paragraph above a slider reads as instructions for the
-                // slider.
+                // BELOW THE TWO SLIDERS, because a paragraph above a slider
+                // reads as instructions for that slider. The button that arms
+                // the mode follows it (issue #71), which is the one thing here
+                // a paragraph may sit above: it is instructions for exactly
+                // that click.
                 //
                 // Rendered verbatim from the model with no text built here, for
                 // the reason every other line in this file gives: M1 design
@@ -237,10 +244,26 @@ public struct PreferencesView: View {
                 // wording lives on `ServingModel.lidClosedSummary` and is
                 // asserted there.
                 //
-                // Unconditional, unlike `hookAdvisory` below. There is no state
-                // to condition it on — the journal is root-owned and this
-                // process measurably cannot read it, which is half of what the
-                // sentence says.
+                // CONDITIONAL since issue #71k, and it was unconditional here
+                // for a reason that stopped being true. The claim was that
+                // there is no state to condition it on; issue #71 is that
+                // state. On a Mac whose hold the registered helper is holding
+                // this paragraph names an install the button replaced and an arm
+                // command the button replaced — work that user must not do,
+                // since following the install puts the manual root binary back.
+                // Its third clause is over-broad rather than false: the status
+                // line BELOW reports what a click armed, but only until the next
+                // launch, and this app still cannot read the root-owned journal
+                // to answer the question later.
+                // `ServingModel.lidClosedSummary(probeAt:holdingFor:)` carries
+                // that argument in full, including why nothing in the Serving
+                // panel bears on it.
+                //
+                // The GATE IS IN THE MODEL and is not written here, exactly as
+                // `staleHelperAdvisory` below is. `registeredHelperIsActive` is
+                // re-read on every `refresh()`, and a second reading at this
+                // call site would agree with it until it did not. This view
+                // renders whatever sentence it is handed and asks nothing.
                 // `Bundle.main.executableURL` is read HERE and the model stays
                 // pure, which is the same split
                 // `versionLine(from: Bundle.main.infoDictionary)` uses below.
@@ -253,14 +276,16 @@ public struct PreferencesView: View {
                 // The stored setting is unbounded, and this sentence embeds the
                 // number in a command the user pastes into a root shell — the
                 // bounded value is the only one that may reach it.
-                Text(ServingModel.lidClosedSummary(
+                if let lidClosed = model.lidClosedSummary(
                     probeAt: ServingModel.probePath(
                         besideExecutable: Bundle.main.executableURL),
-                    holdingFor: model.holdInForce))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
+                    holdingFor: model.holdInForce) {
+                    Text(lidClosed)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
 
                 // THE BUTTON, and issue #71 is the whole of it. Until now this
                 // section really did have no control — the comment above still

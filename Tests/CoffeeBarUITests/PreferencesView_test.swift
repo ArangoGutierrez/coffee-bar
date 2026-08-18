@@ -736,8 +736,10 @@ private func copyButtonLabel(in body: String) throws -> String {
     // Each anchor is the needle the control's own guard uses:
     // `BatteryFloor.permitted` and `LidClosedHold.permitted` are how
     // `everyMovedControlIsRenderedAsUnconditionallyAsTheHeadingsAboveIt` finds
-    // the two sliders, and `lidClosedSummary` is the paragraph that prints the
-    // root command the note points at with the words "the root command below".
+    // the two sliders, and `lidClosedSummary` is the paragraph about the mode
+    // itself — which since issue #71k is silent whenever the registered helper
+    // is the one holding the machine, so it is also the one member of this
+    // group whose height is not fixed.
     let floorSlider = try #require(prefs.range(of: "BatteryFloor.permitted"),
                                    "the Battery floor slider is gone from the window")
     let holdSlider = try #require(prefs.range(of: "LidClosedHold.permitted"),
@@ -759,8 +761,11 @@ private func copyButtonLabel(in body: String) throws -> String {
         #74 confusion it was added to remove.
         """)
     #expect(note.upperBound < command.lowerBound, """
-        the scope note is rendered below the lid-closed paragraph, so it says \
-        "the root command below" with the command already above it.
+        the scope note is rendered below the lid-closed paragraph. It belongs \
+        directly beneath the two sliders it scopes, which is where a caption is \
+        read from — and that paragraph is silent whenever the registered helper \
+        is active (#71k), so a note placed under it slides up and down the \
+        window with a state it says nothing about.
         """)
 }
 

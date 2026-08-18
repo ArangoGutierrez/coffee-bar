@@ -925,6 +925,62 @@ public final class ServingModel {
         + "runs as you — so run \(lidClosedReportCommand) to find out."
     }
 
+    /// The same paragraph, or `nil` while the REGISTERED helper is the one
+    /// running lid-closed mode (issue #71k).
+    ///
+    /// **The gate is HERE and not in the static above**, which is the split
+    /// `staleHelperAdvisory` already keeps and it is the same argument. That
+    /// static composes a sentence from a path and a hold and stays a pure
+    /// function of the two things it is handed — `LidClosedPanel_test.swift`
+    /// drives it with a fixed install that is never this machine's. This is
+    /// where the model answers for what it MEASURED, and the registration is one
+    /// of the things it measured.
+    ///
+    /// **What went wrong, observed on signed 0.3.0-rc2 with the helper
+    /// registered.** Two of its three clauses are flatly false there. It tells
+    /// the user to `install(1)` the probe by hand, which is the manual path
+    /// issue #71 exists to delete, and to arm it themselves, which the button
+    /// below the paragraph has already done. Following the first puts the manual
+    /// root binary back, so this is work that user must not do rather than work
+    /// they merely need not do.
+    ///
+    /// **The third clause is OVER-BROAD rather than false, and the difference is
+    /// worth keeping straight.** `HelperArmOutcome.statusLine` does report what
+    /// a click armed — "Lid-closed mode is armed for N. coffee-bar's helper is
+    /// supervising it and will put the setting back." — so "coffee-bar cannot
+    /// show you whether it is armed" is untrue at that moment. It is true again
+    /// a moment later: that line is `@State` in `PreferencesView`, `nil` until a
+    /// click and gone on the next launch, and `LidClosedControl` carries exactly
+    /// two verbs, `arm` and `revert`, with no status verb to ask. This app still
+    /// cannot read the root-owned journal, so `lidClosedReportCommand` remains
+    /// the way to ask at an arbitrary moment. The LIMITATION survives; the
+    /// blanket phrasing does not.
+    ///
+    /// Nothing in the Serving panel bears on this either way. Issue #56 took
+    /// lid-closed mode out of that surface entirely, and the boundary guard in
+    /// `AppLayerBoundary_test.swift` keeps it out, so no argument here may rest
+    /// on what the panel shows. (Named in prose rather than cited as a symbol
+    /// deliberately: `everyLongIdentifierACommentCitesExistsSomewhereInTheTree`
+    /// cannot resolve that test's name — see the note on its own declaration.)
+    ///
+    /// **`nil` and not a shortened sentence.** The install and the arming are
+    /// the paragraph's spine and both have to go; what is left is a caveat with
+    /// no subject. `HelperArmOutcome.statusLine` is what speaks on that surface
+    /// instead, and it reports the hold this app actually obtained.
+    ///
+    /// **Nothing else about it changes**, which is the half that keeps this from
+    /// being a deletion. An unsigned build cannot register a helper at all, and
+    /// a signed one whose owner has never clicked the button has not registered
+    /// one; on both, the `sudo` route is the only route there is and every word
+    /// of the paragraph is what it was.
+    /// `withoutARegisteredHelperTheLidClosedSummaryIsWordForWordWhatItWas` holds
+    /// the whole string against a literal.
+    public func lidClosedSummary(probeAt path: String,
+                                 holdingFor seconds: Int) -> String? {
+        guard !registeredHelperIsActive else { return nil }
+        return Self.lidClosedSummary(probeAt: path, holdingFor: seconds)
+    }
+
     /// Which holds the two Power controls actually govern (issue #73).
     ///
     /// **The defect is a promise, not a floor.** The battery slider sits in a
@@ -948,8 +1004,23 @@ public final class ServingModel {
     /// hold". A reader takes those as one group governing one feature, so a
     /// note scoping only the first, under a heading naming the second, reads as
     /// confirming the misreading rather than correcting it. The second sentence
-    /// therefore states the route the chosen hold DOES take — an argument the
-    /// user types — beside the setting that takes no route at all.
+    /// therefore states the route the chosen hold DOES take — a deadline handed
+    /// to the daemon, and nothing more — beside the setting that takes no route
+    /// at all.
+    ///
+    /// **It names no MECHANISM, and issue #71k is why.** It used to say that a
+    /// lid-closed hold "is armed by the root command below". That was true until
+    /// issue #71 put a button under it, and wrong twice over afterwards: on a
+    /// signed build the click is what arms the hold, and the paragraph carrying
+    /// that command is silent on exactly those machines — so the sentence
+    /// pointed "below" at something the reader could not see. This is a STATIC
+    /// and must not be made to vary (see below), so the repair is a wording true
+    /// in both worlds: what the floor governs, that the daemon reads no
+    /// preference of the user's, and that the chosen hold reaches it only as a
+    /// deadline. WHICH of the two routes armed it changes none of those.
+    /// `theScopeNoteNamesNoMechanismForArmingALidClosedHold` refuses the claim's
+    /// return, and measures its premise — that the paragraph below really is
+    /// absent — rather than restating it.
     ///
     /// **The number is DERIVED, and that is the whole durability of this.** A
     /// literal `15%` here is correct on the day it is written and becomes a
@@ -979,11 +1050,11 @@ public final class ServingModel {
     /// window came to promise a scope nobody had checked.
     nonisolated static let powerScopeNote =
         "The battery floor governs the holds coffee-bar runs itself, and only "
-        + "those. A lid-closed hold is armed by the root command below, which "
-        + "never reads your preferences: on battery it ends at coffee-bar's "
-        + "built-in floor of \(WatchdogPolicy.default.batteryFloorPercent)% "
-        + "whatever you set here, and the hold you chose reaches it only as the "
-        + "\(ProbeVerb.ttlFlag) in that command."
+        + "those. A lid-closed hold runs under a root daemon that reads none of "
+        + "your preferences: on battery it ends at coffee-bar's built-in floor "
+        + "of \(WatchdogPolicy.default.batteryFloorPercent)% whatever you set "
+        + "here, and the hold you chose reaches that daemon only as a "
+        + "\(ProbeVerb.ttlFlag) deadline, never as a setting it can read back."
 
     /// The one line the panel shows about the battery floor, or `nil` for no
     /// line.

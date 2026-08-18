@@ -2393,15 +2393,30 @@ private func httpsAddresses(in code: String) -> [String] {
     // END attention-list scroll tripwire.
 }
 
+// THIS TEST CANNOT BE CITED BY NAME FROM A `///` COMMENT IN `Sources`, and the
+// reason is a defect in a neighbour rather than anything about this check.
+// `everyLongIdentifierACommentCitesExistsSomewhereInTheTree` resolves a citation
+// against every declaration in the tree, stripped by a local
+// `codeWithoutComments` in `ProcGovernor_test.swift` that tracks `//` and `/* */`
+// but NOT string literals. The lexer fixture table earlier in THIS file contains
+// `"let glob = \"/*\""` — a `/*` inside a string — so that stripper opens a block
+// comment it never closes and swallows every declaration below it, this one
+// included. Measured by replaying the stripper over this file: the names
+// declared at lines 805 to 1722 survive and everything after is gone.
+//
+// So a comment in `Sources` naming this test goes red with "declared nowhere".
+// Name it in prose until that stripper learns string literals; the shipping
+// `swiftCodeWithoutComments` in `CoffeeBarTestSupport` already does.
 @Test func theLidClosedSummaryIsInThePreferencesWindowAndNotInThePanel() throws {
     // TWO SURFACES, and the negative half is the point of issue #56.
     //
-    // Lid-closed mode is the one capability with NO control anywhere, and that
-    // is deliberate: it needs root, and coffee-bar never elevates its own
-    // privilege. What is left is telling the user the command — so if NO view
-    // reads the property, the feature reaches the user nowhere at all and the
-    // app simply has no lid-closed mode as far as anyone can tell. That is what
-    // the positive half below refuses.
+    // Lid-closed mode needs root, and coffee-bar never elevates its own
+    // privilege. Issue #71 gave a signed build a button — macOS registers the
+    // helper and the click asks it — and left every other build with the route
+    // it always had: the user runs the command themselves. So if NO view reads
+    // the property, the feature reaches those users nowhere at all and the app
+    // simply has no lid-closed mode as far as anyone can tell. That is what the
+    // positive half below refuses.
     //
     // The panel is the wrong surface for it, and the reason is not taste. The
     // panel is 260pt wide and reports what coffee-bar is doing NOW; this
@@ -2440,17 +2455,42 @@ private func httpsAddresses(in code: String) -> [String] {
     let windowCode = swiftCodeWithoutComments(try String(contentsOf: window, encoding: .utf8))
     let panelCode = swiftCodeWithoutComments(try String(contentsOf: panel, encoding: .utf8))
 
-    // `ServingModel.lidClosedSummary` rather than `model.lidClosedSummary`: the
-    // sentence depends on no instance state — only on `ProbeVerb` — so it is a
-    // static, exactly like `ServingModel.displayLabel`. Requiring the instance
-    // spelling would have forced a property that ignores its own instance,
-    // which reads as though the window were reporting live state. It is not,
-    // and that is the whole point of this surface.
-    #expect(windowCode.contains("ServingModel.lidClosedSummary"), """
-        PreferencesView.swift never reads ServingModel.lidClosedSummary in code, \
-        so the only route a user has to lid-closed mode — the command to run — \
-        reaches them nowhere. Render it, or delete the property and the checks \
-        on its text. A comment naming the property does not satisfy this.
+    // `model.lidClosedSummary` and NOT `ServingModel.lidClosedSummary`, and
+    // this half of the guard was REVERSED by issue #71k. It required the STATIC
+    // on the grounds that "the sentence depends on no instance state", which
+    // held until issue #71 put an arm button under it: on a Mac whose hold the
+    // REGISTERED helper is holding, the paragraph names a manual install that
+    // exists to be deleted and an arm command the button has replaced. The state
+    // that says so is the one thing an instance has and a static cannot read.
+    //
+    // `ServingModel` keeps the static — `LidClosedPanel_test.swift` holds the
+    // wording against it and the model composes its answer FROM it — and the
+    // window reads the gated instance. That is the same split
+    // `staleHelperAdvisory` uses in the check above, for the same reason.
+    //
+    // WHITESPACE REMOVED for the containment, for the reason that check gives:
+    // the call is long enough that the view wraps it over several lines, so a
+    // needle carrying `(probeAt:` never matches the raw text.
+    let windowCallSites = windowCode
+        .replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
+
+    #expect(windowCallSites.contains("model.lidClosedSummary(probeAt:"), """
+        PreferencesView.swift never reads model.lidClosedSummary(probeAt:) in \
+        code, so the only route a user without a registered helper has to \
+        lid-closed mode — the command to run — reaches them nowhere. Render it, \
+        or delete the property and the checks on its text. A comment naming the \
+        property does not satisfy this.
+        """)
+
+    // The STATIC spelling, refused outright on this surface. It is the UNGATED
+    // sentence, and a window that reads it is the #71k defect exactly: the
+    // paragraph rendered on the machines it is false about.
+    #expect(!windowCallSites.contains("ServingModel.lidClosedSummary("), """
+        PreferencesView.swift calls ServingModel.lidClosedSummary directly, which \
+        is the sentence with no gate on it. It tells a user whose hold the \
+        registered helper is holding to install a root probe by hand, and that \
+        coffee-bar cannot show them whether it is armed, a few rows above the \
+        button that armed it.
         """)
 
     // WIRED, not merely SPELLED. `contains` proves the property is named in
@@ -2462,7 +2502,9 @@ private func httpsAddresses(in code: String) -> [String] {
     // defeated a sibling guard in this repository:
     //
     //     if false {
-    //         Text(ServingModel.lidClosedSummary)
+    //         if let summary = model.lidClosedSummary(probeAt: …, holdingFor: …) {
+    //             Text(summary)
+    //         }
     //     }
     //
     // The property is spelled, the assertion above is green, and the user meets
@@ -2487,7 +2529,7 @@ private func httpsAddresses(in code: String) -> [String] {
         PreferencesView.swift no longer contains Text("Power"), so this guard has \
         no unconditional neighbour to compare against and measured nothing.
         """)
-    let summaryDepth = try #require(braceDepth(atFirst: "ServingModel.lidClosedSummary",
+    let summaryDepth = try #require(braceDepth(atFirst: "model.lidClosedSummary(",
                                                in: windowCode))
 
     // ANTI-VACUITY. `body`, `ScrollView` and `VStack` are three braces before
@@ -2500,13 +2542,19 @@ private func httpsAddresses(in code: String) -> [String] {
         VStack that must enclose it. This guard is reading the wrong thing.
         """)
 
+    // EQUAL still, and what it holds has changed with the half above. The
+    // paragraph IS conditional now — on the model's gate, and on nothing else —
+    // so what has to stay unconditional is the `if let` itself. `braceDepth`
+    // measures AT the needle, which sits in the condition and therefore before
+    // that `if`'s own brace: the model's gate leaves it level with the heading,
+    // while `if false { if let … } }` puts it one deeper and goes red.
     #expect(summaryDepth == anchorDepth, """
-        PreferencesView.swift spells ServingModel.lidClosedSummary at brace depth \
+        PreferencesView.swift reads model.lidClosedSummary at brace depth \
         \(summaryDepth) while the unconditional Text("Power") beside it sits at \
-        \(anchorDepth). The summary is inside something the heading is not — an \
-        `if`, a `switch`, a closure — so the text is present in the file and the \
-        user may never see it. The lid-closed summary is unconditional: there is \
-        no state to condition it on, and silence reads as "lid-closed mode is off".
+        \(anchorDepth). The read is inside something the heading is not — an \
+        `if`, a `switch`, a closure — so the paragraph is present in the file and \
+        a user with no registered helper, whose only route to lid-closed mode it \
+        is, may never see it. The one condition it may carry is the model's own.
         """)
 
     // The negative half. Issue #56: the panel keeps NOTHING about lid-closed
