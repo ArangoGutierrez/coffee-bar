@@ -290,11 +290,16 @@ promise does not change: coffee-bar ships no kernel extension and will not.
 
 The one that matters most is the one that does not change either. **coffee-bar
 never elevates its own privilege.** The app process never becomes root, in any
-version, and it never asks you for a password. What it can do, since v0.3, is
-ask *macOS* to install and run a separate job as root on your behalf, through
-`SMAppService`. macOS runs that job only after you have enabled it by hand, and
-the sections below set out what it may do and how each end authenticates the
-other.
+version, and it never asks you for a password. It cannot elevate itself, and it
+cannot ask you to elevate it. What it can do, since v0.3, is ask *macOS* to
+install and run a separate job as root on your behalf, through `SMAppService`;
+macOS runs that job only after you have enabled it by hand, and the sections
+below set out what it may do and how each end authenticates the other.
+
+**The root path is still opt-in, and you are still the one who takes it.** In
+v0.2 that meant one thing: you type `sudo coffee-bar-probe arm` in your own
+shell. It now means one of two, depending on how your copy is signed, and
+neither of them happens without you.
 
 **Two sentences that were true in v0.2 change in v0.3, and they are restated
 here rather than quietly dropped.** They read: "The app shows no authorization
@@ -311,20 +316,22 @@ authorization prompt, and still no password, ever. A registration gets no modal:
 macOS refuses the first attempt outright and files the request under
 coffee-bar's name in System Settings › General › Login Items & Extensions, where
 *you* have to find the switch and turn it on. Until you do, nothing of
-coffee-bar's runs as root. The app still has no route to becoming root itself —
-`AuthorizationExecuteWithPrivileges` and `NSAppleScript "with administrator
-privileges"` would each take your password inside coffee-bar's own process, and
-`theAppLayerNeverReachesForPrivilegeEscalation` refuses them, and seven more
-names, for every file in the app layer. What changed is who collects the
-consent, not whether it is required.
+coffee-bar's runs as root. The menu bar app itself still holds only the
+unprivileged assertion, on every build: changing `SleepDisabled` is the root
+job's doing, and the two are separate processes. The app still has no route to
+becoming root itself — `AuthorizationExecuteWithPrivileges` and `NSAppleScript
+"with administrator privileges"` would each take your password inside
+coffee-bar's own process, and `theAppLayerNeverReachesForPrivilegeEscalation`
+refuses them, and seven more names, for every file in the app layer. What
+changed is who collects the consent, not whether it is required.
 
 **The `sudo` route is not deprecated, and for many installs it is the only one.**
 A build that carries no team identifier registers nothing and is never offered
 the button — that is every Homebrew install, which compiles on your own machine
-by design, and anything built by `scripts/build-app.sh`. There the menu bar app
-holds only the unprivileged assertion and prints the command for you to run, the
-same posture it already takes with hook configuration, where it prints the
-snippet and refuses to write `~/.claude/settings.json` for you.
+by design, and anything built by `scripts/build-app.sh`. There the app prints
+the command for you to run — the same posture it already takes with hook
+configuration, where it prints the snippet and refuses to write
+`~/.claude/settings.json` for you.
 
 You can see exactly what it holds, at any time, with:
 
