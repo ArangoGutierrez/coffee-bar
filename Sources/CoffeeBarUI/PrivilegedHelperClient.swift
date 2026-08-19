@@ -119,10 +119,27 @@ public enum HelperArmOutcome: Equatable, Sendable {
     /// Composed here rather than in the view, for the reason every other
     /// sentence in this layer is: M1 design §5.4 forbids asserting on rendered
     /// AppKit text.
+    ///
+    /// **The armed case NAMES THE BLANK SCREEN, and that is issue #143.** The
+    /// click puts the display to sleep immediately: `ArmService` is built with
+    /// `display: PmsetDisplaySleeper(runner:)`, whose `forceSleep()` runs
+    /// `pmset displaysleepnow`, and `docs/coffee-bar-HANDOFF.md` records it as
+    /// "Force display off ... Required alongside disablesleep". It is the single
+    /// most visible consequence of the press, this sentence is the only thing
+    /// the window says afterwards, and the maintainer read the blanking as a
+    /// crash on first live use of the shipped button.
+    ///
+    /// "was put to sleep" and NOT "is asleep", deliberately. `LidClosedSession`
+    /// treats a `nil` from `DisplayStateProbe` as not-awake (the measured Apple
+    /// Silicon answer), so an `.armed` reply proves `pmset displaysleepnow`
+    /// returned nought and not that the panel is dark. This product does not
+    /// state what it cannot observe, and the ACTION is what it observed.
+    /// `theArmedSentenceSaysTheDisplayWasPutToSleepAndTheLidMayClose` holds it.
     public var statusLine: String {
         switch self {
         case .armed(let seconds):
-            return "Lid-closed mode is armed for \(ServingModel.holdLabel(for: seconds)). "
+            return "Lid-closed mode is armed for \(ServingModel.holdLabel(for: seconds)), "
+                + "and the display was put to sleep so you can close the lid. "
                 + "coffee-bar's helper is supervising it and will put the setting back."
         case .refused(let reason):
             return reason

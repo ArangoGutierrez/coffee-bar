@@ -946,8 +946,9 @@ public final class ServingModel {
     ///
     /// **The third clause is OVER-BROAD rather than false, and the difference is
     /// worth keeping straight.** `HelperArmOutcome.statusLine` does report what
-    /// a click armed — "Lid-closed mode is armed for N. coffee-bar's helper is
-    /// supervising it and will put the setting back." — so "coffee-bar cannot
+    /// a click armed ("Lid-closed mode is armed for N, and the display was put
+    /// to sleep so you can close the lid. coffee-bar's helper is supervising it
+    /// and will put the setting back."), so "coffee-bar cannot
     /// show you whether it is armed" is untrue at that moment. It is true again
     /// a moment later: that line is `@State` in `PreferencesView`, `nil` until a
     /// click and gone on the next launch, and `LidClosedControl` carries exactly
