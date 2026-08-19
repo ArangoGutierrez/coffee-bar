@@ -28,6 +28,67 @@ Every released version of coffee-bar, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 The project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] – 2026-08-19
+
+A fix release for three things v0.3.0 got wrong on the surface a new user meets
+first. Nothing here changes what coffee-bar decides. All three are the app either
+refusing an action it had just offered, or failing to explain something it had
+just done.
+
+### Fixed
+
+- **The button that offered to copy the command could not be clicked.** On a
+  build where the app cannot register a privileged helper, and the terminal is
+  the only route left, the control is titled `Copy the command instead`. Its
+  disabled clause covered exactly that case, so it named an action and refused
+  it. On a Homebrew install that button is the
+  only route to the command, so the user who most needed it got a dead end. It
+  copies now. (#142)
+- **Arming lid-closed mode blanked the screen with no explanation.** Arming runs
+  `pmset displaysleepnow`, which is required rather than incidental: a machine
+  held awake with its lid shut must not keep the panel lit. Nothing said so, and
+  the most visible consequence of the click read as a crash. The armed line now
+  says the display was put to sleep and that the lid can be closed. (#143)
+- **The panel said it had never checked for updates, and then said when it last
+  checked.** The timestamp was written to settings and the verdict was not, so
+  every relaunch restored a real stamp beside no verdict. The verdict is now
+  persisted as a discriminator and the sentence rebuilt from current code, so an
+  upgrade cannot resurrect wording from an older build. An install upgrading from
+  0.3.0 carries a stamp and no stored verdict, and sees one line saying exactly
+  that until its next check falls due. (#147)
+
+### Also in this release
+
+The published 0.3.0 entry claimed four things that were not true of the build it
+described, and they are corrected in place rather than left standing. The
+repository's front page still announced v0.1.1 three releases on, and now states
+what v0.3.0 shipped, including the single outbound request the app makes.
+`SECURITY.md` records that helper removal and the unsigned-build fallback were
+both exercised on 2026-08-19, with the limits of that measurement stated beside
+it.
+
+Two guards were added for defects that had shipped through a green suite: one
+refuses any page under `site/`, and the README, that claims the app makes no
+network request, and one holds the update verdict against the stamp it was
+reached with.
+
+The 0.3.1 disk image:
+
+| Fact | Value |
+|---|---|
+| File | `coffee-bar-0.3.1.dmg` |
+| Size | 1059046 bytes |
+| SHA-256 | `ca72a571f5595da27d377bbb69ed0fe3b20869bcc9823caeb490fbc2afc2badd` |
+| Architecture | Apple silicon (`arm64`) only |
+| Minimum macOS | 14.0 |
+| Signature | Developer ID Application, team `85FN4Z37V8` |
+| Notarisation | `spctl` accepts it, source `Notarized Developer ID` |
+| Staple | `xcrun stapler validate` passes on the app and on the image |
+
+This is not a universal binary. `lipo -archs` on the shipped binary reports
+`arm64` alone, so an Intel Mac cannot run it.
+
+
 ## [0.3.0] – 2026-08-19
 
 Lid-closed mode is a button. Keeping a Mac awake with the lid shut used to mean
