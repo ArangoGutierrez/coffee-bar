@@ -63,6 +63,36 @@ public enum HelperAvailability: Equatable, Sendable {
         }
     }
 
+    /// What a press on the control actually does.
+    ///
+    /// **A VALUE and not a branch inside the button's closure**, for the reason
+    /// `buttonTitle` and `explanation` are composed here: M1 design §5.4 forbids
+    /// asserting on rendered AppKit text, so a `switch` written in a `View` is a
+    /// decision no check reads. This is the decision issue #142 found wrong, and
+    /// `theButtonThatOffersToCopyTheCommandCopiesTheCommand` reads it here.
+    ///
+    /// **The unavailable case is a COPY and not a refusal, which is #142.** That
+    /// build's title has always read "Copy the command instead", and the view
+    /// disabled the control on the same term, so it named an action and refused
+    /// it. The Homebrew bundle is ad-hoc signed and always takes this branch,
+    /// where the greyed button was the only route the product offered to
+    /// lid-closed mode: the command was recoverable only by selecting the
+    /// sentence beside it by hand.
+    ///
+    /// **The safety property is unchanged.** A press on an unavailable build
+    /// reaches the pasteboard and nothing else. `arm(seconds:)` opens with
+    /// `register()`, which re-reads `availability()`, so the OS-facing path
+    /// stays closed to a build that cannot register even if a view ever routed
+    /// a press into it by mistake.
+    public var buttonAction: HelperButtonAction {
+        switch self {
+        case .registrable:
+            return .arm
+        case .unavailable:
+            return .copyCommand(ServingModel.lidClosedCommand)
+        }
+    }
+
     /// The sentence the window shows beside the button.
     ///
     /// Composed here rather than in the view, for the reason every other
@@ -94,6 +124,28 @@ public enum HelperAvailability: Equatable, Sendable {
                 + "\(ServingModel.lidClosedCommand) yourself."
         }
     }
+}
+
+/// What a press on the lid-closed control is for, on this build.
+///
+/// TWO CASES because there are two builds, and issue #142 is what happens when
+/// one control has to serve both. A signed bundle registers a helper and asks
+/// it; an ad-hoc or unsigned one cannot, and the useful thing it can do is hand
+/// the user the command that has always worked.
+///
+/// The command travels IN THE CASE rather than being looked up by the view. A
+/// view that fetched `ServingModel.lidClosedCommand` for itself is a second
+/// spelling of one string, and the sentence beside the button already carries
+/// the first: the two would drift, and the copied line would stop matching the
+/// line the user is reading.
+public enum HelperButtonAction: Equatable, Sendable {
+    /// Register the helper if needed, then ask it to hold sleep.
+    case arm
+
+    /// Put this on the pasteboard. The user runs it in their own shell, which
+    /// is how lid-closed mode has always been reached on a build that names no
+    /// team, and coffee-bar never elevates its own privilege to do it for them.
+    case copyCommand(String)
 }
 
 /// What a click on the button did.

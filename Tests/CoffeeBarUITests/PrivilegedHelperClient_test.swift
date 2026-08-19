@@ -531,3 +531,41 @@ private final class CountingRegistration: HelperRegistering, @unchecked Sendable
         the armed sentence no longer names the hold the helper granted: \(line)
         """)
 }
+
+@Test func theButtonThatOffersToCopyTheCommandCopiesTheCommand() {
+    // Issue #142, observed on a local build stamped 0.3.0-unsigned: ONE button
+    // whose title flips, sitting under a `.disabled` clause that carried
+    // `helperAvailability == .unavailable`. So the control reads "Copy the
+    // command instead" and is greyed out. It names an action and refuses it.
+    //
+    // It matters most on the Homebrew path. That bundle is ad-hoc signed, so it
+    // always takes this branch, and the greyed button is the only route the
+    // product offers to lid-closed mode there. Without this the command is
+    // recoverable only by selecting the sentence beside it by hand.
+    //
+    // The ACTION lives here and not in the button's closure, for the reason
+    // every sentence on this surface does: M1 design §5.4 forbids asserting on
+    // rendered AppKit text, so a `switch` written in a `View` is a decision no
+    // check reads. `theArmButtonIsNotDisabledOnTheBuildWhoseTitleOffersACopy`
+    // holds the view half.
+    #expect(HelperAvailability.unavailable.buttonAction
+            == .copyCommand(ServingModel.lidClosedCommand), """
+        the unavailable build's button does not copy \
+        "\(ServingModel.lidClosedCommand)", which is the one action its title \
+        promises and the only route this build has to lid-closed mode
+        """)
+
+    // The OTHER half, and it is what keeps the fix from being a widening.
+    // Turning both cases into a copy satisfies the assertion above and deletes
+    // the button issue #71 exists for, on the one build that can use it.
+    #expect(HelperAvailability.registrable.buttonAction == .arm, """
+        the signed build's button no longer arms through the helper, so the \
+        control issue #71 added does nothing on the only build that can register
+        """)
+
+    // The two builds must not agree. A `buttonAction` that ignored `self` would
+    // satisfy either assertion alone on some future rewrite, which is how this
+    // defect survives a check written the obvious way.
+    #expect(HelperAvailability.registrable.buttonAction
+            != HelperAvailability.unavailable.buttonAction)
+}

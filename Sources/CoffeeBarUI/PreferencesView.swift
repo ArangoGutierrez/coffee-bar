@@ -322,18 +322,63 @@ public struct PreferencesView: View {
                 // check reads.
                 HStack(spacing: 8) {
                     Button(helperAvailability.buttonTitle) {
-                        // The availability gate is re-read inside `arm`, so a
-                        // build that cannot register never reaches the OS.
-                        armingInFlight = true
-                        Task {
-                            let outcome = await PrivilegedHelperClient()
-                                .arm(seconds: model.holdInForce)
-                            helperStatus = outcome.statusLine
-                            armingInFlight = false
+                        // WHAT the press does is decided on the model side and
+                        // read here, for the reason the paragraph above gives
+                        // about sentences: design §5.4 forbids asserting on
+                        // rendered AppKit text, so a `switch` on
+                        // `helperAvailability` written in this closure is a
+                        // decision no check reads.
+                        // `theButtonThatOffersToCopyTheCommandCopiesTheCommand`
+                        // holds the mapping and
+                        // `theArmButtonIsNotDisabledOnTheBuildWhoseTitleOffersACopy`
+                        // holds this file's half.
+                        switch helperAvailability.buttonAction {
+                        case .copyCommand(let command):
+                            // ISSUE #142. The title on this build has always
+                            // read "Copy the command instead", and the
+                            // `.disabled` clause below carried
+                            // `helperAvailability == .unavailable`, so the
+                            // control named an action and refused it. On the
+                            // Homebrew bundle, which is ad-hoc signed and always
+                            // takes this branch, that greyed button was the only
+                            // route the product offered to lid-closed mode.
+                            //
+                            // `clearContents()` first, because `setString`
+                            // alone appends a representation to whatever the
+                            // user was already holding.
+                            //
+                            // `command` and not a second lookup of
+                            // `ServingModel.lidClosedCommand`: the action
+                            // carries the string the sentence beside this button
+                            // names, and one spelling cannot drift from itself.
+                            let board = NSPasteboard.general
+                            board.clearContents()
+                            board.setString(command, forType: .string)
+                            // The window looks identical before and after a
+                            // copy, so a press with no sentence is a press the
+                            // user cannot tell from a dead control. The line is
+                            // the model's, like every other line here.
+                            helperStatus = ServingModel.commandCopiedNote
+                        case .arm:
+                            // The availability gate is re-read inside `arm`, so
+                            // a build that cannot register never reaches the OS.
+                            // That is unchanged by #142, and it is what makes
+                            // enabling this control safe: the branch above ends
+                            // at the pasteboard, and this branch is closed to
+                            // an unavailable build twice over.
+                            armingInFlight = true
+                            Task {
+                                let outcome = await PrivilegedHelperClient()
+                                    .arm(seconds: model.holdInForce)
+                                helperStatus = outcome.statusLine
+                                armingInFlight = false
+                            }
                         }
                     }
-                    .disabled(armingInFlight || removalInFlight
-                              || helperAvailability == .unavailable)
+                    // NO availability term, and its absence is issue #142's fix.
+                    // What the press does depends on the build; whether it can
+                    // be pressed does not. A copy is always possible.
+                    .disabled(armingInFlight || removalInFlight)
 
                     if armingInFlight {
                         ProgressView().controlSize(.small)
