@@ -606,9 +606,21 @@ func theProseHookCountMatchesTheRequiredEventCount(_ name: String) throws {
 
 // MARK: - Claim 2: numbers must be real product constants
 
+/// The constants a document may state a duration for, keyed by the spelling the
+/// prose uses in backticks.
+///
+/// `JournalRecord.maxTTLSeconds` joined them on 2026-08-19, when README.md began
+/// stating the lid-closed ceiling. It is keyed by its QUALIFIED name because
+/// that is how `SECURITY.md` writes it, and the key is what
+/// `everyNamedConstantMatchesTheNumberBesideIt` looks for between backticks: a
+/// bare `maxTTLSeconds` key would match nothing on any surface and would be
+/// coverage that only looks like coverage. Keyed as it is, it now reads the two
+/// live sentences at `SECURITY.md:378` and `:432` that pair the symbol with 24
+/// hours, as well as admitting 86400 to the sweep below.
 private let productConstants: [String: Double] = [
     "workingTimeout": StalePolicy.standard.workingTimeout,
     "blockedTimeout": StalePolicy.standard.blockedTimeout,
+    "JournalRecord.maxTTLSeconds": Double(JournalRecord.maxTTLSeconds),
 ]
 
 private let secondsPerUnit: [String: Double] = ["second": 1, "minute": 60, "hour": 3600]

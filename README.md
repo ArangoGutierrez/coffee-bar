@@ -49,9 +49,24 @@ exist; it reads session state from agent hooks and from nothing else.
   machine awake forever.
 - A Serving switch with Off, Auto and On. **Off is an absolute veto.**
 - A battery floor: at or below 15% on battery, it does not hold.
+- Asks what it needs to know the first time it runs: whether to hold the
+  display, where to put the battery floor, and which agent tools to listen for.
+- Opens at login once you ask it to, and installs nothing until you do.
+- Says when a newer version is published. It downloads no update and never
+  replaces itself.
+- Answers `/status` on the same unix socket the hooks post to, so an agent can
+  read what coffee-bar is doing: the switch position, whether a hold is live,
+  and how many sessions are working or waiting on you. Read-only, and it
+  carries no session identity, no working directory and no message text.
 
 It has no Dock icon and opens no window. Look for the cup at the right end of
 the menu bar.
+
+coffee-bar makes exactly one outbound request. At most once a day when it
+starts, and whenever you press Check now, it asks this project's site which
+release is current; it carries no identifier and no query string, and there is
+no setting that turns it off. Everything else stays on the machine.
+[Security](SECURITY.md) prints that request in full.
 
 ## Lid-closed mode
 
@@ -60,7 +75,11 @@ sleeps it, because a power assertion does not survive the lid — overriding it
 means changing a system setting, and that needs root.
 
 coffee-bar's everyday work needs no root and no password, and the app never
-elevates its own privilege. Lid-closed mode is an opt-in extra, and the only part of the product that involves root at all.
+elevates its own privilege. Lid-closed mode is an opt-in extra, and the only
+part of the product that involves root at all. There are two routes into it: the
+button on a signed build, and `sudo coffee-bar-probe arm` everywhere else. A
+Homebrew install has only the second, and that one asks for your password
+because `sudo` does.
 
 - **One button on a signed build.** The notarised DMG carries an
   **Arm lid-closed mode** button in the Preferences window, under Power. coffee-bar
@@ -69,11 +88,17 @@ elevates its own privilege. Lid-closed mode is an opt-in extra, and the only par
   runs no interpreter as root.
 - **Approval is yours, and nothing prompts you for it.** macOS files the helper
   away switched off, and you turn it on under System Settings → General → Login
-  Items & Extensions. There is no dialog to accept and **no password, at any
-  point.** If you are waiting for something to pop up, nothing will.
+  Items & Extensions. On this route there is no dialog to accept and **no
+  password, at any point.** If you are waiting for something to pop up, nothing
+  will: the first click reports that the helper is waiting on you, and you press
+  the button again once you have approved it.
 - **It is removable from the same window**, and removal ends the hold before it
   unregisters, so the sleep setting is never left changed with nothing to put it
   back.
+- **The hold has a length, and it is yours to set.** You choose it in
+  Preferences, the `sudo` command the window prints carries the same number, and
+  24 hours is the ceiling either way. A root process still holding the setting
+  after whatever armed it has gone is the failure that ceiling exists to bound.
 - **On an unsigned build the button is disabled.** A Homebrew install is
   unsigned by design: the formula compiles the source on your machine, so the
   bundle carries no team identifier and macOS has nothing to pin a helper to.
