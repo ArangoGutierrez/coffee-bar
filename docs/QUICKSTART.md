@@ -20,7 +20,7 @@ different shape from Claude Code's and this page documents neither.
   these two and nothing else.
 -->
 **v0.3.0 is released** as a signed, notarised DMG, and Homebrew builds v0.3.0
-from source. That source build is ad-hoc signed, so it cannot register the
+from source. That source build is ad-hoc signed, so the app cannot register the
 privileged helper: lid-closed mode there is armed from the command line rather
 than from the button. To build that source yourself, see
 [Building](BUILDING.md). It takes about a minute.

@@ -615,8 +615,9 @@ func theProseHookCountMatchesTheRequiredEventCount(_ name: String) throws {
 /// `everyNamedConstantMatchesTheNumberBesideIt` looks for between backticks: a
 /// bare `maxTTLSeconds` key would match nothing on any surface and would be
 /// coverage that only looks like coverage. Keyed as it is, it now reads the two
-/// live sentences at `SECURITY.md:378` and `:432` that pair the symbol with 24
-/// hours, as well as admitting 86400 to the sweep below.
+/// live sentences that pair the symbol with a number, SECURITY.md "caps it at 24
+/// hours however much you ask for" and SECURITY.md "which is 24 hours", as well
+/// as admitting 86400 to the sweep below.
 private let productConstants: [String: Double] = [
     "workingTimeout": StalePolicy.standard.workingTimeout,
     "blockedTimeout": StalePolicy.standard.blockedTimeout,
@@ -1783,19 +1784,19 @@ private let absoluteEgressClaimPatterns: [String] = [
 private let egressSweepExclusions: [String: String] = [
     "SECURITY.md":
         """
-        SECURITY.md:195-208 QUOTES both retired false claims ("makes no network \
-        egress … no update ping") while recording that each became false and \
-        when. That paragraph is the policy keeping its promise to say so the day \
-        an outbound request existed, so the ban would fire on the very prose \
+        The policy QUOTES both retired false claims, in the paragraph beginning \
+        "This section previously read", while recording that each became false \
+        and when. That paragraph is the policy keeping its promise to say so the \
+        day an outbound request existed, so the ban would fire on the very prose \
         that documents the ban's subject. Three patterns match there today.
         """,
     "docs/QUICKSTART.md":
         """
-        docs/QUICKSTART.md:208 says "An unrecognised name posts nothing rather \
-        than guessing" about the shim's --tool argument, and it is true: \
-        Sources/CoffeeBarShim/main.swift:98-102 refuses an unknown name with \
-        "Nothing was posted." The subject is a local unix-socket post, not the \
-        app's egress, and the ban cannot tell those apart by phrasing alone.
+        The quick start says an unrecognised --tool name "posts nothing rather \
+        than guessing", and it is true of the shim: CoffeeBarShim/main.swift \
+        refuses an unknown name with "Nothing was posted." The subject is a \
+        local unix-socket post, not the app's egress, and the ban cannot tell \
+        those apart by phrasing alone.
         """,
 ]
 
