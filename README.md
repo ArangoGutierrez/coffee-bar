@@ -20,9 +20,9 @@ that is the difference from `caffeinate -d`.
   one instead.
 -->
 **Status: v0.3.0 is released as a signed, notarised DMG, and the Homebrew tap
-now builds v0.3.0 from source. That source build is ad-hoc signed, so it cannot
-register the privileged helper and arms lid-closed mode with the command route
-below instead.**
+now builds v0.3.0 from source. That source build is ad-hoc signed, so the app
+cannot register the privileged helper: lid-closed mode is armed by the command
+route below instead.**
 See [Building](docs/BUILDING.md).
 
 ## Quick start
@@ -77,9 +77,9 @@ means changing a system setting, and that needs root.
 coffee-bar's everyday work needs no root and no password, and the app never
 elevates its own privilege. Lid-closed mode is an opt-in extra, and the only
 part of the product that involves root at all. There are two routes into it: the
-button on a signed build, and `sudo coffee-bar-probe arm` everywhere else. A
-Homebrew install has only the second, and that one asks for your password
-because `sudo` does.
+**Arm lid-closed mode** button on a signed build, and `sudo coffee-bar-probe arm`
+everywhere else. A Homebrew install has only the second, and that one asks for
+your password because `sudo` does.
 
 - **One button on a signed build.** The notarised DMG carries an
   **Arm lid-closed mode** button in the Preferences window, under Power. coffee-bar
