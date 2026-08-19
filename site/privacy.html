@@ -109,11 +109,11 @@ carry them are discarded where the event is decoded, before anything stores or
 displays it. A test in the suite fails if that ever changes.</p>
 
 <h2 class="eyebrow">What leaves your Mac</h2>
-<p>One request, described in full below: once a day at startup coffee-bar asks
-this site which release is current. There is no telemetry, no analytics and no
-crash reporting. The socket coffee-bar opens for agents is a unix domain socket,
-which lives in the filesystem and has no address, no port, and no route off this
-machine.</p>
+<p>One request, described in full below: at most once a day, when it starts,
+and whenever you press Check now, coffee-bar asks this site which release is
+current. There is no telemetry, no analytics and no crash reporting. The
+socket coffee-bar opens for agents is a unix domain socket, which lives in the
+filesystem and has no address, no port, and no route off this machine.</p>
 
 <h2 class="eyebrow">The one request, named in advance</h2>
 <p>The check for updates named here ships in v0.3.0. This page named what it
@@ -146,7 +146,7 @@ first.</p>
 <p>Getting coffee-bar is a normal web request. GitHub serves the download and
 counts it, as it does for every file it hosts. That is GitHub's logging, under
 GitHub's privacy policy, and it happens before coffee-bar ever runs. The app
-itself sends nothing.</p>
+itself plays no part in that download.</p>
 
 <p class="stamp">This page describes v0.3.0.</p>
 

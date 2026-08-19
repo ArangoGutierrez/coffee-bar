@@ -315,11 +315,12 @@ wallpaper and in either appearance.
 
 <div class="note">
 The app needs no root for its everyday work. No password prompt, ever. No kernel flags. No
-App Store. One outbound request, and it is a version check: once a day at
-startup coffee-bar asks this site which release is current, carrying no
-identifier and downloading nothing. Everything else stays on the machine, over a
-unix socket in a directory only your account can read. The app process never
-elevates its own privilege: it holds one unprivileged assertion, takes no
+App Store. One outbound request, and it is a version check: at most once a day,
+when it starts, and whenever you press Check now, coffee-bar asks this site
+which release is current, carrying no identifier and downloading no update.
+Everything else stays on the machine. The listener that agents post hook events
+to is a unix socket in a directory only your account can read. The app process
+never elevates its own privilege: it holds one unprivileged assertion, takes no
 credentials, and runs no interpreter as root.
 </div>
 
