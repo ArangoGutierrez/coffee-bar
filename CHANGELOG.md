@@ -32,8 +32,10 @@ The project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Lid-closed mode is a button. Keeping a Mac awake with the lid shut used to mean
 finding a command in the docs, copying it into a terminal and running it under
-`sudo`; the app could not do it, and said so. It is now one click in
-Preferences, and the click is reversible from the same window.
+`sudo`; the app could not do it, and said so. Preferences does it now. The
+first run takes two clicks with a trip to System Settings in between, because
+macOS installs the helper switched off and leaves the switch for you to find;
+after that it is one click, and reverting is one click in the same window.
 
 The rest of the release is about the first ten minutes and the days after them:
 coffee-bar now asks what it needs to know the first time it runs, can open at
@@ -47,9 +49,11 @@ rather than merely powered, and answers an agent that asks what it is doing.
   small `SMAppService` helper and macOS is what runs it as root: the app process
   never becomes root itself, takes no credentials and runs no interpreter. The
   channel between the two is XPC, and its peer is pinned by Team ID and by
-  bundle identifier, evaluated by Security.framework, so no other process on
-  the machine can arm the hold. This is opt-in and it is the only part of
-  coffee-bar that involves root at all. (#71)
+  bundle identifier, evaluated by Security.framework, so no other process can
+  drive the helper over that channel. The pin binds the XPC endpoint rather
+  than the machine: `sudo coffee-bar-probe arm` arms the same hold from a
+  terminal, and on a Homebrew install it is the only route. This is opt-in and
+  it is the only part of coffee-bar that involves root at all. (#71)
 - **Remove the helper again, from the same window.** The app reverts the hold
   over XPC, reads `SleepDisabled` back to confirm it returned to 0, and only
   then unregisters. That order is the feature: unregistering first, or letting
@@ -78,9 +82,12 @@ rather than merely powered, and answers an agent that asks what it is doing.
   nothing coffee-bar knows reaches an agent that did not go and read it. (#9)
 - **The lid-closed hold is a setting you choose.** The default is now the length
   of an agent run you meant to leave going, eight hours, rather than half an
-  hour, and the ceiling is twenty-four hours. On battery the hold still ends at
-  the daemon's own floor before any of that, which is the protection that
-  matters when you arm it and walk away. (#74)
+  hour. The hard ceiling moved with it: the cap on a root-held `SleepDisabled`
+  is twenty-four hours, three times the eight hours earlier versions enforced,
+  so an eight-hour cap named in an older entry below belongs to that release
+  and not to 0.3.0. On battery the hold still ends at the daemon's own floor
+  before any of that, which is the protection that matters when you arm it and
+  walk away. (#74, #121)
 - **The Mac stays reachable, not just awake.** Holding the CPU running does not
   keep network clients served, so a machine reached over SSH could be awake and
   unreachable, which is awake for nobody. coffee-bar now raises a network
@@ -99,8 +106,9 @@ rather than merely powered, and answers an agent that asks what it is doing.
   colour-blind reader and a screenshot in greyscale. (#112)
 - **Clicking Preferences opens Preferences.** Re-opening it activates the
   existing window and closes the panel instead of doing nothing. (#126)
-- **The ingest socket refuses a non-`POST` request with 405** and an `Allow`
-  header, rather than reading a body it was never going to accept. (#102)
+- **The ingest socket refuses a wrong method with 405** and an `Allow` header
+  naming the verb that resource serves: `POST` for the hook channel, `GET` for
+  `/status`. Neither reads a body it was never going to accept. (#102)
 
 ### Not in this release
 
