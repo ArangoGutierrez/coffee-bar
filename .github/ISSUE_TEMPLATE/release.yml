@@ -80,7 +80,8 @@ body:
 
         ```
         git ls-remote --tags origin | grep vX.Y.Z                      # tag pushed?
-        gh api repos/ArangoGutierrez/coffee-bar/releases --jq 'length' # release exists?
+        gh api repos/ArangoGutierrez/coffee-bar/releases \
+          --jq '[.[] | select(.draft==false)] | length'   # PUBLISHED release exists?
         grep 'tags/v' "$(brew --repository ArangoGutierrez/coffee-bar)/Formula/coffee-bar.rb"
         curl -sS https://arangogutierrez.github.io/coffee-bar/ | grep -o '0\.[0-9]*\.[0-9]*'
         ```
@@ -265,7 +266,16 @@ body:
         - [ ] **APPROVAL NEEDED** — publish it:
               ```
               gh release edit vX.Y.Z --repo ArangoGutierrez/coffee-bar --draft=false
-              gh api repos/ArangoGutierrez/coffee-bar/releases --jq 'length'   # expect: 1 more than before
+              gh api repos/ArangoGutierrez/coffee-bar/releases \
+                --jq '[.[] | select(.draft==false)] | length'   # expect: 1 more than before
+              ```
+              **Filter on `.draft==false`.** A bare `length` counts DRAFTS for
+              anyone with write access, so it reads "one more than before" the
+              moment phase 3 creates the draft, before a single byte is public.
+              Measured on the v0.3.0 cut: 4 published, draft created, bare
+              `length` said 5 while an anonymous `/releases/latest` still
+              returned the previous version.
+              ```
               ```
 
   - type: textarea
@@ -331,8 +341,19 @@ body:
         sidebar may therefore name `vX.Y.Z` only after the tag exists, and until
         this phase merges the suite FAILS on `main`. Prepare the whole commit —
         both changelog files, the sidebar version and the download link — BEFORE
-        the tag is pushed in phase 3. Then push the tag and merge this commit
-        back to back, so the window lasts seconds.
+        the tag is pushed in phase 3.
+
+        **`main` is protected, so you cannot push this commit to it.** The rules
+        on `refs/heads/main` require a pull request and the `build-test` check.
+        "Merge" here means: push a branch, open a PR, wait for the FULL check
+        rollup, then merge. The window is as long as CI takes, not seconds.
+
+        **Better, and what the v0.3.0 cut actually did.** Create the signed tag
+        LOCALLY and do not push it. `newestReleaseTag()` reads `git tag`, so a
+        local tag alone turns the site guards red, and this commit can be driven
+        GREEN on a branch while nothing is public. Push the tag only once that
+        branch is green. `main` then never sees a red run at all, because CI runs
+        on push and the next push to `main` is the one carrying the fix.
 
         **WARNING — `CHANGELOG.md` and `site/changelog.html` move in ONE commit.**
         `everyReleaseInTheChangelogIsOnTheChangelogPage` compares the release
