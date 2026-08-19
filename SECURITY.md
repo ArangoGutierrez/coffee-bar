@@ -322,7 +322,7 @@ job's doing, and the two are separate processes. The app still has no route to
 becoming root itself — `AuthorizationExecuteWithPrivileges` and `NSAppleScript
 "with administrator privileges"` would each take your password inside
 coffee-bar's own process, and `theAppLayerNeverReachesForPrivilegeEscalation`
-refuses them, and seven more names, for every file in the app layer. What
+refuses them, and eight more names, for every file in the app layer. What
 changed is who collects the consent, not whether it is required.
 
 **The `sudo` route is not deprecated, and for many installs it is the only one.**
@@ -533,7 +533,7 @@ macOS, which lists the request under the app's name in System Settings › Gener
 opposite property — each takes the user's credentials inside coffee-bar's own
 process — and both remain in the app layer's denylist.
 `theAppLayerNeverReachesForPrivilegeEscalation` still refuses `setuid`,
-`launchctl`, `AuthorizationRef` and six more names for every file including the
+`launchctl`, `AuthorizationRef` and seven more names for every file including the
 entitled one. What changed is who collects the consent, not whether it is
 required.
 
