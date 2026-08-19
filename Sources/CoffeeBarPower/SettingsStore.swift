@@ -165,6 +165,36 @@ public enum SettingsKey {
     /// string itself and pins it apart from every other key here.
     public static let lastUpdateCheck = "lastUpdateCheck"
 
+    /// What coffee-bar's last look concluded (issue #147).
+    ///
+    /// A LIST OF STRINGS: a tag naming the conclusion, then its payload where
+    /// the conclusion has one. Never a sentence.
+    /// `UpdateCheck.StoredVerdict` owns the shape and says why the words are
+    /// rebuilt by the running build rather than restored from here.
+    ///
+    /// **It is the twin of `lastUpdateCheck` and the two are written together.**
+    /// Writing the stamp alone is issue #147: the window restored WHEN
+    /// coffee-bar last looked and nothing about what it found, so every relaunch
+    /// printed "coffee-bar has not looked for a newer version yet." directly
+    /// above "Last checked: 2026-08-19 12:35." Read on a maintainer's machine,
+    /// where `defaults read` carried the stamp and no verdict at all.
+    ///
+    /// Absent means the conclusion is NOT KNOWN, which is neither "never
+    /// checked" nor "up to date". Every install made before this key existed is
+    /// in that state at its first launch on this build, and the surface says so
+    /// in its own sentence rather than picking one of the other two.
+    ///
+    /// A `[String]` and not an `Int`, which puts it out of reach of the three
+    /// `Int` keys above and into the company of `demotableProcessNames` and
+    /// `agentTools`: those two are the neighbours a crossed read answers
+    /// cleanly rather than as `nil`. A collision either way is survivable here,
+    /// and deliberately so. A list of process names matches no tag, so it reads
+    /// as unknown and shows the not-recorded sentence rather than a wrong
+    /// conclusion, and nothing in this key can be mistaken for a tool name.
+    /// `theLastUpdateVerdictKeyStringNeverChangesAndCollidesWithNothing` holds
+    /// the string itself and pins it apart from every other key here.
+    public static let lastUpdateVerdict = "lastUpdateVerdict"
+
     /// Whether the user asked coffee-bar to open at login (issue #48).
     ///
     /// Absent by default, and the default is `false`: nothing is installed until

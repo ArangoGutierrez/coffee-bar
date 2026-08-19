@@ -142,6 +142,24 @@ public enum UpdateCheck {
     /// how a check that has been broken for a year goes unnoticed.
     static let neverCheckedLine = "coffee-bar has not looked for a newer version yet."
 
+    /// What the window says when a check ran and what it concluded did not come
+    /// back with the stamp.
+    ///
+    /// The THIRD state, and issue #147 is what its absence cost. A stamp used to
+    /// outlive its verdict, so a relaunch put `neverCheckedLine` directly above
+    /// a real "Last checked" time: the window said it had not looked, and said
+    /// when it last looked, in two sentences a user reads as one. Every install
+    /// made before the verdict was written down lands here once, and so does a
+    /// stored value this build cannot read.
+    ///
+    /// It reports rather than assumes, for the reason `neverCheckedLine` gives
+    /// above: "up to date" here would state a conclusion nobody established, and
+    /// it would keep stating it for a user whose checks have been failing since
+    /// the day they installed.
+    static let verdictNotRecordedLine =
+        "coffee-bar looked for a newer version, but what it concluded is not recorded. "
+        + "It will look again."
+
     static let upToDateLine = "coffee-bar is up to date."
 
     static let unreachableLine = "coffee-bar could not reach the published version file."
@@ -236,6 +254,148 @@ public enum UpdateCheck {
         case .unreadable:
             return unreadablePublishedLine
         }
+    }
+
+    // MARK: - What a check leaves behind for the next launch
+
+    /// What a completed check concluded, in the form it is written down in.
+    ///
+    /// **A discriminator, and the smallest payload that rebuilds the sentence.
+    /// Never the sentence.** Every line in the section above is prose, and prose
+    /// is rewritten between releases; a stored one is replayed by a build that
+    /// no longer agrees with it. That is the same class of defect as issue #147
+    /// itself, where a stamp restored beside a verdict that did not, so storing
+    /// the words would fix one half by shipping the other.
+    ///
+    /// `verdict(of:)` is applied on the way out, at the check and at the
+    /// restore alike, so what a user reads always comes from the running build.
+    ///
+    /// Four cases, and they are exactly what `ServingModel.checkForUpdates` can
+    /// conclude once a request has gone out. `cannotCompare(unstampedLine)` is
+    /// deliberately not among them: that verdict is reached BEFORE the fetch and
+    /// records no attempt at all, so there is no stamp for it to sit beside and
+    /// nothing about it to restore.
+    enum StoredVerdict: Equatable, Sendable {
+        case upToDate
+        /// A newer release is published. Carries the published version.
+        case updateAvailable(String)
+        /// A published answer arrived and was not believed.
+        case refused(ManifestRefusal)
+        /// No answer arrived at all.
+        case unreachable
+    }
+
+    /// The tags a stored verdict is written under.
+    ///
+    /// Spelled once each, for the reason `SettingsKey` gives about key strings:
+    /// a tag is written on one launch and read on the next, so a writer and a
+    /// reader that disagree about one restore nothing while both still compile.
+    private enum StoredTag {
+        static let upToDate = "upToDate"
+        static let updateAvailable = "updateAvailable"
+        static let unreachable = "unreachable"
+        static let status = "status"
+        static let tooLarge = "tooLarge"
+        static let unreadablePublished = "unreadablePublished"
+    }
+
+    /// The verdict a stored one reads as, in this build's words.
+    ///
+    /// The ONE place a stored form becomes a sentence, called by the check that
+    /// reached it and by the launch that restores it, so a relaunch cannot show
+    /// a second spelling of what the last check said.
+    static func verdict(of stored: StoredVerdict) -> UpdateVerdict {
+        switch stored {
+        case .upToDate:
+            return .upToDate
+        case .updateAvailable(let version):
+            return .updateAvailable(version)
+        case .refused(let refusal):
+            return .cannotCompare(sentence(for: refusal))
+        case .unreachable:
+            return .cannotCompare(unreachableLine)
+        }
+    }
+
+    /// How a verdict is written down: the tag, then its payload where it has
+    /// one.
+    ///
+    /// A LIST OF STRINGS, because the store already holds one of those and this
+    /// needed no fourth type for one setting. It is also what a maintainer sees
+    /// in a `defaults read` pasted into a bug report, which a packed single
+    /// string is not.
+    ///
+    /// The byte count on `tooLarge` is carried even though no sentence prints
+    /// it, so that reading a stored form back answers the value that was
+    /// written rather than one this file invented to fill the case.
+    static func fields(of stored: StoredVerdict) -> [String] {
+        switch stored {
+        case .upToDate:
+            return [StoredTag.upToDate]
+        case .updateAvailable(let version):
+            return [StoredTag.updateAvailable, version]
+        case .unreachable:
+            return [StoredTag.unreachable]
+        case .refused(.status(let code)):
+            return [StoredTag.status, String(code)]
+        case .refused(.tooLarge(let bytes)):
+            return [StoredTag.tooLarge, String(bytes)]
+        case .refused(.unreadable):
+            return [StoredTag.unreadablePublished]
+        }
+    }
+
+    /// What stored fields mean, or `nil` when this build cannot read them.
+    ///
+    /// **`nil` and never a guess.** These fields can be written by a NEWER build
+    /// that knows a case this one does not, by a hand edit, or by a key
+    /// collision with one of the other two lists in the store. Answering
+    /// `upToDate` for anything unrecognised would state a conclusion no check
+    /// reached, which is what `neverCheckedLine` exists to refuse; the caller
+    /// says `verdictNotRecordedLine` instead, which claims nothing.
+    ///
+    /// The arity is checked as well as the tag, so a payload that is missing,
+    /// doubled or left over from another case is unknown rather than read as a
+    /// neighbouring one.
+    ///
+    /// ASCII digits only, for the reason `releaseCore(of:)` gives above.
+    static func storedVerdict(from fields: [String]) -> StoredVerdict? {
+        guard let tag = fields.first else { return nil }
+        switch tag {
+        case StoredTag.upToDate where fields.count == 1:
+            return .upToDate
+        case StoredTag.updateAvailable where fields.count == 2:
+            let version = fields[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            return version.isEmpty ? nil : .updateAvailable(version)
+        case StoredTag.unreachable where fields.count == 1:
+            return .unreachable
+        case StoredTag.unreadablePublished where fields.count == 1:
+            return .refused(.unreadable)
+        case StoredTag.status where fields.count == 2:
+            guard let code = wholeNumber(fields[1]) else { return nil }
+            return .refused(.status(code))
+        case StoredTag.tooLarge where fields.count == 2:
+            guard let bytes = wholeNumber(fields[1]) else { return nil }
+            return .refused(.tooLarge(bytes))
+        default:
+            return nil
+        }
+    }
+
+    /// A whole number written in ASCII digits, or `nil`.
+    ///
+    /// `Character.isNumber` is true of `١` and of `½`, so a parser written on it
+    /// alone accepts strings whose value is not what the glyphs say. The same
+    /// care `releaseCore(of:)` takes, for the same reason, and a leading sign is
+    /// refused with everything else: neither an HTTP status nor a byte count is
+    /// ever negative, and one that reads as negative is a file this app did not
+    /// write.
+    private static func wholeNumber(_ text: String) -> Int? {
+        guard !text.isEmpty,
+              text.allSatisfy({ $0.isASCII && $0.isNumber }),
+              let value = Int(text)
+        else { return nil }
+        return value
     }
 
     // MARK: - What the published bytes mean
