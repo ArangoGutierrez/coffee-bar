@@ -509,6 +509,15 @@ private let publishedMarkdown = ["README.md", "CHANGELOG.md", "SECURITY.md",
 
 private var rootPromiseSurfaces: [String] { publishedSitePages() + publishedMarkdown }
 
+/// Where Markdown ends a sentence without writing a full stop.
+///
+/// Named rather than inlined because a second reader needs exactly the same
+/// list: `everyStatedElevationNameCountMatchesTheCodeGuardsList` below keeps the
+/// backticks `readerFacingProse` deletes and so cannot reuse that function, but
+/// two copies of these four patterns would drift the first time one was fixed.
+private let markdownSentenceBoundaries = ["\\n\\s*\\n", "\\n(?=#{1,6}\\s)",
+                                          "\\n(?=[-*+]\\s)", "\\n(?=[0-9]+\\.\\s)"]
+
 /// One surface reduced to the words a reader actually meets.
 ///
 /// The `<meta>` descriptions are pulled out FIRST and kept, which is the whole
@@ -535,8 +544,7 @@ private func readerFacingProse(_ name: String) throws -> String {
         // heading "## Why this differs from the handoff" and ran straight into
         // the paragraph below it. A heading, a bullet and a blank line all end a
         // sentence for a reader, and none of them carries a full stop.
-        for boundary in ["\\n\\s*\\n", "\\n(?=#{1,6}\\s)", "\\n(?=[-*+]\\s)",
-                         "\\n(?=[0-9]+\\.\\s)"] {
+        for boundary in markdownSentenceBoundaries {
             s = s.replacingOccurrences(of: boundary, with: " . ",
                                        options: .regularExpression)
         }
@@ -1396,4 +1404,290 @@ private func retiredClaimsAsserted(in prose: String) -> [String] {
         privilege. macOS running a helper the user approved does not make that \
         false, and dropping it answers a correction with a weaker document.
         """)
+}
+
+// MARK: - Guard: a stated name count is the code guard's real name count
+
+/// The check whose forbidden list `SECURITY.md` counts out loud.
+private let elevationCheckName = "theAppLayerNeverReachesForPrivilegeEscalation"
+
+private struct ElevationListUnparsable: Error, CustomStringConvertible {
+    let why: String
+    var description: String {
+        "cannot read \(elevationCheckName)'s forbidden list: \(why); this guard "
+            + "cannot run and will not pretend it passed"
+    }
+}
+
+/// The names `theAppLayerNeverReachesForPrivilegeEscalation` forbids, read off
+/// that check and never typed here.
+///
+/// **Scoped to that ONE function, and the scoping is the whole difficulty.**
+/// `AppLayerBoundary_test.swift` declares `forbidden` six times, for six
+/// different checks. A whole-file match returns 51 names, and a guard built on
+/// one would assert confident nonsense — every sentence below wrong, against a
+/// number that describes no list anybody wrote. That is worse than no guard,
+/// because it looks rigorous while measuring nothing.
+///
+/// The slice therefore ends at the NEXT `@Test`, not at the end of the file.
+/// Anchoring on the check's name alone is not enough: if this function ever
+/// stopped declaring `forbidden`, an unbounded search would run straight on into
+/// `noLinkedTargetCanReachTheNetworkByAddress`'s list — network APIs, nothing to
+/// do with privilege — and silently measure that instead. Bounded, the same case
+/// is an error.
+private func forbiddenElevationNames() throws -> [String] {
+    let file = policyRoot()
+        .appending(path: "Tests/CoffeeBarUITests/AppLayerBoundary_test.swift")
+    guard let source = try? String(contentsOf: file, encoding: .utf8) else {
+        throw ElevationListUnparsable(why: "cannot read \(file.path)")
+    }
+    guard let anchor = source.range(of: "func \(elevationCheckName)") else {
+        throw ElevationListUnparsable(
+            why: "\(file.lastPathComponent) no longer declares it")
+    }
+    let nextCheck = source.range(of: "\n@Test",
+                                 range: anchor.upperBound..<source.endIndex)?.lowerBound
+        ?? source.endIndex
+    let body = source[anchor.upperBound..<nextCheck]
+    guard let listStart = body.range(of: "let forbidden = ["),
+          let listEnd = body.range(of: "]", range: listStart.upperBound..<body.endIndex)
+    else {
+        throw ElevationListUnparsable(
+            why: "it declares no `forbidden` list before the next @Test")
+    }
+
+    // Line comments go before the string literals are read. One of them is
+    // `// "with administrator privileges"`, and a quoted phrase in a comment is
+    // a gloss on a name rather than a name on the list.
+    let list = String(body[listStart.upperBound..<listEnd.lowerBound])
+        .replacingOccurrences(of: "//[^\n]*", with: "", options: .regularExpression)
+    return try matchedGroups("\"([A-Za-z]+)\"", in: list)
+}
+
+/// Number words a count sentence may use.
+///
+/// Spelled out because English is what the document is written in and
+/// `Int("seven")` is nil. Digits are accepted as well: "and 7 more names" states
+/// the same thing, and a guard that read only words would let the digit form
+/// through unchecked.
+private let numberWords = ["one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+                           "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+                           "eleven": 11, "twelve": 12, "thirteen": 13,
+                           "fourteen": 14, "fifteen": 15, "sixteen": 16,
+                           "seventeen": 17, "eighteen": 18, "nineteen": 19,
+                           "twenty": 20]
+
+private func numberValue(_ word: String) -> Int? {
+    numberWords[word.lowercased()] ?? Int(word)
+}
+
+private func numberWord(_ value: Int) -> String {
+    numberWords.first { $0.value == value }?.key ?? String(value)
+}
+
+/// One sentence that states how many names the elevation check refuses.
+///
+/// The arithmetic is split the way the document splits it: some names spelled
+/// out, then "and N more names". BOTH halves are read from the prose. Deriving
+/// one and assuming the other is how these sentences drifted — the numeral was
+/// written once and never revisited when the list grew.
+private struct StatedNameCount {
+    /// The sentence as `sentences(of:)` yielded it.
+    let sentence: String
+    /// Forbidden names the sentence spells out, deduplicated.
+    let named: Set<String>
+    /// The word the document used for the remainder, kept verbatim so the
+    /// control below can rewrite exactly it.
+    let moreWord: String
+    /// That word as a number.
+    let more: Int
+
+    var stated: Int { named.count + more }
+}
+
+/// Which forbidden names a sentence spells out.
+///
+/// Read from the BACKTICK SPANS and nowhere else. The surrounding prose is
+/// English about names, denylists and privilege, and a plain `contains` over the
+/// whole sentence would count the check's own name against the list it
+/// describes: `theAppLayerNeverReachesForPrivilegeEscalation` is cited in both
+/// sentences, and a matcher reading `…PrivilegeEscalation` as an API would
+/// inflate every count by one and hide the very error this catches.
+///
+/// A span need not BE a name. `NSAppleScript "with administrator privileges"` is
+/// one span naming one API, and the quoted phrase after it is how the document
+/// tells that route from the others.
+///
+/// The boundaries are letters-only on both sides. `setuid` must not be found
+/// inside `seteuid`, and `AuthorizationCreate` must not be counted a second time
+/// by matching inside `AuthorizationCreateFromExternalForm`.
+private func namesSpelledOut(in sentence: String,
+                             from forbidden: [String]) throws -> Set<String> {
+    let spans = try matchedGroups("`([^`]*)`", in: sentence)
+    return Set(try forbidden.filter { name in
+        let pattern = "(?<![A-Za-z])"
+            + NSRegularExpression.escapedPattern(for: name)
+            + "(?![A-Za-z])"
+        guard (try? NSRegularExpression(pattern: pattern)) != nil else {
+            throw BadMechanismPattern(pattern: pattern)
+        }
+        return spans.contains { $0.range(of: pattern, options: .regularExpression) != nil }
+    })
+}
+
+/// Every sentence of `prose` that cites the elevation check and states a count,
+/// plus the ones that state a count this guard could not read.
+///
+/// The unreadable half is returned rather than dropped. A remainder written as
+/// "a further six" parses to nothing, and a parser that quietly skipped it would
+/// leave that sentence unguarded while reporting success — the failure mode this
+/// whole section exists to refuse.
+private func statedNameCounts(in prose: String,
+                              from forbidden: [String]) throws -> (claims: [StatedNameCount],
+                                                                   unreadable: [String]) {
+    var claims: [StatedNameCount] = []
+    var unreadable: [String] = []
+    for sentence in sentences(of: prose) where sentence.contains(elevationCheckName) {
+        let words = try matchedGroups("(\\S+)\\s+more\\s+names", in: sentence)
+        guard !words.isEmpty else { continue }
+        guard words.count == 1, let value = numberValue(words[0]) else {
+            unreadable.append(sentence)
+            continue
+        }
+        claims.append(StatedNameCount(sentence: sentence,
+                                      named: try namesSpelledOut(in: sentence, from: forbidden),
+                                      moreWord: words[0],
+                                      more: value))
+    }
+    return (claims, unreadable)
+}
+
+/// `SECURITY.md`'s stated name counts are the number of names the code guard
+/// actually refuses.
+///
+/// **Named bug this catches, and it is the one that happened.** The forbidden
+/// list grew to ten when #71 added `SMAppService`. Two sentences state its size
+/// indirectly — "`AuthorizationExecuteWithPrivileges` and `NSAppleScript …` …
+/// refuses them, and seven more names", and "still refuses `setuid`,
+/// `launchctl`, `AuthorizationRef` and six more names" — and both still totalled
+/// the nine that were there before. Nothing in the suite read either number, and
+/// the newer sentence inherited the stale arithmetic from the older one it was
+/// modelled on. A reader auditing the policy against the code would have found
+/// one name the document does not account for, and no way to tell which of the
+/// two sentences was wrong.
+///
+/// **Why the total is derived and never written down.** A literal `10` here
+/// would move the staleness rather than remove it: the next name added would
+/// leave the literal, the prose and the code all disagreeing, and this guard
+/// would defend the wrong one of the three.
+///
+/// **What this CANNOT do.**
+///
+/// 1. It checks arithmetic, never truth. A sentence naming two APIs the list
+///    does not contain and claiming eight more totals ten and passes. Whether
+///    the names are the right names is
+///    `theRefusedListStillNamesTheMechanismsTheCodeGuardRefuses`'s business and
+///    `noPolicyDocumentClaimsAMechanismThePrivilegedPathRefuses`'s.
+/// 2. It only reads sentences that CITE the check by name and phrase the
+///    remainder as "N more names". "and a further six" is invisible to it, which
+///    is why the floor below refuses to run on fewer than the two sentences that
+///    exist.
+/// 3. It reads `SECURITY.md` alone. The same arithmetic written into a comment
+///    inside `AppLayerBoundary_test.swift` — "the other nine names are relieved
+///    for nobody" — is a second unguarded count, stated here rather than hidden.
+@Test func everyStatedElevationNameCountMatchesTheCodeGuardsList() throws {
+    let forbidden = try forbiddenElevationNames()
+
+    // This is the one guard in the file that reads backticks rather than through
+    // them. `readerFacingProse` deletes every code span, and a code span is
+    // exactly where this document puts an API name — so the names half of the
+    // arithmetic would always be nought. Fences and comments still go: a sample
+    // in a fence is not a promise, and a maintainer note is not prose a reader
+    // meets.
+    var prose = try policyDocument("SECURITY.md")
+        .replacingOccurrences(of: "```[\\s\\S]*?```", with: " ", options: .regularExpression)
+        .replacingOccurrences(of: "<!--[\\s\\S]*?-->", with: " ", options: .regularExpression)
+    for boundary in markdownSentenceBoundaries {
+        prose = prose.replacingOccurrences(of: boundary, with: " . ",
+                                           options: .regularExpression)
+    }
+
+    let found = try statedNameCounts(in: prose, from: forbidden)
+
+    for sentence in found.unreadable {
+        Issue.record("""
+            SECURITY.md states a remainder this guard cannot read as a single \
+            number, so that sentence's arithmetic goes unchecked. Write it as one \
+            number word or one numeral: "\(sentence)"
+            """)
+    }
+
+    // ANTI-VACUITY, and it is the assertion the rest rests on. Every check below
+    // sits inside a loop over the sentences found, so nought sentences is a
+    // silent and permanent pass.
+    #expect(found.claims.count >= 2, """
+        SECURITY.md states \(found.claims.count) name count(s) for \
+        \(elevationCheckName), and two sections state one. This guard is the only \
+        thing holding either in step with the code. If a sentence was deliberately \
+        reworded, move this floor with it rather than leaving the remaining one \
+        unwatched.
+        """)
+
+    for claim in found.claims {
+        #expect(claim.stated == forbidden.count, """
+            SECURITY.md accounts for \(claim.stated) name(s) — it spells out \
+            \(claim.named.count), \(claim.named.sorted()), and says \
+            "\(claim.moreWord) more names" — but \(elevationCheckName) forbids \
+            \(forbidden.count): \(forbidden.sorted()). Write \
+            "\(numberWord(forbidden.count - claim.named.count)) more names".
+              • \(claim.sentence)
+            """)
+    }
+
+    // THE CONTROL, in both directions. Every assertion above reports AGREEMENT,
+    // and a matcher that has stopped matching reports agreement too. Both halves
+    // of the arithmetic are mutated here and required to be seen.
+    for claim in found.claims {
+        // (a) THE NUMERAL. Raise the stated remainder by one. Were the number not
+        //     really read off the page, a wrong one would still agree.
+        let renumberedProse = claim.sentence.replacingOccurrences(
+            of: "\(claim.moreWord) more names",
+            with: "\(numberWord(claim.more + 1)) more names")
+        #expect(renumberedProse != claim.sentence, """
+            the remainder in "\(claim.sentence)" could not be rewritten, so \
+            control (a) proves nothing about whether the numeral is read.
+            """)
+        let renumbered = try statedNameCounts(in: renumberedProse, from: forbidden).claims
+        #expect(renumbered.map(\.stated) == [claim.stated + 1], """
+            the stated remainder was raised by one and this guard read \
+            \(renumbered.map(\.stated)) rather than [\(claim.stated + 1)]. It is \
+            not reading the numeral off the page, so its agreement above says \
+            nothing: "\(claim.sentence)"
+            """)
+
+        // (b) THE NAMES. This is the direction the defect actually came from —
+        //     the list grew by `SMAppService` and the prose did not move — so a
+        //     control that exercised only the numeral would be half a control.
+        //     The name is written INSIDE the sentence, beside the citation, so
+        //     the injection cannot escape into a sentence of its own; closing and
+        //     reopening the citation's own backticks keeps them balanced.
+        guard let extra = forbidden.sorted().first(where: { !claim.named.contains($0) }) else {
+            Issue.record("""
+                "\(claim.sentence)" already spells out every name \
+                \(elevationCheckName) forbids, so control (b) cannot run on it.
+                """)
+            continue
+        }
+        let widenedProse = claim.sentence.replacingOccurrences(
+            of: elevationCheckName, with: "\(elevationCheckName)` and `\(extra)")
+        let widened = try statedNameCounts(in: widenedProse, from: forbidden).claims
+        #expect(widened.map(\.named) == [claim.named.union([extra])], """
+            `\(extra)` was written into the sentence and this guard still reads \
+            \(widened.map { $0.named.sorted() }) rather than \
+            \(claim.named.union([extra]).sorted()). It is not reading the names \
+            off the page, so a name added to \(elevationCheckName)'s list would \
+            leave the arithmetic above green and stale — which is exactly how \
+            these two sentences drifted: "\(claim.sentence)"
+            """)
+    }
 }
