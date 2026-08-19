@@ -17,8 +17,10 @@
      battery percentage, duration or saving may appear until M6's measurement
      harness has produced one a user can reproduce.
   6. The binary is arm64 ONLY. Never write "Intel" or "universal".
-  7. Homebrew and the DMG both ship 0.2.2. The DMG is the signed and notarised
-     one; a Homebrew build is compiled locally and only ad-hoc signed.
+  7. The DMG ships 0.3.0. The Homebrew tap still pins v0.2.2, so the two
+     routes are one release apart until the formula is bumped. The DMG is the
+     signed and notarised one; a Homebrew build is compiled locally and only
+     ad-hoc signed.
 
   BRAND — assets/art/README.md is the source of truth.
   - TWO colours, two jobs. --state (#A2571E / #B8682A dark) is the liquid and
@@ -41,10 +43,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Changelog — coffee-bar</title>
-<meta name="description" content="Every released version of coffee-bar, newest first. v0.2.2 closes five root causes behind a test suite that could fail on a loaded machine while the code it covers was correct.">
+<meta name="description" content="Every released version of coffee-bar, newest first. v0.3.0 turns lid-closed mode into a button in Preferences, and adds a first-run quick start, opening at login, an update check and a state route an agent can read.">
 <link rel="canonical" href="https://arangogutierrez.github.io/coffee-bar/changelog.html">
 <meta property="og:title" content="Changelog — coffee-bar">
-<meta property="og:description" content="Every released version of coffee-bar, newest first. v0.2.2 closes five root causes behind a test suite that could fail on a loaded machine while the code it covers was correct.">
+<meta property="og:description" content="Every released version of coffee-bar, newest first. v0.3.0 turns lid-closed mode into a button in Preferences, and adds a first-run quick start, opening at login, an update check and a state route an agent can read.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://arangogutierrez.github.io/coffee-bar/changelog.html">
 <meta property="og:image" content="https://arangogutierrez.github.io/coffee-bar/social-preview-1280x640.png">
@@ -68,7 +70,7 @@
     <li><a href="docs.html">Docs</a></li>
     <li><a href="changelog.html" aria-current="page">Changelog</a></li>
   </ul>
-  <p class="sidebar-version"><a href="changelog.html">v0.2.2</a></p>
+  <p class="sidebar-version"><a href="changelog.html">v0.3.0</a></p>
 </nav>
 <div class="wrap">
 <!--
@@ -90,8 +92,71 @@
 
 <p>The format follows <a href="https://keepachangelog.com/en/1.1.0/">Keep a Changelog</a>. The project follows <a href="https://semver.org/spec/v2.0.0.html">Semantic Versioning</a>.</p>
 
-<section id="v0-2-2">
+<section id="v0-3-0">
 <p class="eyebrow">Current release</p>
+<h2>0.3.0 – 2026-08-19</h2>
+
+<p>Lid-closed mode is a button. Keeping a Mac awake with the lid shut used to mean finding a command in the docs, copying it into a terminal and running it under <code>sudo</code>; the app could not do it, and said so. It is now one click in Preferences, and the click is reversible from the same window.</p>
+
+<p>The rest of the release is about the first ten minutes and the days after them: coffee-bar now asks what it needs to know the first time it runs, can open at login, says when a newer version is published, keeps the machine reachable rather than merely powered, and answers an agent that asks what it is doing.</p>
+
+<h3 class="eyebrow">Added</h3>
+
+<ul class="does">
+  <li><strong>Arm lid-closed mode from a button.</strong> On a signed build, Preferences carries an <strong>Arm lid-closed mode</strong> button under Power. The app asks macOS to install a small <code>SMAppService</code> helper and macOS is what runs it as root: the app process never becomes root itself, takes no credentials and runs no interpreter. The channel between the two is XPC, and its peer is pinned by Team ID and by bundle identifier, evaluated by Security.framework, so no other process on the machine can arm the hold. This is opt-in and it is the only part of coffee-bar that involves root at all. (#71)</li>
+  <li><strong>Remove the helper again, from the same window.</strong> The app reverts the hold over XPC, reads <code>SleepDisabled</code> back to confirm it returned to 0, and only then unregisters. That order is the feature: unregistering first, or letting the read-back fail quietly, would leave the system flag set with the one thing that could clear it already gone. This is opt-in, and the app cannot reach root by any other route. (#71)</li>
+  <li><strong>A quick start on first launch.</strong> coffee-bar has no Dock icon and opens no window, so a first-run user could miss every question it wanted to ask. The window now opens by itself the first time, asks three of them, and the panel gained a <strong>Check now</strong> button for the answer afterwards. (#52)</li>
+  <li><strong>Open at login, if you ask for it.</strong> The menu-bar app did not survive a reboot, and the only surface that would have reported it was the panel you cannot see while the app is not running. Opening at login is an explicit opt-in: leave it alone and nothing is written, and turning it off removes what turning it on wrote. (#48)</li>
+  <li><strong>coffee-bar says when a newer version is published.</strong> It reads one static file over HTTPS from the project's own site and compares versions. It sends no identifier, sets no header, carries no query string and downloads nothing, and it is the single exception to this app's promise to make no network request. (#29)</li>
+  <li><strong>An agent can read coffee-bar's own state.</strong> <code>GET /status</code> on the ingest socket returns JSON: the version the panel shows, the control position you chose, whether a hold is in force, how many sessions are working, how many are waiting on you, one word for hook health, and whether this process is answering. It is read-only, it publishes counts and never sessions, and the hook channel that agents already post to still answers with an empty body, so nothing coffee-bar knows reaches an agent that did not go and read it. (#9)</li>
+  <li><strong>The lid-closed hold is a setting you choose.</strong> The default is now the length of an agent run you meant to leave going, eight hours, rather than half an hour, and the ceiling is twenty-four hours. On battery the hold still ends at the daemon's own floor before any of that, which is the protection that matters when you arm it and walk away. (#74)</li>
+  <li><strong>The Mac stays reachable, not just awake.</strong> Holding the CPU running does not keep network clients served, so a machine reached over SSH could be awake and unreachable, which is awake for nobody. coffee-bar now raises a network assertion beside the system one, whichever way the display setting is set. (#60)</li>
+  <li><strong>You choose which agent tools coffee-bar advises about.</strong> Advice used to be driven by which files happened to exist on disk. It is now a selection you make, and an existing user who never opens Preferences reads exactly what they read before. (#51)</li>
+</ul>
+
+<h3 class="eyebrow">Fixed</h3>
+
+<ul class="does">
+  <li><strong>The panel states the battery floor the policy actually enforces</strong>, and says which holds that floor governs and which it does not. (#106, #123)</li>
+  <li><strong>An advisory carries a symbol and not colour alone</strong>, so it survives a colour-blind reader and a screenshot in greyscale. (#112)</li>
+  <li><strong>Clicking Preferences opens Preferences.</strong> Re-opening it activates the existing window and closes the panel instead of doing nothing. (#126)</li>
+  <li><strong>The ingest socket refuses a non-<code>POST</code> request with 405</strong> and an <code>Allow</code> header, rather than reading a body it was never going to accept. (#102)</li>
+</ul>
+
+<h3 class="eyebrow">Not in this release</h3>
+
+<p>Token accounting is v0.4 and does not exist here. Nothing in this release measures battery saved: that number needs a harness a user can reproduce, and that harness is not built.</p>
+
+<div class="table-wrap">
+<table>
+  <caption>The 0.3.0 disk image</caption>
+  <thead>
+    <tr><th scope="col">Fact</th><th scope="col">Value</th></tr>
+  </thead>
+  <tbody>
+    <tr><th scope="row">File</th><td><code>coffee-bar-0.3.0.dmg</code></td></tr>
+    <tr><th scope="row">Size</th><td>1054199 bytes</td></tr>
+    <tr><th scope="row">SHA-256</th><td><code>61009669234d891418bfd367289a95cb7fed85ab407711ba1038bbdde3fc441d</code></td></tr>
+    <tr><th scope="row">Architecture</th><td>Apple silicon (<code>arm64</code>) only</td></tr>
+    <tr><th scope="row">Minimum macOS</th><td>14.0</td></tr>
+    <tr><th scope="row">Signature</th><td>Developer ID Application, team <code>85FN4Z37V8</code></td></tr>
+    <tr><th scope="row">Notarisation</th><td><code>spctl</code> accepts it, source <code>Notarized Developer ID</code></td></tr>
+    <tr><th scope="row">Staple</th><td><code>xcrun stapler validate</code> passes on the app and on the image</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>This is not a universal binary. <code>lipo -archs</code> on the shipped binary reports <code>arm64</code> alone, so an Intel Mac cannot run it.</p>
+
+<p>Verify the download before you open it:</p>
+
+<pre>shasum -a 256 coffee-bar-0.3.0.dmg
+spctl -a -t open --context context:primary-signature -vv coffee-bar-0.3.0.dmg</pre>
+
+</section>
+
+<section id="v0-2-2">
+<p class="eyebrow">Previous release</p>
 <h2>0.2.2 — 2026-08-11</h2>
 
 <p>A release about trusting the suite that certifies this app. Nothing here changes what coffee-bar does for you. Seven tests could fail on a loaded machine while the code they cover was correct, and a suite that cries wolf is one you stop reading — which is how a real defect ships behind 900 green checks.</p>
@@ -373,7 +438,7 @@ spctl -a -t open --context context:primary-signature -vv coffee-bar-0.1.1.dmg</p
 
 </section>
 
-<p><a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.2.2">v0.2.2 on GitHub</a> · <a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.2.1">v0.2.1 on GitHub</a> · <a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.2.0">v0.2.0 on GitHub</a> · <a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.1.1">v0.1.1 on GitHub</a> · <a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.1.0">v0.1.0 on GitHub</a></p>
+<p><a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.3.0">v0.3.0 on GitHub</a> · <a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.2.2">v0.2.2 on GitHub</a> · <a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.2.1">v0.2.1 on GitHub</a> · <a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.2.0">v0.2.0 on GitHub</a> · <a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.1.1">v0.1.1 on GitHub</a> · <a href="https://github.com/ArangoGutierrez/coffee-bar/releases/tag/v0.1.0">v0.1.0 on GitHub</a></p>
 
 <footer>
 <p>Apache-2.0 · <a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a> · <a href="https://github.com/ArangoGutierrez/coffee-bar/issues/new">Report a bug</a><br>
