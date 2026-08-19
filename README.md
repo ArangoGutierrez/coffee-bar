@@ -19,9 +19,10 @@ that is the difference from `caffeinate -d`.
   docs/QUICKSTART.md. Before adding a second status claim anywhere, change this
   one instead.
 -->
-**Status: v0.1.1 is released as a signed, notarised DMG. Homebrew still
-builds from source and installs 0.1.0. The two tags carry the same code, so
-v0.1.1 is that source, newly signed.**
+**Status: v0.3.0 is released as a signed, notarised DMG, and the Homebrew tap
+now builds v0.3.0 from source. That source build is ad-hoc signed, so it cannot
+register the privileged helper and arms lid-closed mode with the command route
+below instead.**
 See [Building](docs/BUILDING.md).
 
 ## Quick start

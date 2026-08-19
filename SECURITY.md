@@ -39,10 +39,10 @@ If the flaw is already exploited in the wild, say so — that shortens the clock
 | Version | Supported |
 |---|---|
 | `main` | Yes |
-| v0.1.x | Yes |
+| v0.3.x | Yes |
 
-v0.1.0 is tagged, and the Homebrew tap installs from that tag. `main` and the
-v0.1.x line both get fixes.
+v0.3.0 is tagged, and the Homebrew tap installs from that tag. `main` and the
+v0.3.x line both get fixes. Earlier lines do not.
 
 `scripts/build-app.sh` derives the version from `git describe --tags`. A build
 from a tagged tree reports the tag plus the commits since it, such as

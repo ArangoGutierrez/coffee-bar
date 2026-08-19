@@ -19,9 +19,10 @@ different shape from Claude Code's and this page documents neither.
   places that assert whether a release exists. Keep it that way: the tag flips
   these two and nothing else.
 -->
-**v0.1.1 is released** as a signed, notarised DMG. Homebrew still builds from
-source and installs 0.1.0. The two tags carry the same code, so v0.1.1 is that
-source, newly signed. To build that source yourself, see
+**v0.3.0 is released** as a signed, notarised DMG, and Homebrew builds v0.3.0
+from source. That source build is ad-hoc signed, so it cannot register the
+privileged helper: lid-closed mode there is armed from the command line rather
+than from the button. To build that source yourself, see
 [Building](BUILDING.md). It takes about a minute.
 
 The install through Homebrew is:
