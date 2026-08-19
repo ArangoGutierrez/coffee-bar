@@ -17,10 +17,11 @@
      battery percentage, duration or saving may appear until M6's measurement
      harness has produced one a user can reproduce.
   6. The binary is arm64 ONLY. Never write "Intel" or "universal".
-  7. The DMG ships 0.3.0. The Homebrew tap still pins v0.2.2, so the two
-     routes are one release apart until the formula is bumped. The DMG is the
-     signed and notarised one; a Homebrew build is compiled locally and only
-     ad-hoc signed.
+  7. The DMG and the Homebrew tap both ship 0.3.1. The DMG is the signed and
+     notarised one; a Homebrew build is compiled locally and only ad-hoc
+     signed, and an ad-hoc bundle cannot register the privileged helper. When
+     the two routes drift apart again, say which is which rather than implying
+     they match.
 
   BRAND — assets/art/README.md is the source of truth.
   - TWO colours, two jobs. --state (#A2571E / #B8682A dark) is the liquid and
@@ -70,7 +71,7 @@
     <li><a href="docs.html">Docs</a></li>
     <li><a href="changelog.html" aria-current="page">Changelog</a></li>
   </ul>
-  <p class="sidebar-version"><a href="changelog.html">v0.3.0</a></p>
+  <p class="sidebar-version"><a href="changelog.html">v0.3.1</a></p>
 </nav>
 <div class="wrap">
 <!--
@@ -94,6 +95,51 @@
 
 <section id="v0-3-0">
 <p class="eyebrow">Current release</p>
+<h2>0.3.1 – 2026-08-19</h2>
+
+<p>A fix release for three things v0.3.0 got wrong on the surface a new user meets first. Nothing here changes what coffee-bar decides. All three are the app either refusing an action it had just offered, or failing to explain something it had just done.</p>
+
+<h3 class="eyebrow">Fixed</h3>
+
+<ul class="does">
+  <li><strong>The button that offered to copy the command could not be clicked.</strong> On a build where the app cannot register a privileged helper, and the terminal is the only route left, the control is titled <strong>Copy the command instead</strong>. Its disabled clause covered exactly that case, so it named an action and refused it. On a Homebrew install that button is the only route to the command, so the user who most needed it got a dead end. It copies now. (#142)</li>
+  <li><strong>Arming lid-closed mode blanked the screen with no explanation.</strong> Arming runs <code>pmset displaysleepnow</code>, which is required rather than incidental: a machine held awake with its lid shut must not keep the panel lit. Nothing said so, and the most visible consequence of the click read as a crash. The armed line now says the display was put to sleep and that the lid can be closed. (#143)</li>
+  <li><strong>The panel said it had never checked for updates, and then said when it last checked.</strong> The timestamp was written to settings and the verdict was not, so every relaunch restored a real stamp beside no verdict. The verdict is now persisted as a discriminator and the sentence rebuilt from current code, so an upgrade cannot resurrect wording from an older build. An install upgrading from 0.3.0 carries a stamp and no stored verdict, and sees one line saying exactly that until its next check falls due. (#147)</li>
+</ul>
+
+<h3 class="eyebrow">Also in this release</h3>
+
+<p>The published 0.3.0 entry claimed four things that were not true of the build it described, and they are corrected in place rather than left standing. The repository's front page still announced v0.1.1 three releases on, and now states what v0.3.0 shipped, including the single outbound request the app makes. <code>SECURITY.md</code> records that helper removal and the unsigned-build fallback were both exercised on 2026-08-19, with the limits of that measurement stated beside it.</p>
+
+<p>Two guards were added for defects that had shipped through a green suite: one refuses any page under <code>site/</code>, and the README, that claims the app makes no network request, and one holds the update verdict against the stamp it was reached with.</p>
+
+<div class="table-wrap">
+<table>
+  <caption>The 0.3.1 disk image</caption>
+  <thead>
+    <tr><th scope="col">Fact</th><th scope="col">Value</th></tr>
+  </thead>
+  <tbody>
+    <tr><th scope="row">File</th><td><code>coffee-bar-0.3.1.dmg</code></td></tr>
+    <tr><th scope="row">Size</th><td>1059046 bytes</td></tr>
+    <tr><th scope="row">SHA-256</th><td><code>ca72a571f5595da27d377bbb69ed0fe3b20869bcc9823caeb490fbc2afc2badd</code></td></tr>
+    <tr><th scope="row">Architecture</th><td>Apple silicon (<code>arm64</code>) only</td></tr>
+    <tr><th scope="row">Minimum macOS</th><td>14.0</td></tr>
+    <tr><th scope="row">Signature</th><td>Developer ID Application, team <code>85FN4Z37V8</code></td></tr>
+    <tr><th scope="row">Notarisation</th><td><code>spctl</code> accepts it, source <code>Notarized Developer ID</code></td></tr>
+    <tr><th scope="row">Staple</th><td><code>xcrun stapler validate</code> passes on the app and on the image</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>Verify the download before you open it:</p>
+
+<pre>shasum -a 256 coffee-bar-0.3.1.dmg
+spctl -a -t open --context context:primary-signature -vv coffee-bar-0.3.1.dmg</pre>
+
+</section>
+
+<section>
 <h2>0.3.0 – 2026-08-19</h2>
 
 <p>Lid-closed mode is a button. Keeping a Mac awake with the lid shut used to mean finding a command in the docs, copying it into a terminal and running it under <code>sudo</code>; the app could not do it, and said so. Preferences does it now. The first run takes two clicks with a trip to System Settings in between, because macOS installs the helper switched off and leaves the switch for you to find; after that it is one click, and reverting is one click in the same window.</p>

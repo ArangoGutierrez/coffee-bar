@@ -17,10 +17,11 @@
      battery percentage, duration or saving may appear until M6's measurement
      harness has produced one a user can reproduce.
   6. The binary is arm64 ONLY. Never write "Intel" or "universal".
-  7. The DMG ships 0.3.0. The Homebrew tap still pins v0.2.2, so the two
-     routes are one release apart until the formula is bumped. The DMG is the
-     signed and notarised one; a Homebrew build is compiled locally and only
-     ad-hoc signed.
+  7. The DMG and the Homebrew tap both ship 0.3.1. The DMG is the signed and
+     notarised one; a Homebrew build is compiled locally and only ad-hoc
+     signed, and an ad-hoc bundle cannot register the privileged helper. When
+     the two routes drift apart again, say which is which rather than implying
+     they match.
 
   BRAND — assets/art/README.md is the source of truth.
   - TWO colours, two jobs. --state (#A2571E / #B8682A dark) is the liquid and
@@ -70,7 +71,7 @@
     <li><a href="docs.html">Docs</a></li>
     <li><a href="changelog.html">Changelog</a></li>
   </ul>
-  <p class="sidebar-version"><a href="changelog.html">v0.3.0</a></p>
+  <p class="sidebar-version"><a href="changelog.html">v0.3.1</a></p>
 </nav>
 <div class="wrap">
 <!-- page content starts here -->
@@ -94,17 +95,17 @@ image unless you have a reason to build from source.</p>
 <p>This is the route to prefer. The disk image is signed with a Developer ID,
 notarised by Apple, and stapled.</p>
 
-<a class="btn-download" href="https://github.com/ArangoGutierrez/coffee-bar/releases/download/v0.3.0/coffee-bar-0.3.0.dmg">Download for macOS</a>
-<p class="dl-meta">v0.3.0 · Apple silicon · 1054&nbsp;KB · macOS 14 or later</p>
+<a class="btn-download" href="https://github.com/ArangoGutierrez/coffee-bar/releases/download/v0.3.1/coffee-bar-0.3.1.dmg">Download for macOS</a>
+<p class="dl-meta">v0.3.1 · Apple silicon · 1059&nbsp;KB · macOS 14 or later</p>
 
 <p>Verify the download before you open it. coffee-bar asks you to trust an app
 that overrides your Mac's own sleep policy, so it gives you the means to test
 that trust first.</p>
 
-<pre>shasum -a 256 coffee-bar-0.3.0.dmg
-# 61009669234d891418bfd367289a95cb7fed85ab407711ba1038bbdde3fc441d
+<pre>shasum -a 256 coffee-bar-0.3.1.dmg
+# ca72a571f5595da27d377bbb69ed0fe3b20869bcc9823caeb490fbc2afc2badd
 
-spctl --assess --type open --context context:primary-signature -vv coffee-bar-0.3.0.dmg
+spctl --assess --type open --context context:primary-signature -vv coffee-bar-0.3.1.dmg
 # accepted
 # source=Notarized Developer ID</pre>
 
@@ -121,10 +122,8 @@ Apple.</p>
 <pre>brew tap ArangoGutierrez/coffee-bar
 brew install coffee-bar</pre>
 
-<p><strong>The two routes are one release apart right now.</strong> The disk
-image above is 0.3.0; the tap formula still pins the <code>v0.2.2</code> tag, so
-Homebrew installs that. Either way you get the same two things: the app bundle,
-assembled by the repository's own build script, and the
+<p><strong>Both routes ship 0.3.1.</strong> Either way you get the same two
+things: the app bundle, assembled by the repository's own build script, and the
 <code>coffee-bar-probe</code> binary.</p>
 
 <p><strong>What differs is the signature, not the features.</strong> Homebrew
