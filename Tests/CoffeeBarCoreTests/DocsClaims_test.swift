@@ -1701,3 +1701,140 @@ private func everySwiftFileInSourcesAndTests() -> [URL] {
     }
     return found.sorted { $0.path < $1.path }
 }
+
+// MARK: - Claim 8: the site may not claim the app makes no network request
+
+/// The absolute no-egress claims the site may not make about the shipped app.
+///
+/// **Why this exists, and why it is a list of phrases.** v0.3.0 shipped an
+/// update check: `UpdateChecker.manifestURL` is a real `GET` of a real host,
+/// fired from `main.swift` at launch and from the Check now button. Two site
+/// pages went on saying the opposite anyway, and the whole suite stayed green
+/// through both of them, because every prose guard in this file reads NUMBERS,
+/// CONTROLS and COUNTS. Nothing read the egress sentences at all. The claim was
+/// corrected once by hand, a second false one survived that pass, and a fix
+/// nothing enforces is a fix with a half-life.
+///
+/// The subject cannot be derived, so it is enumerated. There is no property of
+/// the codebase that says "this sentence promises no egress": the app DOES make
+/// one request, so the guard cannot compare a claim against a measurement the
+/// way `everyDurationStatedIsARealProductConstant` does. What it can do is hold
+/// a list of the exact phrasings that are false while that request exists, and
+/// refuse to let one back onto a page.
+///
+/// **The discrimination this has to make, which is the hard part.**
+/// `site/install.html` says "It needs no network connection" about `spctl`
+/// reading a stapled ticket, and that is TRUE: the verb is what separates them.
+/// A sentence about what the app NEEDS is a statement of requirement; a
+/// sentence about what it SENDS, POSTS or REQUESTS is a claim about behaviour,
+/// and only the second kind is banned. "no telemetry", "no analytics", "no
+/// account, no sign-in, no server" and "sends no identifier" are all still true
+/// of the shipped app and all stay legal.
+/// `theEgressBanFiresOnAbsoluteClaimsAndSparesTheTrueOnes` pins every one of
+/// those readings with the real sentences, so narrowing a pattern until it
+/// catches nothing cannot happen quietly.
+///
+/// **What this CANNOT do, stated so nobody over-trusts it.** It catches
+/// phrasings on this list and no others. A new sentence meaning the same thing
+/// in new words ("it talks to nobody") passes, and the guard would have to
+/// learn it. That is a real hole and it is the honest one: the alternative,
+/// banning the concept, would have to ban "no telemetry" with it.
+private let absoluteEgressClaimPatterns: [String] = [
+    "\\bno\\s+network\\s+egress\\b",
+    "\\b(?:make|makes|making|made)\\s+no\\s+network\\s+(?:request|connection)s?\\b",
+    "\\b(?:send|sends|sending|sent)\\s+nothing\\b",
+    "\\b(?:post|posts|posting|posted)\\s+nothing\\b",
+    "\\bno\\s+update\\s+ping\\b",
+    "\\bnothing\\s+(?:ever\\s+)?leaves\\s+(?:your|the|this)\\s+(?:mac|machine|computer)\\b",
+]
+
+/// No page under `site/` claims, about the app as it ships, that it makes no
+/// network request.
+///
+/// Scoped to CURRENT claims, for the reason `currentClaimProse` documents: a
+/// `<section>` under a version `<h2>` RECORDS what a release shipped. Before
+/// 0.3.0 there was genuinely no outbound request, so "the single exception to
+/// this app's promise to make no network request" was true of 0.2.2 when it was
+/// written. Reading history as a live claim would leave only one way to green,
+/// which is to falsify the changelog.
+@Test(arguments: discoveredSitePages())
+func noSitePageClaimsTheAppMakesNoNetworkRequest(_ page: String) throws {
+    let prose = try currentClaimProse(page)
+
+    for pattern in absoluteEgressClaimPatterns {
+        for m in try matches(pattern, in: prose) {
+            #expect(Bool(false), """
+                \(page) carries the absolute claim "\(m[0])", which is false: \
+                UpdateChecker.manifestURL is a GET of \
+                https://arangogutierrez.github.io/coffee-bar/latest.json, fired \
+                at launch and by Check now. Say what SECURITY.md says instead \
+                ("it makes exactly one outbound request", "it downloads no \
+                update"), or scope the sentence to the subject it is really \
+                about. Context: ...\(egressClaimContext(m[0], in: prose))...
+                """)
+        }
+    }
+}
+
+/// The words either side of a match, so a failure points at the sentence rather
+/// than sending the reader to grep for a phrase that may occur twice.
+private func egressClaimContext(_ phrase: String, in prose: String) -> String {
+    let flat = prose.replacingOccurrences(of: "\\s+", with: " ",
+                                          options: .regularExpression)
+    guard let found = flat.range(of: phrase, options: .caseInsensitive) else { return phrase }
+    let start = flat.index(found.lowerBound, offsetBy: -60, limitedBy: flat.startIndex) ?? flat.startIndex
+    let end = flat.index(found.upperBound, offsetBy: 60, limitedBy: flat.endIndex) ?? flat.endIndex
+    return String(flat[start..<end])
+}
+
+/// The ban catches the sentences that actually shipped, and spares the true
+/// ones standing beside them.
+///
+/// Every string below is REAL. The banned ones are the exact sentences this
+/// branch removed from `site/privacy.html`, `site/index.html` and the changelog
+/// entry, plus the phrasings the brief for this work named. The allowed ones
+/// are live text on the corrected tree. A pattern narrowed until it matches
+/// nothing, or widened until it swallows "no telemetry", fails HERE, which is
+/// the failure the sweep above cannot produce on a clean tree.
+@Test func theEgressBanFiresOnAbsoluteClaimsAndSparesTheTrueOnes() throws {
+    // Each of these must be caught by at least one pattern.
+    let banned = [
+        "GitHub's privacy policy, and it happens before coffee-bar ever runs. The app itself sends nothing.",
+        "and it is the single exception to this app's promise to make no network request. (#29)",
+        "coffee-bar makes no network requests at all.",
+        "There is no network egress from this application.",
+        "It posts nothing anywhere.",
+        "There is no update ping.",
+        "Nothing ever leaves your Mac.",
+    ]
+    for sentence in banned {
+        let hit = try absoluteEgressClaimPatterns.contains { try !matches($0, in: sentence).isEmpty }
+        #expect(hit, """
+            no pattern in absoluteEgressClaimPatterns catches "\(sentence)". \
+            That sentence is a false no-egress claim and the ban is now blind to it
+            """)
+    }
+
+    // Each of these is TRUE of the shipped app and must stay legal. A guard
+    // that fired on one of them would teach the author to delete a true claim.
+    let allowed = [
+        "The notarisation ticket is stapled to the disk image, so the second command answers from the ticket in the file. It needs no network connection.",
+        "There is no telemetry, no analytics and no crash reporting.",
+        "What coffee-bar reads on your Mac, what it never reads, and what leaves the machine. No account, no sign-in, no server, no telemetry.",
+        "It sends no identifier, sets no header, carries no query string.",
+        "One outbound request, and it is a version check.",
+        "Any further outbound request will be opt-in, off by default, and named here first.",
+        "The check tells you and installs nothing: no update is downloaded, and coffee-bar never replaces itself.",
+        "the hook channel that agents already post to still answers with an empty body",
+        "which lives in the filesystem and has no address, no port, and no route off this machine.",
+    ]
+    for sentence in allowed {
+        for pattern in absoluteEgressClaimPatterns {
+            let found = try matches(pattern, in: sentence)
+            #expect(found.isEmpty, """
+                the pattern \(pattern) fires on "\(sentence)", which is a TRUE \
+                statement about the shipped app. It matched "\(found.first?[0] ?? "")"
+                """)
+        }
+    }
+}
