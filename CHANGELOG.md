@@ -68,8 +68,7 @@ rather than merely powered, and answers an agent that asks what it is doing.
 - **coffee-bar says when a newer version is published.** It reads one static
   file over HTTPS from the project's own site and compares versions. It sends
   no identifier, sets no header, carries no query string and downloads nothing,
-  and it is the single exception to this app's promise to make no network
-  request. (#29)
+  and it is the one outbound request this app makes. (#29)
 - **An agent can read coffee-bar's own state.** `GET /status` on the ingest
   socket returns JSON: the version the panel shows, the control position you
   chose, whether a hold is in force, how many sessions are working, how many
