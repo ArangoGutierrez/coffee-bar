@@ -478,3 +478,56 @@ private final class CountingRegistration: HelperRegistering, @unchecked Sendable
             != HelperAvailability.unavailable.buttonTitle)
     #expect(!HelperAvailability.registrable.buttonTitle.isEmpty)
 }
+
+@Test func theArmedSentenceSaysTheDisplayWasPutToSleepAndTheLidMayClose() {
+    // Issue #143, reported by the maintainer on first live use of the shipped
+    // button: "we should document that once the user clicks, the screen goes
+    // black, meaning the laptop is ready to close the lid, so the user doesn't
+    // think is a bug."
+    //
+    // The blanking is REQUIRED behaviour and not a side effect. `ArmService` is
+    // constructed with `display: PmsetDisplaySleeper(runner:)`, whose
+    // `forceSleep()` runs `pmset displaysleepnow`, and
+    // `docs/coffee-bar-HANDOFF.md` records it as "Force display off ... Required
+    // alongside disablesleep". The screen going dark is the single most visible
+    // consequence of the click and the sentence after it said nothing about it.
+    //
+    // "was put to sleep" states what coffee-bar DID rather than what the display
+    // now IS, deliberately. `LidClosedSession.arm` treats a `nil` from
+    // `DisplayStateProbe` as not-awake — the measured Apple Silicon answer — so
+    // an `.armed` reply does not prove the panel is dark, only that
+    // `pmset displaysleepnow` returned nought. Promising the observation would
+    // be the claim this product keeps refusing to make.
+    let line = HelperArmOutcome.armed(seconds: 28_800).statusLine
+
+    // WORD FOR WORD, for the reason `withoutARegisteredHelperTheStaleAdvisoryIs\
+    // WordForWordWhatItWas` gives: `contains` assertions pass over a sentence
+    // that dropped everything around the needle, and this string is the only
+    // thing the window says after the screen goes black.
+    #expect(line == """
+        Lid-closed mode is armed for 8 hours, and the display was put to sleep \
+        so you can close the lid. coffee-bar's helper is supervising it and will \
+        put the setting back.
+        """, """
+        the sentence a user reads while their screen is dark has changed:
+          \(line)
+        """)
+
+    // The two halves the issue asked for, named separately so a failure says
+    // WHICH one went missing. A rewrite that drops either is the defect again.
+    #expect(line.contains("the display was put to sleep"), """
+        the armed sentence never mentions the display, so a user watching their \
+        screen go black is left to read it as a crash: \(line)
+        """)
+    #expect(line.contains("close the lid"), """
+        the armed sentence never says the lid may now be closed, which is the \
+        whole point of the mode being armed: \(line)
+        """)
+
+    // The hold is still reported from the OUTCOME's seconds.
+    // `theArmedStatusCarriesTheGRANTEDHoldAndNotTheRequestedOne` holds that
+    // property; this pins that the new clause did not swallow it.
+    #expect(line.contains(ServingModel.holdLabel(for: 28_800)), """
+        the armed sentence no longer names the hold the helper granted: \(line)
+        """)
+}
