@@ -557,11 +557,24 @@ front of you, and no test in this repository re-runs it — the run needed a
 signed bundle, which is opt-in, and a registration approved by hand in System
 Settings, so the suite cannot reproduce it.
 
-**What is not claimed here.** Removing the helper from the UI has not been
-exercised, and neither has the fallback an unsigned build takes. What has been
-measured about the requirement is that it parses, that it rejects a correctly
-signed program from another team, and that the build stamps the helper with the
-identifier it pins.
+**Removal and the unsigned fallback were exercised on 2026-08-19**, on the same
+Mac and under the same limits as the run above. Removal was sampled at 5 Hz
+across the click: `SleepDisabled` returned to 0 while the helper process was
+still running, and the helper was gone one sample later. No sample showed the
+hold still set with the helper already gone, which is the failure that ordering
+exists to prevent. macOS kept the app's entry in Login Items and Extensions
+afterwards, because the helper's plist ships inside the bundle, so removal
+retires the registration rather than erasing the record of it.
+
+The unsigned fallback was exercised the same day. A bundle presenting
+`TeamIdentifier=not set` offered no arming control at all and named the `sudo`
+route instead.
+
+Both are one run, on one Mac, on one date, and no test in this repository
+re-runs either: one needs a signed bundle and a registration approved by hand,
+the other needs an unsigned one. What has been measured about the requirement
+itself is that it parses, that it rejects a correctly signed program from
+another team, and that the build stamps the helper with the identifier it pins.
 
 The privileged side reads a journal file to know what to restore. That file is
 an instruction to a root process, and it is treated as one. All four of these
