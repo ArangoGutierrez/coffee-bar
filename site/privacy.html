@@ -109,15 +109,16 @@ carry them are discarded where the event is decoded, before anything stores or
 displays it. A test in the suite fails if that ever changes.</p>
 
 <h2 class="eyebrow">What leaves your Mac</h2>
-<p>Nothing. There is no telemetry, no analytics, no crash reporting, and no
-update ping. The one socket coffee-bar opens is a unix domain socket, which
-lives in the filesystem and has no address, no port, and no route off this
+<p>One request, described in full below: once a day at startup coffee-bar asks
+this site which release is current. There is no telemetry, no analytics and no
+crash reporting. The socket coffee-bar opens for agents is a unix domain socket,
+which lives in the filesystem and has no address, no port, and no route off this
 machine.</p>
 
-<h2 class="eyebrow">What may change, named in advance</h2>
-<p>The check for updates named here is now built and will ship in the next
-release. This page says what it sends before that release goes out, which is
-what the previous version of this paragraph promised.</p>
+<h2 class="eyebrow">The one request, named in advance</h2>
+<p>The check for updates named here ships in v0.3.0. This page named what it
+would send before that release went out, which is what the previous version of
+this paragraph promised.</p>
 <p>It fetches one static file from this site,
 arangogutierrez.github.io/coffee-bar/latest.json, which says which version is
 current. There is no query string on that address and there is no identifier of
