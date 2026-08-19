@@ -28,6 +28,106 @@ Every released version of coffee-bar, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 The project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] – 2026-08-19
+
+Lid-closed mode is a button. Keeping a Mac awake with the lid shut used to mean
+finding a command in the docs, copying it into a terminal and running it under
+`sudo`; the app could not do it, and said so. It is now one click in
+Preferences, and the click is reversible from the same window.
+
+The rest of the release is about the first ten minutes and the days after them:
+coffee-bar now asks what it needs to know the first time it runs, can open at
+login, says when a newer version is published, keeps the machine reachable
+rather than merely powered, and answers an agent that asks what it is doing.
+
+### Added
+
+- **Arm lid-closed mode from a button.** On a signed build, Preferences carries
+  an **Arm lid-closed mode** button under Power. The app asks macOS to install a
+  small `SMAppService` helper and macOS is what runs it as root: the app process
+  never becomes root itself, takes no credentials and runs no interpreter. The
+  channel between the two is XPC, and its peer is pinned by Team ID and by
+  bundle identifier, evaluated by Security.framework, so no other process on
+  the machine can arm the hold. This is opt-in and it is the only part of
+  coffee-bar that involves root at all. (#71)
+- **Remove the helper again, from the same window.** The app reverts the hold
+  over XPC, reads `SleepDisabled` back to confirm it returned to 0, and only
+  then unregisters. That order is the feature: unregistering first, or letting
+  the read-back fail quietly, would leave the system flag set with the one
+  thing that could clear it already gone. This is opt-in, and the app cannot
+  reach root by any other route. (#71)
+- **A quick start on first launch.** coffee-bar has no Dock icon and opens no
+  window, so a first-run user could miss every question it wanted to ask. The
+  window now opens by itself the first time, asks three of them, and the panel
+  gained a **Check now** button for the answer afterwards. (#52)
+- **Open at login, if you ask for it.** The menu-bar app did not survive a
+  reboot, and the only surface that would have reported it was the panel you
+  cannot see while the app is not running. Opening at login is an explicit
+  opt-in: leave it alone and nothing is written, and turning it off removes what
+  turning it on wrote. (#48)
+- **coffee-bar says when a newer version is published.** It reads one static
+  file over HTTPS from the project's own site and compares versions. It sends
+  no identifier, sets no header, carries no query string and downloads nothing,
+  and it is the single exception to this app's promise to make no network
+  request. (#29)
+- **An agent can read coffee-bar's own state.** `GET /status` on the ingest
+  socket returns JSON: the version the panel shows, the control position you
+  chose, whether a hold is in force, how many sessions are working, how many
+  are waiting on you, one word for hook health, and whether this process is
+  answering. It is read-only, it publishes counts and never sessions, and the
+  hook channel that agents already post to still answers with an empty body, so
+  nothing coffee-bar knows reaches an agent that did not go and read it. (#9)
+- **The lid-closed hold is a setting you choose.** The default is now the length
+  of an agent run you meant to leave going, eight hours, rather than half an
+  hour, and the ceiling is twenty-four hours. On battery the hold still ends at
+  the daemon's own floor before any of that, which is the protection that
+  matters when you arm it and walk away. (#74)
+- **The Mac stays reachable, not just awake.** Holding the CPU running does not
+  keep network clients served, so a machine reached over SSH could be awake and
+  unreachable, which is awake for nobody. coffee-bar now raises a network
+  assertion beside the system one, whichever way the display setting is set.
+  (#60)
+- **You choose which agent tools coffee-bar advises about.** Advice used to be
+  driven by which files happened to exist on disk. It is now a selection you
+  make, and an existing user who never opens Preferences reads exactly what
+  they read before. (#51)
+
+### Fixed
+
+- **The panel states the battery floor the policy actually enforces**, and says
+  which holds that floor governs and which it does not. (#106, #123)
+- **An advisory carries a symbol and not colour alone**, so it survives a
+  colour-blind reader and a screenshot in greyscale. (#112)
+- **Clicking Preferences opens Preferences.** Re-opening it activates the
+  existing window and closes the panel instead of doing nothing. (#126)
+- **The ingest socket refuses a non-`POST` request with 405** and an `Allow`
+  header, rather than reading a body it was never going to accept. (#102)
+
+### Not in this release
+
+Token accounting is v0.4 and does not exist here. Nothing in this release
+measures battery saved: that number needs a harness a user can reproduce, and
+that harness is not built.
+
+| Fact | Value |
+|---|---|
+| File | `coffee-bar-0.3.0.dmg` |
+| Size | 1054199 bytes |
+| SHA-256 | `61009669234d891418bfd367289a95cb7fed85ab407711ba1038bbdde3fc441d` |
+| Architecture | Apple silicon (`arm64`) only |
+| Minimum macOS | 14.0 |
+| Signature | Developer ID Application, team `85FN4Z37V8` |
+| Notarisation | `spctl` accepts it, source `Notarized Developer ID` |
+| Staple | `xcrun stapler validate` passes on the app and on the image |
+
+This is not a universal binary. `lipo -archs` on the shipped binary reports
+`arm64` alone, so an Intel Mac cannot run it.
+
+Verify the download before you open it:
+
+    shasum -a 256 coffee-bar-0.3.0.dmg
+    spctl -a -t open --context context:primary-signature -vv coffee-bar-0.3.0.dmg
+
 ## [0.2.2] — 2026-08-11
 
 A release about trusting the suite that certifies this app. Nothing here changes

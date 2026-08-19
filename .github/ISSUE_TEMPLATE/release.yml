@@ -150,7 +150,7 @@ body:
         - [ ] `notarytool submit --wait` outlives the 10-minute command cap. Run
               it in the background; history is authoritative:
               ```
-              xcrun notarytool history --keychain-profile coffee-bar
+              xcrun notarytool history --keychain-profile coffeebar-app
               ```
         - [ ] Verify the app INSIDE the mounted DMG. `build/CoffeeBar.app` is not
               the artifact that ships. The mountpoint carries the version so a
