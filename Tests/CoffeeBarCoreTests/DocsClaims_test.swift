@@ -1760,7 +1760,86 @@ private let absoluteEgressClaimPatterns: [String] = [
     "\\bnothing\\s+(?:ever\\s+)?leaves\\s+(?:your|the|this)\\s+(?:mac|machine|computer)\\b",
 ]
 
-/// No page under `site/` claims, about the app as it ships, that it makes no
+/// Documented surfaces the egress ban does NOT sweep, and why each is out.
+///
+/// **PR #141 shipped this ban over `site/` alone and its own report flagged the
+/// Markdown as unswept.** The repository's own front page was therefore free to
+/// claim what the site was forbidden to, which is the wrong way round: a
+/// stranger arriving from a link reads README.md first.
+///
+/// The sweep below is now every documented surface MINUS this map, so a new
+/// page or document is swept by default and an exclusion has to be typed here
+/// on purpose. Each entry costs a sentence saying what the ban gives up.
+///
+/// **Neither exclusion is a weakness in the patterns, and neither may be
+/// "fixed" by narrowing one.** Both files carry a sentence that a pattern reads
+/// correctly and that is TRUE, because the ban matches phrasing and cannot see
+/// the subject a sentence is about. Narrowing `posts nothing` until
+/// `docs/QUICKSTART.md` passes would blind the ban to "It posts nothing
+/// anywhere.", a sentence in the banned list of
+/// `theEgressBanFiresOnAbsoluteClaimsAndSparesTheTrueOnes` and one of the
+/// phrasings the false site copy actually used. A guard loosened until it
+/// passes is worth less than one with a stated gap.
+private let egressSweepExclusions: [String: String] = [
+    "SECURITY.md":
+        """
+        SECURITY.md:195-208 QUOTES both retired false claims ("makes no network \
+        egress … no update ping") while recording that each became false and \
+        when. That paragraph is the policy keeping its promise to say so the day \
+        an outbound request existed, so the ban would fire on the very prose \
+        that documents the ban's subject. Three patterns match there today.
+        """,
+    "docs/QUICKSTART.md":
+        """
+        docs/QUICKSTART.md:208 says "An unrecognised name posts nothing rather \
+        than guessing" about the shim's --tool argument, and it is true: \
+        Sources/CoffeeBarShim/main.swift:98-102 refuses an unknown name with \
+        "Nothing was posted." The subject is a local unix-socket post, not the \
+        app's egress, and the ban cannot tell those apart by phrasing alone.
+        """,
+]
+
+/// Every documented surface the egress ban sweeps.
+///
+/// Subtractive rather than a list of names, and that is the whole design: an
+/// enumerated list fails OPEN the moment somebody adds a page and forgets a
+/// line, which is the hole `documentedSurfaces` was already rewritten to close.
+private let egressSweptSurfaces =
+    documentedSurfaces.filter { egressSweepExclusions[$0] == nil }
+
+/// The sweep reaches the front page, and the exclusions name real documents.
+///
+/// **Named bug this catches.** Every `@Test(arguments:)` below passes trivially
+/// on an empty argument list, so a mis-resolved root or a filter that excluded
+/// everything would switch the ban off and report success: the false-absence
+/// trap this file throws from `matches` to avoid. The literals are written out
+/// rather than derived from the filter, because comparing the filter against
+/// itself would hold whether it worked or not.
+///
+/// The second half is the discriminating one: an exclusion naming a document
+/// that does not exist excludes nothing, reads like a deliberate gap, and rots
+/// silently. `theDurationSweepExcludesOnlySurfacesAnotherGuardCovers` is the
+/// precedent.
+@Test func theEgressSweepReachesTheReadmeAndExcludesOnlyRealDocuments() {
+    #expect(egressSweptSurfaces.contains("README.md"), """
+        README.md is not swept by the egress ban. It is the document a stranger \
+        following a link reads first, and PR #141 left it unswept while site/ \
+        was guarded. Swept: \(egressSweptSurfaces)
+        """)
+    #expect(egressSweptSurfaces.contains("site/index.html"),
+            "the site pages fell out of the egress sweep: \(egressSweptSurfaces)")
+    #expect(egressSweptSurfaces.count >= 5,
+            "the egress ban sweeps only \(egressSweptSurfaces.count) surfaces; it is reading almost nothing")
+
+    for name in egressSweepExclusions.keys {
+        #expect(documentedSurfaces.contains(name), """
+            \(name) is excluded from the egress sweep but is not a documented \
+            surface, so the exclusion covers nothing and the name has rotted
+            """)
+    }
+}
+
+/// No documented surface claims, about the app as it ships, that it makes no
 /// network request.
 ///
 /// Scoped to CURRENT claims, for the reason `currentClaimProse` documents: a
@@ -1769,8 +1848,8 @@ private let absoluteEgressClaimPatterns: [String] = [
 /// this app's promise to make no network request" was true of 0.2.2 when it was
 /// written. Reading history as a live claim would leave only one way to green,
 /// which is to falsify the changelog.
-@Test(arguments: discoveredSitePages())
-func noSitePageClaimsTheAppMakesNoNetworkRequest(_ page: String) throws {
+@Test(arguments: egressSweptSurfaces)
+func noDocumentedSurfaceClaimsTheAppMakesNoNetworkRequest(_ page: String) throws {
     let prose = try currentClaimProse(page)
 
     for pattern in absoluteEgressClaimPatterns {
