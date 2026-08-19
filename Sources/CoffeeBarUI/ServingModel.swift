@@ -778,6 +778,27 @@ public final class ServingModel {
     nonisolated public static let lidClosedCommand =
         "sudo \(shellQuoted(privilegedProbePath)) \(ProbeVerb.arm.rawValue)"
 
+    /// The line the Preferences window shows once the button has copied that
+    /// command (issue #142).
+    ///
+    /// Composed on the model side, like every other sentence that window
+    /// renders: M1 design §5.4 forbids asserting on rendered AppKit text, so a
+    /// string written in the view is a string no check reads.
+    ///
+    /// **It NAMES what was copied rather than saying "done".** The window looks
+    /// identical before and after the press, the pasteboard is not a surface the
+    /// user can see from here, and the whole reason this build has a button at
+    /// all is that the command was otherwise recoverable only by selecting the
+    /// sentence beside it by hand. Printing it back is also the confirmation:
+    /// a user who pasted into the wrong window can read what they should have.
+    ///
+    /// Built ON `lidClosedCommand` and not beside it, for the reason
+    /// `lidClosedCommand(holdingFor:)` gives: two spellings of one command line
+    /// drift, and this one is quoted for a root shell.
+    nonisolated public static let commandCopiedNote =
+        "\(lidClosedCommand) is on the clipboard. Paste it into Terminal and "
+        + "run it there: coffee-bar never elevates its own privilege."
+
     /// The same command, carrying the hold the user chose (issue #74).
     ///
     /// **This function IS the channel the setting travels down.** The value a

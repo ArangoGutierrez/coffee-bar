@@ -950,3 +950,159 @@ private func appEntryPointCode() throws -> String {
         the surface's own control and stays.
         """)
 }
+
+// MARK: - Issue #142: the button whose title offers a copy it refused to make
+
+/// The arm button's trailing closure, and the `.disabled(...)` argument chained
+/// onto it, read out of `code` by balancing delimiters.
+///
+/// `braceBlock` alone cannot answer this. It returns the closure and "the rest",
+/// which puts the text BEFORE the button and the text AFTER it into one string,
+/// so a `contains` over the rest cannot tell this control's `.disabled` clause
+/// from the removal control's identical-looking one forty lines below. What is
+/// at issue here is precisely WHICH clause carries the availability term, so the
+/// reader has to stay anchored.
+///
+/// LIMIT, stated rather than hidden. If the arm button loses its `.disabled`
+/// modifier entirely this walks forward to the next one it finds, which is a
+/// different control. The `Button(` check below refuses that case rather than
+/// reading the wrong clause and passing. Delimiters are balanced structurally,
+/// not parsed, which is the same limit `braceBlock` carries: a brace or a paren
+/// inside a string literal would misbalance the count, and there is none on this
+/// surface today.
+private func armButtonParts(in code: String) -> (closure: String, disabled: String)? {
+    guard let anchor = code.range(of: "Button(helperAvailability.buttonTitle)"),
+          let open = code[anchor.upperBound...].firstIndex(of: "{") else { return nil }
+
+    var braces = 0
+    var cursor = open
+    var closureEnd: String.Index?
+    while cursor < code.endIndex {
+        if code[cursor] == "{" { braces += 1 }
+        if code[cursor] == "}" {
+            braces -= 1
+            if braces == 0 {
+                closureEnd = code.index(after: cursor)
+                break
+            }
+        }
+        cursor = code.index(after: cursor)
+    }
+    guard let closureEnd else { return nil }
+
+    guard let modifier = code[closureEnd...].range(of: ".disabled(") else { return nil }
+    // Nothing between the closure and the modifier may open another control.
+    // Without this, a button that lost its own `.disabled` would be measured by
+    // the removal control's, which carries no availability term and would pass.
+    guard !code[closureEnd ..< modifier.lowerBound].contains("Button(") else { return nil }
+
+    var parens = 0
+    var scan = code.index(before: modifier.upperBound)
+    while scan < code.endIndex {
+        if code[scan] == "(" { parens += 1 }
+        if code[scan] == ")" {
+            parens -= 1
+            if parens == 0 {
+                return (String(code[open ..< closureEnd]),
+                        String(code[modifier.upperBound ..< scan]))
+            }
+        }
+        scan = code.index(after: scan)
+    }
+    return nil
+}
+
+@Test func theArmButtonIsNotDisabledOnTheBuildWhoseTitleOffersACopy() throws {
+    // Issue #142, observed on a local build stamped 0.3.0-unsigned. It is ONE
+    // button whose title flips: `.registrable` reads "Arm lid-closed mode" and
+    // `.unavailable` reads "Copy the command instead". The clause
+    // `|| helperAvailability == .unavailable` in the `.disabled` modifier is
+    // exactly what greys out the second title, so the control names an action
+    // and refuses to perform it.
+    //
+    // The Homebrew bundle is where this bites. It is ad-hoc signed, so it always
+    // takes that branch, and the greyed button is the only route the product
+    // offers to lid-closed mode there.
+    //
+    // COMMENT-STRIPPED, for the reason `surfaceCode` gives: this file explains
+    // every control at length, and the paragraph above the button discusses
+    // availability. A raw read would find the term in the prose and report the
+    // defect present on a corrected view.
+    //
+    // WHITESPACE REMOVED, for the reason the boundary guards give: the calls
+    // here wrap over several lines, so a needle carrying an argument label never
+    // matches the raw text.
+    let code = try surfaceCode(named: "PreferencesView.swift")
+        .replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
+
+    let parts = try #require(armButtonParts(in: code), """
+        PreferencesView.swift no longer has a Button(helperAvailability.buttonTitle) \
+        with a closure and a .disabled modifier of its own reachable after it, so \
+        this guard measured nothing at all.
+        """)
+
+    // THE DEFECT. Availability decides what the click DOES, and it must not
+    // decide whether the click is possible.
+    #expect(!parts.disabled.contains("helperAvailability"), """
+        the arm button is disabled on a term derived from helperAvailability:
+          .disabled(\(parts.disabled))
+        On an unsigned or Homebrew build that is the button titled "Copy the \
+        command instead", greyed out, and it is the only route that build has \
+        to lid-closed mode.
+        """)
+
+    // ANTI-VACUITY, and the in-flight gate in its own right. An empty or
+    // unrelated argument would satisfy the assertion above while proving
+    // nothing, and dropping `armingInFlight` queues a second root request behind
+    // an approval the user has not answered yet.
+    #expect(parts.disabled.contains("armingInFlight"), """
+        the .disabled clause read as "\(parts.disabled)", which does not gate on \
+        a click already in flight. Either this guard is reading the wrong \
+        modifier, or a second press can queue a second registration request \
+        against a decision macOS is still waiting on.
+        """)
+
+    // WHAT the click does comes from the model side. A `switch` on
+    // `helperAvailability` written in the closure would work and would be a
+    // decision no check can read, because M1 design §5.4 forbids asserting on
+    // rendered AppKit text. `theButtonThatOffersToCopyTheCommandCopiesTheCommand`
+    // holds the mapping itself.
+    #expect(parts.closure.contains("helperAvailability.buttonAction"), """
+        the button's closure does not read helperAvailability.buttonAction, so \
+        what the click does is decided in a View and no check can reach it.
+        """)
+
+    // The copy REACHES THE PASTEBOARD, and carries the action's own payload
+    // rather than a second spelling of the command composed here. Named bug: a
+    // closure that flips the title, enables the control and copies nothing, or
+    // copies a string this file built that has drifted from lidClosedCommand.
+    #expect(parts.closure.contains("setString(command,forType:.string)"), """
+        the button's closure never writes the copyCommand payload to the \
+        pasteboard, so the enabled control still performs no copy.
+        """)
+
+    // BOTH branches are present. Named bug: a fix that turns every press into a
+    // copy, which passes every assertion above and deletes the control issue #71
+    // added on the one build that can register a helper.
+    //
+    // The arm branch is named by its CASE and by what it does with the reply,
+    // never by spelling the call. `RealRegistrationHazard_test.swift` scans this
+    // tree for a real-team signature source meeting a privileged call, and its
+    // lexer keeps string literals on purpose (limit 4 on that file): a needle
+    // reading `PrivilegedHelperClient().arm(seconds:` here is text, but it reads
+    // to that scan as the real thing, and it reported this test as one that
+    // could register the helper on the machine running `swift test`. The noisy
+    // direction is deliberate there, so the needle moves rather than the scan.
+    #expect(parts.closure.contains("case.arm:"), """
+        the button's closure has no arm branch, so the signed build's button \
+        does not arm anything.
+        """)
+    #expect(parts.closure.contains("helperStatus=outcome.statusLine"), """
+        the arm branch does not show the helper's own reply, so the sentence \
+        after a click is composed somewhere no check reads, or not at all.
+        """)
+    #expect(parts.closure.contains("case.copyCommand(letcommand):"), """
+        the button's closure does not bind the command out of the action, so \
+        whatever it copies is a second spelling built in this View.
+        """)
+}
