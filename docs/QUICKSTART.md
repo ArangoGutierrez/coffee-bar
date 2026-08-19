@@ -7,7 +7,7 @@ nothing else — it never polls, and it never inspects a running process. It nev
 writes your settings file for you. Until you add them, the app runs but no
 session event reaches it.
 
-This page wires Claude Code, which is the agent v0.1 supports. Codex and Cursor
+This page wires Claude Code, which is the agent it documents. Codex and Cursor
 have adapters in the code and no documented wiring yet. The `coffeebar-hook`
 shim below posts to their endpoints, but their own configuration files are a
 different shape from Claude Code's and this page documents neither.
