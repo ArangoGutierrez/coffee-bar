@@ -611,3 +611,161 @@ private func model(fetching fetcher: any ReleaseManifestFetching,
 
     #expect(model.updateVerdict == .cannotCompare(UpdateCheck.unreadablePublishedLine))
 }
+
+// MARK: - Issue #147: the stamp and the verdict must survive together
+
+@MainActor
+@Test func aRestoredStampWithNoVerdictNeverSaysItHasNotLooked() {
+    // Issue #147, read off the maintainer's machine: `defaults read` carried
+    // `lastUpdateCheck = 1787135748` and no verdict whatever, which is the state
+    // every install made before the verdict key existed is in at its first
+    // launch on this build. The window then printed both of these, one directly
+    // under the other:
+    //
+    //     coffee-bar has not looked for a newer version yet.
+    //     Last checked: 2026-08-19 12:35.
+    //
+    // A user reads the two lines as one sentence, so the check is on the PAIR.
+    // Either line alone is correct; together they are the defect. It is asserted
+    // as the never-checked line NOT appearing beside a real time, rather than as
+    // some string being non-empty, because a model that returned "" would have
+    // satisfied the second and still shipped the first.
+    let when = Date(timeIntervalSince1970: 1_787_135_748)
+    let settings = FakeSettings([SettingsKey.lastUpdateCheck: Int(when.timeIntervalSince1970)])
+    let model = model(fetching: FakeFetcher(version: "0.2.3"), settings: settings)
+
+    #expect(model.lastUpdateCheck == when)
+    #expect(model.lastUpdateCheckLine != "Last checked: never.")
+    #expect(model.updateStatusLine != UpdateCheck.neverCheckedLine)
+
+    // And it invented nothing to fill the gap. A verdict conjured here would be
+    // the opposite failure: a conclusion reported that no check ever reached.
+    #expect(model.updateVerdict == nil)
+    #expect(model.updateStatusLine != UpdateCheck.upToDateLine)
+    #expect(model.updateStatusLine == UpdateCheck.verdictNotRecordedLine)
+}
+
+@MainActor
+@Test func aVerdictSurvivesARelaunchBesideItsStamp() async {
+    // The other half of issue #147, and the half a third sentence cannot do. A
+    // relaunch is a second model over the same store, checking nothing.
+    let when = Date(timeIntervalSince1970: 1_786_000_000)
+    let settings = FakeSettings()
+    let first = model(fetching: FakeFetcher(version: "0.2.3"), settings: settings, now: { when })
+    await first.checkForUpdates(version: "0.2.2")
+    #expect(first.updateVerdict == .updateAvailable("0.2.3"))
+
+    let second = model(fetching: FakeFetcher(version: "0.2.3"), settings: settings, now: { when })
+
+    #expect(second.updateVerdict == .updateAvailable("0.2.3"))
+    #expect(second.updateStatusLine == first.updateStatusLine)
+    #expect(second.updateStatusLine.contains("0.2.3"))
+    #expect(second.updateStatusLine != UpdateCheck.neverCheckedLine)
+    #expect(second.updateStatusLine != UpdateCheck.verdictNotRecordedLine)
+}
+
+@MainActor
+@Test func whatIsWrittenDownIsATagAndNotTheSentence() async {
+    // Named bug this catches: storing `UpdateCheck.sentence(for:)` output. That
+    // restores perfectly today and shows a retired sentence the first time
+    // anybody edits one, which is issue #147's own shape a release later. The
+    // published version is data and is carried; the words around it are not.
+    let settings = FakeSettings()
+    let model = model(fetching: FakeFetcher(version: "0.2.3"), settings: settings)
+
+    await model.checkForUpdates(version: "0.2.2")
+
+    #expect(settings.stringArray(forKey: SettingsKey.lastUpdateVerdict)
+            == ["updateAvailable", "0.2.3"])
+}
+
+@MainActor
+@Test func aRestoredReasonIsSpelledByTheBuildThatShowsIt() async {
+    // A failed check is the state the machine in issue #147 was actually in, so
+    // it is the one a relaunch has to carry. The tag goes in; the sentence comes
+    // out of this build's constant on the way back.
+    let when = Date(timeIntervalSince1970: 1_786_000_000)
+    let settings = FakeSettings()
+    let first = model(fetching: FakeFetcher(.failure(NoAnswer())),
+                      settings: settings, now: { when })
+    await first.checkForUpdates(version: "0.2.2")
+
+    #expect(settings.stringArray(forKey: SettingsKey.lastUpdateVerdict) == ["unreachable"])
+
+    let second = model(fetching: FakeFetcher(version: "0.2.3"), settings: settings, now: { when })
+
+    #expect(second.updateVerdict == .cannotCompare(UpdateCheck.unreachableLine))
+    #expect(second.updateStatusLine != UpdateCheck.neverCheckedLine)
+}
+
+@MainActor
+@Test func aStoredVerdictThisBuildCannotReadInventsNothing() {
+    // A newer build can write a case this one has never heard of, a preferences
+    // file can be hand edited, and a key collision can put a list of process
+    // names here. Reading any of them as `upToDate` would report a conclusion no
+    // check reached; reading them as never-checked is issue #147 again, since
+    // the stamp beside them is real.
+    let when = Date(timeIntervalSince1970: 1_787_135_748)
+    let settings = FakeSettings([
+        SettingsKey.lastUpdateCheck: Int(when.timeIntervalSince1970),
+        SettingsKey.lastUpdateVerdict: ["somethingThisBuildHasNeverHeardOf", "7"]
+    ])
+    let model = model(fetching: FakeFetcher(version: "0.2.3"), settings: settings)
+
+    #expect(model.updateVerdict == nil)
+    #expect(model.updateStatusLine != UpdateCheck.upToDateLine)
+    #expect(model.updateStatusLine != UpdateCheck.neverCheckedLine)
+    #expect(model.updateStatusLine == UpdateCheck.verdictNotRecordedLine)
+}
+
+@Test func everyStoredVerdictReadsBackAsItself() {
+    // The stored form is a FORMAT: written by one launch and read by the next,
+    // so a writer and a reader that disagree lose the verdict silently while
+    // both halves still compile.
+    let all: [UpdateCheck.StoredVerdict] = [
+        .upToDate,
+        .updateAvailable("0.10.0"),
+        .unreachable,
+        .refused(.status(503)),
+        .refused(.tooLarge(9001)),
+        .refused(.unreadable)
+    ]
+
+    for stored in all {
+        #expect(UpdateCheck.storedVerdict(from: UpdateCheck.fields(of: stored)) == stored,
+                "\(stored) did not read back as itself")
+    }
+
+    // Named bug: a payload that is missing, doubled, blank or not an ASCII
+    // number read as a NEIGHBOURING case rather than as unknown. Every one of
+    // these has to answer nil, because the caller's only other move is to state
+    // a conclusion nothing reached.
+    #expect(UpdateCheck.storedVerdict(from: []) == nil)
+    #expect(UpdateCheck.storedVerdict(from: ["upToDate", "0.2.3"]) == nil)
+    #expect(UpdateCheck.storedVerdict(from: ["updateAvailable"]) == nil)
+    #expect(UpdateCheck.storedVerdict(from: ["updateAvailable", "   "]) == nil)
+    #expect(UpdateCheck.storedVerdict(from: ["unreachable", "why"]) == nil)
+    #expect(UpdateCheck.storedVerdict(from: ["status"]) == nil)
+    #expect(UpdateCheck.storedVerdict(from: ["status", "50\u{0663}"]) == nil)
+    #expect(UpdateCheck.storedVerdict(from: ["status", "-1"]) == nil)
+    #expect(UpdateCheck.storedVerdict(from: ["tooLarge"]) == nil)
+    // The key-collision case named in `SettingsKey.lastUpdateVerdict`: a
+    // demotable process list landing here matches no tag and stays unknown.
+    #expect(UpdateCheck.storedVerdict(from: ["Xcode", "Safari"]) == nil)
+}
+
+@Test func aStoredVerdictBecomesTheSameSentenceTheCheckShowed() {
+    // The restore path and the check path share `verdict(of:)`, which is what
+    // stops a relaunch showing a second spelling of the same answer. Compared
+    // against the constants the window renders, not against a copy of them.
+    #expect(UpdateCheck.verdict(of: .upToDate) == .upToDate)
+    #expect(UpdateCheck.verdict(of: .updateAvailable("0.3.0")) == .updateAvailable("0.3.0"))
+    #expect(UpdateCheck.verdict(of: .unreachable)
+            == .cannotCompare(UpdateCheck.unreachableLine))
+    #expect(UpdateCheck.verdict(of: .refused(.unreadable))
+            == .cannotCompare(UpdateCheck.unreadablePublishedLine))
+    #expect(UpdateCheck.verdict(of: .refused(.tooLarge(9001)))
+            == .cannotCompare(UpdateCheck.tooLargeLine))
+    #expect(UpdateCheck.sentence(for: UpdateCheck.verdict(of: .refused(.status(503))))
+            .contains("503"))
+}

@@ -1437,6 +1437,18 @@ public final class ServingModel {
         // the truth on the surface.
         self.lastUpdateCheck = settings.integer(forKey: SettingsKey.lastUpdateCheck)
             .map { Date(timeIntervalSince1970: TimeInterval($0)) }
+        // Read once, here, for the reason above, and beside the stamp because it
+        // is the stamp's twin. Issue #147 is what happened while only one of the
+        // pair survived a quit: the window restored WHEN coffee-bar last looked,
+        // had nothing to say about what it found, and printed "has not looked
+        // yet" directly above the time it did.
+        //
+        // A stored value this build cannot read restores NOTHING rather than a
+        // guess, and `updateStatusLine` has a sentence for that state which
+        // claims neither "never checked" nor "up to date".
+        self.updateVerdict = settings.stringArray(forKey: SettingsKey.lastUpdateVerdict)
+            .flatMap(UpdateCheck.storedVerdict(from:))
+            .map(UpdateCheck.verdict(of:))
         // Read once, here, for the reason above, and `?? false` is the whole of
         // issue #48's posture: a key nobody wrote is a user who never asked, and
         // nothing is installed for them.
@@ -2154,8 +2166,22 @@ public final class ServingModel {
     public private(set) var lastUpdateCheck: Date?
 
     /// What the window says about the last check.
+    ///
+    /// THREE states and not two, and the missing third was issue #147. A model
+    /// with no verdict but a stamp HAS looked, so saying it has not, directly
+    /// above the time it did, is a window contradicting itself in two lines a
+    /// user reads as one. It says what it actually knows instead.
+    ///
+    /// It still refuses to say "up to date" in that state, which is the whole of
+    /// `UpdateCheck.neverCheckedLine`'s argument carried into the new case:
+    /// silence read as good news is how a check broken for a year goes
+    /// unnoticed, and a missing verdict is silence.
     public var updateStatusLine: String {
-        guard let updateVerdict else { return UpdateCheck.neverCheckedLine }
+        guard let updateVerdict else {
+            return lastUpdateCheck == nil
+                ? UpdateCheck.neverCheckedLine
+                : UpdateCheck.verdictNotRecordedLine
+        }
         return UpdateCheck.sentence(for: updateVerdict)
     }
 
@@ -2180,7 +2206,8 @@ public final class ServingModel {
     /// a check can hand in a stamp of its own.
     ///
     /// **It replaces the bundle with nothing and downloads no release.** The
-    /// entire effect is `updateVerdict` and `lastUpdateCheck`.
+    /// entire effect is `updateVerdict` and `lastUpdateCheck`, and the two
+    /// settings keys those two are read back from at the next launch.
     public func checkForUpdates(
         version: String = AppVersion.display(from: Bundle.main.infoDictionary)
     ) async {
@@ -2194,25 +2221,47 @@ public final class ServingModel {
         // drifts the interval outward by however long the network took.
         let attempted = now()
 
+        // What the check concluded, in the form that survives a quit, decided
+        // HERE where the cause is still in hand. Deriving it afterwards from the
+        // sentence the verdict carries would mean matching prose, and the prose
+        // is the thing this whole shape exists to keep out of the store.
+        let concluded: UpdateCheck.StoredVerdict
+
         do {
             let fetched = try await updates.fetch()
             switch UpdateCheck.manifest(from: fetched.body, statusCode: fetched.statusCode) {
             case .success(let manifest):
-                updateVerdict = UpdateCheck.compare(running: version,
-                                                    published: manifest.version)
+                switch UpdateCheck.compare(running: version, published: manifest.version) {
+                case .upToDate:
+                    concluded = .upToDate
+                case .updateAvailable(let published):
+                    concluded = .updateAvailable(published)
+                case .cannotCompare:
+                    // `compare` refuses one of two stamps, and the running one
+                    // parsed at the guard above, so the published one is what it
+                    // could not read.
+                    concluded = .refused(.unreadable)
+                }
             case .failure(let refusal):
-                updateVerdict = .cannotCompare(UpdateCheck.sentence(for: refusal))
+                concluded = .refused(refusal)
             }
         } catch {
             // Every transport failure reads the same to a user: it did not
             // happen. The error's own text is a `URLError` code that names a
             // library rather than a thing to do about it.
-            updateVerdict = .cannotCompare(UpdateCheck.unreachableLine)
+            concluded = .unreachable
         }
+
+        updateVerdict = UpdateCheck.verdict(of: concluded)
 
         lastUpdateCheck = attempted
         settings.setInteger(Int(attempted.timeIntervalSince1970),
                             forKey: SettingsKey.lastUpdateCheck)
+        // Written WITH the stamp and never without it. The pair is the fix for
+        // issue #147: a stamp that outlives its verdict is what put "has not
+        // looked yet" above "Last checked".
+        settings.setStringArray(UpdateCheck.fields(of: concluded),
+                                forKey: SettingsKey.lastUpdateVerdict)
     }
 
     /// Looks for a newer published version only if the stated interval has run

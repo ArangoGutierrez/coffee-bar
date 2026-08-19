@@ -556,6 +556,35 @@ struct SettingsStoreTests {
         #expect(SettingsKey.lastUpdateCheck != SettingsKey.quickStartCompleted)
     }
 
+    @Test func theLastUpdateVerdictKeyStringNeverChangesAndCollidesWithNothing() {
+        // Held for the reason every other key is, and issue #147 is what this
+        // one costs when it goes missing rather than when it is renamed. The
+        // stamp beside it already survived a quit; the verdict did not, so a
+        // relaunch printed "coffee-bar has not looked for a newer version yet."
+        // directly above a real "Last checked" time. A rename puts the window
+        // straight back in that state, with nothing anywhere reporting it.
+        //
+        // Its dangerous neighbours are the two other `[String]` keys, not the
+        // `Int` ones: a crossed read against `demotableProcessNames` or
+        // `agentTools` answers a value cleanly rather than `nil`.
+        #expect(SettingsKey.lastUpdateVerdict == "lastUpdateVerdict")
+        #expect(SettingsKey.lastUpdateVerdict != SettingsKey.lastUpdateCheck)
+        #expect(SettingsKey.lastUpdateVerdict != SettingsKey.demotableProcessNames)
+        #expect(SettingsKey.lastUpdateVerdict != SettingsKey.agentTools)
+        #expect(SettingsKey.lastUpdateVerdict != SettingsKey.holdDisplayAwake)
+        #expect(SettingsKey.lastUpdateVerdict != SettingsKey.batteryFloorPercent)
+        #expect(SettingsKey.lastUpdateVerdict != SettingsKey.quietEverythingElse)
+        #expect(SettingsKey.lastUpdateVerdict != SettingsKey.lidClosedHoldSeconds)
+        #expect(SettingsKey.lastUpdateVerdict != SettingsKey.quickStartCompleted)
+        #expect(SettingsKey.lastUpdateVerdict != SettingsKey.launchAtLogin)
+
+        // A prefix is not a match, and this is the pair that makes that worth
+        // asserting: `lastUpdateCheck` is a prefix of nothing, but a store keyed
+        // on `hasPrefix` would read the two of them as one setting and the
+        // window would restore a verdict as a timestamp.
+        #expect(!SettingsKey.lastUpdateVerdict.hasPrefix(SettingsKey.lastUpdateCheck))
+    }
+
     @Test func anUnrunUpdateCheckReadsAsAbsentRatherThanAsTheEpoch() throws {
         // The `Int?` on `integer(forKey:)` earning its keep for a third setting.
         // `UserDefaults.integer(forKey:)` answers 0 for a key nobody wrote, and
