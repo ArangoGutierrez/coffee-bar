@@ -29,6 +29,8 @@ import Foundation
 /// timeout in `StalePolicy`, not by a transition invented here.
 public enum SessionHub {
 
+    static let terminalHistoryLimit = 256
+
     /// Design §7 caps the rendered message. It is attacker-influenced text.
     ///
     /// Counts `Character`s — Swift grapheme clusters. It bounds how LONG the
@@ -70,7 +72,7 @@ public enum SessionHub {
                              to sessions: [AgentSession],
                              now: Date) -> [AgentSession] {
         guard let newState = state(of: event.hookEventName, from: tool) else {
-            return sessions
+            return compacted(sessions)
         }
         let text = message(from: event)
 
@@ -80,14 +82,37 @@ public enum SessionHub {
         guard let index = sessions.firstIndex(where: {
             $0.tool == tool && $0.sessionID == event.sessionID
         }) else {
-            return sessions + [make(event, from: tool, message: text,
-                                    state: newState, now: now)]
+            return compacted(sessions + [make(event, from: tool, message: text,
+                                              state: newState, now: now)])
         }
 
         var updated = sessions
         updated[index] = advance(sessions[index], with: event, message: text,
                                  to: newState, now: now)
-        return updated
+        return compacted(updated)
+    }
+
+    static func compacted(_ sessions: [AgentSession]) -> [AgentSession] {
+        let terminal = sessions.indices.filter {
+            sessions[$0].state == .done || sessions[$0].state == .stale || sessions[$0].state == .failed
+        }
+        guard terminal.count > terminalHistoryLimit else { return sessions }
+
+        let retained = Set(terminal.sorted { left, right in
+            let lhs = sessions[left].stateEnteredAt
+            let rhs = sessions[right].stateEnteredAt
+            if lhs != rhs { return lhs > rhs }
+            let leftActivity = sessions[left].lastEventAt
+            let rightActivity = sessions[right].lastEventAt
+            return leftActivity == rightActivity
+                ? left > right
+                : leftActivity > rightActivity
+        }.prefix(terminalHistoryLimit))
+
+        return sessions.enumerated().compactMap { index, session in
+            let isTerminal = session.state == .done || session.state == .stale || session.state == .failed
+            return !isTerminal || retained.contains(index) ? session : nil
+        }
     }
 
     /// Design §3.1. `preCompact` maps to nothing: it is housekeeping, and it
@@ -129,7 +154,7 @@ public enum SessionHub {
     /// event cannot mint a phantom session that holds the machine awake.
     private static func state(of name: String, from tool: AgentTool) -> SessionState? {
         switch tool {
-        case .claudeCode, .codex:
+        case .claudeCode, .codex, .activityBridge:
             // One vocabulary, deliberately. Codex sends the same event names as
             // Claude Code, which is exactly why the origin cannot be read off
             // the payload — see `AgentTool.declared(byEndpoint:)`.
@@ -139,22 +164,16 @@ public enum SessionHub {
         }
     }
 
-    /// Cursor's mapping. Every case here has a recorded payload behind it.
-    ///
-    /// All four work events mean the same thing — the agent has the turn. Cursor
-    /// reports what the agent is DOING rather than whose turn it is, so there is
-    /// no finer distinction to draw and inventing one would not be measurement.
-    ///
-    /// **No case maps to an attention state, and that is a GAP rather than a
-    /// decision.** Cursor's `stop` is the event that would say the human is now
-    /// the bottleneck, and no payload for it was ever captured. A Cursor session
-    /// that finishes its turn therefore stays `.working` — holding the machine
-    /// awake — until `sessionEnd` arrives or `StalePolicy` retires it.
+    /// Cursor work events and turn signals. Cursor stop ends the agent turn;
+    /// beforeSubmitPrompt starts the next user turn. These two event names follow
+    /// the documented Cursor hook contract and have synthetic tests, not local
+    /// captured payloads.
     private static func state(for kind: CursorEventKind) -> SessionState? {
         switch kind {
         case .sessionStart: return .starting
-        case .beforeShellExecution, .afterShellExecution,
+        case .beforeSubmitPrompt, .beforeShellExecution, .afterShellExecution,
              .beforeReadFile, .afterFileEdit: return .working
+        case .stop: return .awaitingInput
         case .sessionEnd: return .done
         }
     }

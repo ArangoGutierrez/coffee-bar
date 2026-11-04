@@ -123,19 +123,22 @@ public struct HookHealthReader: HookHealthProviding {
     /// Where each tool keeps its hook file on this machine.
     public static var defaultHookFiles: [AgentTool: URL] {
         var found: [AgentTool: URL] = [:]
-        for tool in AgentTool.allCases { found[tool] = defaultURL(for: tool) }
+        for tool in AgentTool.hookTools {
+            if let url = defaultURL(for: tool) { found[tool] = url }
+        }
         return found
     }
 
     /// Design §6 fixes the Claude Code location; the other two were measured off
     /// the running tools. This is the ONLY place a home directory is resolved.
-    public static func defaultURL(for tool: AgentTool) -> URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appending(path: HookHealth.settingsPath(for: tool))
+    public static func defaultURL(for tool: AgentTool) -> URL? {
+        guard let path = HookHealth.settingsPath(for: tool) else { return nil }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: path)
     }
 
     /// Design §6 fixes the location.
-    public static var defaultSettingsURL: URL { defaultURL(for: .claudeCode) }
+    public static var defaultSettingsURL: URL { defaultURL(for: .claudeCode)! }
 
     /// Where Claude Code's settings file lives for this reader, or the design §6
     /// default when this reader does not cover Claude Code at all.
@@ -252,7 +255,7 @@ public struct HookHealthReader: HookHealthProviding {
     /// needs.
     public func statuses(advising selected: Set<AgentTool>) -> [AgentTool: HookHealthStatus] {
         var found: [AgentTool: HookHealthStatus] = [:]
-        for tool in AgentTool.allCases {
+        for tool in AgentTool.hookTools {
             found[tool] = status(for: tool, advising: selected)
         }
         return found

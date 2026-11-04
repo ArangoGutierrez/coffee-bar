@@ -22,6 +22,9 @@ import Foundation
 /// log it: a diagnostic names the STATUS, never the payload.
 public enum HookShim {
 
+    /// Maximum request body size accepted by the shim and ingest listener.
+    public static let maximumRequestBytes = 1_048_576
+
     /// Where a run with no `--tool` is attributed.
     ///
     /// `/event` is the endpoint every hook already installed posts to, and
@@ -199,6 +202,7 @@ extension AgentTool {
         case .claudeCode: return "claude-code"
         case .codex: return "codex"
         case .cursor: return "cursor"
+        case .activityBridge: return "activity"
         }
     }
 

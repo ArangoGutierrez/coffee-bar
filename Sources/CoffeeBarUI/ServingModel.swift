@@ -7,6 +7,11 @@ import CoffeeBarCore
 import CoffeeBarIngest
 import CoffeeBarPower
 
+@MainActor
+public protocol SystemSleepRequesting {
+    func requestSleep() throws
+}
+
 // `import Observation` is required: the `@Observable` macro lives there. The
 // POC got it transitively from `import SwiftUI` in the same file. This file
 // has no SwiftUI import, so it must ask for Observation directly.
@@ -21,6 +26,7 @@ import CoffeeBarPower
 public final class ServingModel {
     private let holder: any AssertionHolding
     private let reader: any PowerReadingProviding
+    private let systemSleep: (any SystemSleepRequesting)?
     private let health: any HookHealthProviding
     private let helper: any PrivilegedHelperStateProviding
     /// Where the answer to "is the registered helper the thing running lid-closed
@@ -70,7 +76,23 @@ public final class ServingModel {
     private let updates: any ReleaseManifestFetching
     private let policy: StalePolicy
     private let now: @Sendable () -> Date
+    private let monotonicNow: @Sendable () -> TimeInterval
+    private let safetyTimeout: TimeInterval
     private var controller = HoldController()
+    private var manualHoldDeadline: TimeInterval?
+    private var manualHoldPriorIntent: UserIntent?
+    @ObservationIgnored private var manualHoldTimer: Timer?
+    public private(set) var manualHoldRemaining: TimeInterval?
+    private var hasAdvisorySnapshot = false
+    private var safetyRevertsInFlight = 0
+    private var safetyRevertWaiting = false
+    private var safetyAttempt: UUID?
+    private var lastSafetyAttempt: TimeInterval?
+    private var sleepRequestAccepted = false
+    private enum SafetyCondition { case normal, floor, unknown }
+    private var safetyCondition = SafetyCondition.normal
+    public private(set) var sleepRequestError: String?
+    @ObservationIgnored var onSafetyCompletion: (@MainActor () -> Void)?
 
     /// The composition root for process demotion, or `nil` to govern nothing.
     ///
@@ -310,7 +332,7 @@ public final class ServingModel {
     /// effect. It reconciles at all because a user switching a tool off is
     /// asking for that advisory to go NOW, not at the next 30-second tick.
     public func setAdvises(_ advises: Bool, for tool: AgentTool) {
-        var chosen = Set(AgentTool.allCases.filter { self.advises($0) })
+        var chosen = Set(AgentTool.hookTools.filter { self.advises($0) })
         if advises { chosen.insert(tool) } else { chosen.remove(tool) }
         selectedAgentTools = chosen
         settings.setSelectedAgentTools(chosen)
@@ -435,7 +457,7 @@ public final class ServingModel {
     /// evidence is worth keeping, and a user who switches a tool back on gets an
     /// answer without waiting for the next read.
     public var hookAdvisory: String? {
-        let lines = AgentTool.allCases.compactMap { tool -> String? in
+        let lines = AgentTool.hookTools.compactMap { tool -> String? in
             guard advises(tool) else { return nil }
             return hookHealths[tool].flatMap { Self.advisory(for: tool, status: $0) }
         }
@@ -450,7 +472,8 @@ public final class ServingModel {
     /// was handed, because that is the file every shipping configuration reads —
     /// an injected fixture path would name a file inside this repository.
     static func advisory(for tool: AgentTool, status: HookHealthStatus) -> String? {
-        let file = "~/" + HookHealth.settingsPath(for: tool)
+        guard let path = HookHealth.settingsPath(for: tool) else { return nil }
+        let file = "~/" + path
 
         switch status {
         case .wired:
@@ -646,11 +669,16 @@ public final class ServingModel {
     /// probe, so the check did not run, and saying nothing there is
     /// indistinguishable from saying it is fine.
     nonisolated public static func staleHelperAdvisory(
-        state: PrivilegedHelperState, probeAt path: String) -> String? {
+        state: PrivilegedHelperState, probeAt path: String,
+        availability: HelperAvailability = .unavailable) -> String? {
         switch state {
         case .current, .notInstalled:
             return nil
         case .stale:
+            if availability == .registrable {
+                return "The installed probe is from an older build. Use Arm lid-closed mode "
+                    + "and approve coffee-bar in System Settings if asked."
+            }
             return "The probe at \(privilegedProbePath) is not the one in this "
                 + "build, so lid-closed mode is running an older root binary. "
                 + "Replace it with \(lidClosedInstallCommand(probeAt: path)) "
@@ -662,7 +690,7 @@ public final class ServingModel {
         }
     }
 
-    /// The line the panel and the Preferences window show about the root helper,
+    /// The detailed line the Preferences window shows about the root helper,
     /// or `nil` for no line.
     ///
     /// **Derived, not stored, so it cannot disagree with what was read.** It
@@ -705,14 +733,27 @@ public final class ServingModel {
     /// "reinstall the app" is advice about a file that is not in play. Silencing
     /// one and not the other trades one wrong paragraph for another.
     ///
-    /// **Nothing else about it changes.** On an unsigned build, and on a signed
-    /// one whose owner has never armed through the button, the `sudo` route is
-    /// the only route there is and every word of the sentence is what it was —
-    /// `withoutARegisteredHelperTheStaleAdvisoryIsWordForWordWhatItWas` holds
-    /// the whole string against a literal.
-    public func staleHelperAdvisory(probeAt path: String) -> String? {
+    /// Registrable builds can arm through the button even before registration.
+    public func staleHelperAdvisory(
+        probeAt path: String, availability: HelperAvailability = .unavailable) -> String? {
         guard !registeredHelperIsActive else { return nil }
-        return helperState.flatMap { Self.staleHelperAdvisory(state: $0, probeAt: path) }
+        return helperState.flatMap {
+            Self.staleHelperAdvisory(state: $0, probeAt: path, availability: availability)
+        }
+    }
+
+    /// A short fault for the panel; Preferences contains the recovery steps.
+    nonisolated public static func staleHelperPanelAdvisory(state: PrivilegedHelperState) -> String? {
+        switch state {
+        case .current, .notInstalled: return nil
+        case .stale: return "The installed probe is out of date. See Preferences → Power."
+        case .unverifiable: return "The installed probe cannot be verified. See Preferences → Power."
+        }
+    }
+
+    public var staleHelperPanelAdvisory: String? {
+        guard !registeredHelperIsActive else { return nil }
+        return helperState.flatMap { Self.staleHelperPanelAdvisory(state: $0) }
     }
 
     /// `path` as exactly ONE operand of a shell command line.
@@ -1136,6 +1177,7 @@ public final class ServingModel {
     /// `aReleasedHoldFromOffNamesOffNotAuto` was added. Measured, not assumed.
     /// A third sentence here needs a third check.
     public var suppressionAdvisory: String? {
+        if suppression == .unknownPower { return "Power status is unavailable. coffee-bar released its hold." }
         guard case .batteryFloor(let percent, let floor) = suppression else { return nil }
         let reason = "At \(percent)% — coffee-bar does not hold at or below \(floor)%."
 
@@ -1359,6 +1401,7 @@ public final class ServingModel {
     /// instead of waiting five real minutes.
     public init(holder: any AssertionHolding = AssertionHolder(),
                 reader: any PowerReadingProviding = SystemPowerReader(),
+                systemSleep: (any SystemSleepRequesting)? = nil,
                 health: any HookHealthProviding = HookHealthReader(),
                 helper: any PrivilegedHelperStateProviding = PrivilegedHelperReader(),
                 registration: any RegisteredHelperReporting = PrivilegedHelperClient(),
@@ -1368,11 +1411,14 @@ public final class ServingModel {
                 listener: any IngestListening = UnixSocketIngestListener(),
                 policy: StalePolicy = .standard,
                 now: @escaping @Sendable () -> Date = { Date() },
+                monotonicNow: @escaping @Sendable () -> TimeInterval = { SystemMonotonicClock.now() },
+                safetyTimeout: TimeInterval = 5,
                 governance: ProcessGovernance? = nil,
                 updates: any ReleaseManifestFetching = PublishedManifestFetcher(),
                 loginItem: any LoginItemInstalling = LoginItemInstaller()) {
         self.holder = holder
         self.reader = reader
+        self.systemSleep = systemSleep
         self.health = health
         self.helper = helper
         self.registration = registration
@@ -1382,6 +1428,8 @@ public final class ServingModel {
         self.listener = listener
         self.policy = policy
         self.now = now
+        self.monotonicNow = monotonicNow
+        self.safetyTimeout = safetyTimeout
         self.governance = governance
         self.updates = updates
         self.loginItem = loginItem
@@ -1555,9 +1603,44 @@ public final class ServingModel {
     public var intent: UserIntent {
         get { controller.intent }
         set {
+            clearManualHold(restoringIntent: false)
             controller.userToggled(to: newValue)
             refresh()
         }
+    }
+
+    /// A bounded hold for apps that cannot send task events. Power safety still applies.
+    public func startManualHold(for duration: TimeInterval = HoldController.defaultManualHoldDuration) {
+        guard duration.isFinite, duration > 0 else { return }
+        let bounded = min(duration, HoldController.maximumManualHoldDuration)
+        if manualHoldPriorIntent == nil {
+            manualHoldPriorIntent = controller.standingIntent
+        }
+        manualHoldDeadline = monotonicNow() + bounded
+        manualHoldRemaining = bounded
+        controller.userToggled(to: .serve)
+        manualHoldTimer?.invalidate()
+        let timer = Timer(timeInterval: bounded, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refresh(forceAdvisory: false) }
+        }
+        manualHoldTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+        refresh(forceAdvisory: false)
+    }
+
+    public func endManualHold() {
+        clearManualHold(restoringIntent: true)
+        refresh(forceAdvisory: false)
+    }
+
+    private func clearManualHold(restoringIntent: Bool) {
+        let prior = manualHoldPriorIntent
+        manualHoldTimer?.invalidate()
+        manualHoldTimer = nil
+        manualHoldDeadline = nil
+        manualHoldPriorIntent = nil
+        manualHoldRemaining = nil
+        if restoringIntent, let prior { controller.userToggled(to: prior) }
     }
 
     /// Bound to the panel's display control. Whether a hold covers the SCREEN
@@ -1989,8 +2072,8 @@ public final class ServingModel {
     /// that control lives, and repeating it here would put an exception in front
     /// of a user who has not been told the rule.
     static let quickStartFloorQuestion = """
-        How much battery may a hold spend? Below this charge coffee-bar stops \
-        holding the machine awake and lets it sleep.
+        At or below this charge, coffee-bar releases its wake holds and requests \
+        Mac sleep. This applies in every mode.
         """
 
     /// The agent-tools question.
@@ -2324,10 +2407,22 @@ public final class ServingModel {
     /// next event never runs at all and the Mac stays awake until the user
     /// reboots.
     public func refresh() {
+        refresh(forceAdvisory: true)
+    }
+
+    private func refresh(forceAdvisory: Bool) {
+        if let deadline = manualHoldDeadline {
+            let remaining = deadline - monotonicNow()
+            if remaining <= 0 {
+                clearManualHold(restoringIntent: true)
+            } else {
+                manualHoldRemaining = remaining
+            }
+        }
         sessions = SessionHub.expiring(sessions, now: now(), policy: policy)
 
         reading = reader.read()
-        // Re-read every time, not once in `init`. The user's recovery path is
+        // Timer ticks and user actions refresh these advisories. The user’s recovery path is
         // to paste the snippet back, and this app runs for days. It re-reads
         // every TOOL's file for the same reason, and because a user who
         // installs Cursor while the app runs must not wait for a relaunch.
@@ -2337,15 +2432,16 @@ public final class ServingModel {
         // because that user is mid-setup. An unset selection falls back to
         // `assumedAgentTools`, which is what makes a user who has never opened
         // Preferences see exactly what they saw before the key existed.
-        hookHealths = health.statuses(
-            advising: selectedAgentTools ?? Self.assumedAgentTools)
-        // Re-read every time, not once in `init`, for the reason above and one
+        if forceAdvisory || !hasAdvisorySnapshot {
+            hookHealths = health.statuses(
+                advising: selectedAgentTools ?? Self.assumedAgentTools)
+        // Re-read with the health snapshot, for the reason above and one
         // of its own: the user's recovery path here is to paste the install
         // command the advisory carries, and a state frozen at launch would keep
         // reporting an old root binary after it had been replaced. Issue #81's
         // whole point is that the app tells the user something they can act on,
         // so the advisory has to clear without a relaunch.
-        helperState = helper.state()
+            helperState = helper.state()
         // Asked on the same tick as the line above, deliberately. The two answer
         // one question between them — is the root binary this Mac runs the one
         // this build ships — and a pair sampled at different moments can be read
@@ -2356,12 +2452,13 @@ public final class ServingModel {
         //
         // Measured (#71e), it also used to be a read of this process's own
         // signature — 4.97 ms of the 5.84 ms this line held the main actor for,
-        // and this is not merely a 30-second timer: `ingest(from:_:)` below runs
-        // `refresh()` on every hook event. Issue #71h left the launchd query
+        // and this used to run on every hook event. Issue #71h left the launchd query
         // where it is and remembers the signature for the life of the process,
         // because a process cannot change its own signature and the registration
         // is exactly what CAN change — which is what #71c needed fresh.
-        registeredHelperIsActive = registration.registeredHelperIsActive()
+            registeredHelperIsActive = registration.registeredHelperIsActive()
+            hasAdvisorySnapshot = true
+        }
         // ASKED, not remembered. The bind is asynchronous, so a `start()` that
         // returned cleanly is not proof the socket is serving, and `stop()`
         // takes it away again.
@@ -2377,6 +2474,7 @@ public final class ServingModel {
                                         batteryFloorPercent: batteryFloorPercentStorage,
                                         holdDisplayAwake: holdDisplayAwakeStorage,
                                         assertionIsHeld: isServing)
+        if state.suppression != nil { clearManualHold(restoringIntent: false) }
         // Derived from the SAME array handed to `evaluate` above, on purpose.
         // Design §14 forbids a second source here: a panel that disagrees with
         // the hold decision is worse than a panel with nothing on it.
@@ -2411,9 +2509,10 @@ public final class ServingModel {
         // been weighed against the off switch and the battery floor, so this
         // line cannot pin the screen awake behind the decision's back — which
         // is the blind spot every §6.1 guard rests on.
+        reconcileSafety()
         if state.idleSleepAssertion {
             isServing = holder.acquire(displaySleep: state.displaySleepAssertion)
-        } else {
+        } else if !safetyRevertWaiting {
             holder.release()
             isServing = false
         }
@@ -2442,6 +2541,104 @@ public final class ServingModel {
             quietEverythingElse: quietEverythingElseStorage)
     }
 
+    /// Bounds helper recovery before a battery-floor sleep request.
+    /// Unknown power releases this app's assertions without requesting sleep.
+    private func reconcileSafety() {
+        guard systemSleep != nil else { return }
+        let floor = reading.source == .battery && reading.percent.map { $0 <= controller.floorInForce } == true
+        let unknown = reading.source == .unknown || (reading.source == .battery && reading.percent == nil)
+        let condition: SafetyCondition = floor ? .floor : (unknown ? .unknown : .normal)
+        if condition != safetyCondition {
+            safetyCondition = condition
+            safetyAttempt = nil
+            safetyRevertWaiting = false
+            lastSafetyAttempt = nil
+            sleepRequestAccepted = false
+        }
+        guard floor || unknown else {
+            lastSafetyAttempt = nil
+            sleepRequestAccepted = false
+            safetyAttempt = nil
+            safetyRevertWaiting = false
+            sleepRequestError = nil
+            return
+        }
+        if unknown { safetyRevertWaiting = false }
+        let time = monotonicNow()
+        if sleepRequestAccepted, let lastSafetyAttempt, time - lastSafetyAttempt < 300 { return }
+        if safetyRevertWaiting { return }
+        if let lastSafetyAttempt, time - lastSafetyAttempt < 60 { return }
+        lastSafetyAttempt = time
+        sleepRequestAccepted = false
+        let attempt = UUID()
+        safetyAttempt = attempt
+        if safetyRevertsInFlight >= 2 {
+            safetyRevertsInFlight += 1
+            finishSafetyRevert(.refused("The lid hold did not respond."), attempt: attempt, requestSleep: floor)
+            return
+        }
+        let registrationStatus = registration.safetyRegistrationStatus()
+        if case .active = registrationStatus {
+            safetyRevertsInFlight += 1
+            safetyRevertWaiting = floor
+            Task { [weak self, removal] in
+                let outcome = await removal.revert()
+                self?.finishSafetyRevert(outcome, attempt: attempt, requestSleep: floor)
+            }
+            Task { [weak self, safetyTimeout] in
+                try? await Task.sleep(for: .seconds(safetyTimeout))
+                self?.safetyRevertTimedOut(attempt: attempt)
+            }
+        } else {
+            safetyRevertsInFlight += 1
+            finishSafetyRevert(.reverted(wasArmed: false), attempt: attempt, requestSleep: floor)
+            if case .unavailable = registrationStatus {
+                sleepRequestError = [sleepRequestError, "Could not check or release the lid hold."]
+                    .compactMap { $0 }.joined(separator: " ")
+            }
+        }
+    }
+
+    public func systemDidWake() {
+        sleepRequestAccepted = false
+        lastSafetyAttempt = nil
+        refresh()
+    }
+
+    private func finishSafetyRevert(_ outcome: HelperRevertOutcome, attempt: UUID, requestSleep: Bool, timedOut: Bool = false) {
+        defer { onSafetyCompletion?() }
+        guard safetyAttempt == attempt else {
+            safetyRevertsInFlight -= 1
+            return
+        }
+        safetyRevertWaiting = false
+        lastSafetyAttempt = monotonicNow()
+        holder.release()
+        isServing = false
+        if !timedOut { safetyRevertsInFlight -= 1 }
+        safetyAttempt = nil
+        let revertError: String?
+        if case .refused(let reason) = outcome { revertError = reason } else { revertError = nil }
+        sleepRequestError = revertError
+        guard requestSleep else { return }
+        let latest = reader.read()
+        guard latest.source == .battery, let percent = latest.percent,
+              percent <= controller.floorInForce else { return }
+        do {
+            try systemSleep?.requestSleep()
+            sleepRequestAccepted = true
+            sleepRequestError = revertError
+        } catch {
+            sleepRequestError = error.localizedDescription
+        }
+    }
+
+    private func safetyRevertTimedOut(attempt: UUID) {
+        guard safetyAttempt == attempt, safetyRevertsInFlight > 0 else { return }
+        finishSafetyRevert(.refused("The lid hold did not respond."), attempt: attempt,
+                           requestSleep: true, timedOut: true)
+    }
+
     /// Applies one hook event and reconciles immediately.
     ///
     /// Immediately, not on the next tick: 30 seconds between an agent starting
@@ -2453,7 +2650,7 @@ public final class ServingModel {
     /// later cannot mint a phantom session here.
     func ingest(from tool: AgentTool, _ event: HookEvent) {
         sessions = SessionHub.apply(from: tool, event, to: sessions, now: now())
-        refresh()
+        refresh(forceAdvisory: false)
     }
 
     /// Starts the repeating refresh, so a battery crossing the floor is noticed
@@ -2653,6 +2850,10 @@ public final class ServingModel {
     private static func reason(_ suppression: HoldSuppression?,
                                stillTrueOf reading: PowerReading,
                                underFloor floor: Int) -> HoldSuppression? {
+        if suppression == .unknownPower {
+            return reading.source == .unknown || (reading.source == .battery && reading.percent == nil)
+                ? .unknownPower : nil
+        }
         guard case .batteryFloor(let measured, _) = suppression,
               reading.source == .battery,
               let percent = reading.percent,

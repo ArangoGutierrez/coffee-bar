@@ -6,6 +6,9 @@ import Darwin
 import Network
 import CoffeeBarCore
 
+@_silgen_name("flock")
+private func lockSocketFile(_ descriptor: Int32, _ operation: Int32) -> Int32
+
 public enum IngestError: Error, Equatable {
     /// `sun_path` is 104 bytes. See `/usr/include/sys/un.h`.
     case socketPathTooLong(Int)
@@ -225,6 +228,64 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
     private var listener: NWListener?
     private var activeConnections = 0
 
+    /// Keep the lock file in place and retain its lease until cancellation.
+    private final class SocketLease: @unchecked Sendable {
+        private var descriptor: Int32
+
+        init(path: String) throws {
+            let lockPath = path + ".lock"
+            let fd = Darwin.open(lockPath, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, mode_t(0o600))
+            guard fd >= 0 else { throw IngestError.socketPathBlocked(lockPath) }
+            var opened = stat()
+            var named = stat()
+            guard fstat(fd, &opened) == 0, lstat(lockPath, &named) == 0,
+                  opened.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+                  opened.st_uid == geteuid(), opened.st_nlink == 1,
+                  opened.st_mode & 0o077 == 0,
+                  opened.st_dev == named.st_dev, opened.st_ino == named.st_ino else {
+                Darwin.close(fd)
+                throw IngestError.socketPathBlocked(lockPath)
+            }
+            guard lockSocketFile(fd, LOCK_EX | LOCK_NB) == 0 else {
+                let error = errno
+                Darwin.close(fd)
+                if error == EWOULDBLOCK { throw IngestError.alreadyServing(path) }
+                throw IngestError.socketPathBlocked(lockPath)
+            }
+            descriptor = fd
+        }
+
+        deinit { release() }
+
+        func release() {
+            guard descriptor >= 0 else { return }
+            Darwin.close(descriptor)
+            descriptor = -1
+        }
+
+        private func identity(_ path: String) -> String? {
+            var node = stat()
+            guard lstat(path, &node) == 0,
+                  node.st_mode & mode_t(S_IFMT) == mode_t(S_IFSOCK) else { return nil }
+            return "\(node.st_dev):\(node.st_ino):\(node.st_birthtimespec.tv_sec):\(node.st_birthtimespec.tv_nsec)"
+        }
+
+        func ownsNode(at path: String) -> Bool {
+            guard let identity = identity(path) else { return false }
+            var bytes = [UInt8](repeating: 0, count: 256)
+            let count = pread(descriptor, &bytes, bytes.count, 0)
+            guard count > 0 else { return false }
+            return String(bytes: bytes.prefix(count), encoding: .utf8) == identity
+        }
+
+        func recordNode(at path: String) {
+            guard let identity = identity(path) else { return }
+            let bytes = Array(identity.utf8)
+            guard ftruncate(descriptor, 0) == 0 else { return }
+            _ = bytes.withUnsafeBytes { pwrite(descriptor, $0.baseAddress, $0.count, 0) }
+        }
+    }
+
     /// What the read route asks, or `nil` while nothing has been installed.
     ///
     /// Guarded by `lock` like every other field here, and READ OUT of the lock
@@ -368,6 +429,10 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
             throw IngestError.directoryUnwritable(directory)
         }
 
+        // Older versions do not take this lock. Reclaim only a socket whose
+        // generation was recorded by a listener that did take it.
+        let lease = try SocketLease(path: path)
+
         // Never take a path something else is answering on. Measured: a second
         // instance that unlinked and rebound left the first one `.ready` on an
         // unlinked inode, deaf forever and with no error to report.
@@ -379,6 +444,9 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
         case .blocked:
             throw IngestError.socketPathBlocked(path)
         case .stale:
+            if Self.nodeType(atPath: path) == mode_t(S_IFSOCK), !lease.ownsNode(at: path) {
+                throw IngestError.alreadyServing(path)
+            }
             // A force-quit leaves the node behind and the next bind would fail
             // on it. Removing a node NOTHING answers on is how every unix-socket
             // server starts.
@@ -407,8 +475,16 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
 
         let listener = try NWListener(using: parameters)
 
-        listener.stateUpdateHandler = { [weak self] state in
-            guard case .ready = state else { return }
+        listener.stateUpdateHandler = { [weak self, lease] state in
+            switch state {
+            case .cancelled, .failed:
+                lease.release()
+                return
+            case .ready:
+                lease.recordNode(at: path)
+            default:
+                return
+            }
             // The node exists only once the bind has happened.
             try? FileManager.default.setAttributes(
                 [.posixPermissions: 0o600], ofItemAtPath: path)
@@ -479,7 +555,7 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
     /// answers 400.
     private static func decode(_ body: Data, from tool: AgentTool) -> HookEvent? {
         switch tool {
-        case .claudeCode, .codex:
+        case .claudeCode, .codex, .activityBridge:
             return try? JSONDecoder().decode(HookEvent.self, from: body)
         case .cursor:
             return (try? JSONDecoder().decode(CursorHookEvent.self, from: body))?.normalised
@@ -502,7 +578,7 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
     /// Asks the node itself whether anybody is serving on it.
     ///
     /// Existence proves nothing: the node outlives the process that bound it.
-    /// A connection attempt is the only answer that distinguishes the cases.
+    /// A connection can prove a live owner, but refusal alone cannot prove death.
     private static func occupant(atPath path: String) -> Occupant {
         var isDirectory: ObjCBool = false
         if FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
@@ -555,11 +631,7 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
             //
             // `.stale` rather than `.blocked`, deliberately. `removeItem` does
             // not follow a symlink, so it takes the LINK, and a dangling link
-            // has no target left to take. A link to an unserved socket and a
-            // link to a regular file already resolve here, so all three
-            // removable link cases now follow one rule. It also RECOVERS from a
-            // planted link rather than only reporting it, and recovery here is
-            // free: a dangling link has no target to lose.
+            // has no target left to take. Recovery is free for a dangling link.
             //
             // That is a preference, not an absolute. A refusal is NOT uniquely
             // bad — a link to a directory already gives a standing refusal this
@@ -567,10 +639,12 @@ public final class UnixSocketIngestListener: IngestListening, @unchecked Sendabl
             // `.blocked` is chosen wherever recovery is not free, including a
             // delete that fails, above.
             //
-            // A live node is never reached by this branch. It answers `connect`
-            // or gives ECONNREFUSED, and it is not a symlink either way.
+            // ENOENT also describes a dangling symlink.
             return Self.nodeType(atPath: path) == mode_t(S_IFLNK) ? .stale : .absent
-        case ECONNREFUSED, ENOTSOCK: return .stale
+        case ECONNREFUSED:
+            // The target may be a live legacy socket with a full backlog.
+            return Self.nodeType(atPath: path) == mode_t(S_IFLNK) ? .live : .stale
+        case ENOTSOCK: return .stale
         default: return .live
         }
     }

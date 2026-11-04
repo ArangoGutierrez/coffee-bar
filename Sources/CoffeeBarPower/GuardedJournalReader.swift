@@ -35,6 +35,21 @@ public enum JournalRefusal: Error, Equatable {
 /// still proves something WAS armed, and it is the only evidence of why a
 /// machine stopped sleeping.
 public struct GuardedJournalReader: Sendable {
+    var transactionDirectory: URL { url.deletingLastPathComponent() }
+    var transactionOwner: uid_t { requiredOwner }
+    func validateTransactionPath() throws {
+        var ancestor = transactionDirectory
+        while !FileManager.default.fileExists(atPath: ancestor.path), ancestor.path != "/" {
+            ancestor.deleteLastPathComponent()
+        }
+        if let refusal = pathRefusal(ancestor.path) { throw refusal }
+    }
+    func journalNodeExists() throws -> Bool {
+        var info = stat()
+        if lstat(url.path, &info) == 0 { return true }
+        if errno == ENOENT { return false }
+        throw JournalRefusal.unreadablePath(path: url.path, errno: errno)
+    }
     /// The mode the privileged writer gives the journal, per SECURITY.md item
     /// 3. Checked exactly rather than as "not group-writable": 0640 is not
     /// writable by anyone else and still leaks the `armedBy` provenance — pid,

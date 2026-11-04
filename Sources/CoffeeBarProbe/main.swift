@@ -254,8 +254,8 @@ case .watchdog:
     // was sleep held, journal deleted and the daemon booted out.
     //
     // §8.2(4) is answered inside `WatchdogService`, by comparing the journal's
-    // `setAt` against `kern.boottime`. That is the question the handoff is
-    // actually asking.
+    // boot-session UUID with the current boot identity. A wall-clock change
+    // cannot turn one boot's identity into another.
     //
     // `lastHeartbeat` is nil on this path and stays nil. There is no XPC
     // channel to carry one, so supervision is TTL-only — `WatchdogService`

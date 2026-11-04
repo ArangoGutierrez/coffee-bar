@@ -26,6 +26,8 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 APP_NAME="CoffeeBar"
 VOLNAME="coffee-bar"
+HELPER_BINARY="coffee-bar-probe"
+HELPER_IDENTIFIER="com.coffeebar.probehelper"
 
 SIGN_IDENTITY="${SIGN_IDENTITY:-Developer ID Application: Carlos Eduardo Arango Gutierrez (85FN4Z37V8)}"
 NOTARIZE="${NOTARIZE:-1}"
@@ -88,8 +90,16 @@ BIN_COUNT=0
 for bin in "${APP}/Contents/MacOS"/*; do
     [ -f "${bin}" ] || die "Contents/MacOS holds no files; nothing to sign"
     echo "==> signing $(basename "${bin}")"
-    codesign --force --options runtime ${TS_FLAG} --sign "${SIGN_IDENTITY}" "${bin}" \
-        || die "cannot sign nested binary ${bin}"
+    if [ "$(basename "${bin}")" = "${HELPER_BINARY}" ]; then
+        codesign --force --options runtime ${TS_FLAG} -i "${HELPER_IDENTIFIER}" --sign "${SIGN_IDENTITY}" "${bin}" \
+            || die "cannot sign nested binary ${bin}"
+        actual_identifier="$(codesign -d --verbose=4 "${bin}" 2>&1 | sed -n 's/^Identifier=//p' || true)"
+        [ "${actual_identifier}" = "${HELPER_IDENTIFIER}" ] \
+            || die "helper identifier is ${actual_identifier}, expected ${HELPER_IDENTIFIER}"
+    else
+        codesign --force --options runtime ${TS_FLAG} --sign "${SIGN_IDENTITY}" "${bin}" \
+            || die "cannot sign nested binary ${bin}"
+    fi
     BIN_COUNT=$((BIN_COUNT + 1))
 done
 [ "${BIN_COUNT}" -ge 2 ] \

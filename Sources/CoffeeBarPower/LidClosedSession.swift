@@ -60,6 +60,8 @@ public struct PmsetDisplaySleeper: DisplaySleepForcing {
 }
 
 public enum ArmError: Error, Equatable {
+    case alreadyArmed
+    case unknownBootIdentity
     /// §8.3's abort. The panel was still lit after it was told to sleep, so the
     /// mode is refused rather than left cooking the battery.
     case displayStayedAwake
@@ -152,6 +154,15 @@ public struct ArmService: Sendable {
     /// keeps it printing this rather than argv.
     @discardableResult
     public func arm(ttlSeconds: Int) throws -> Int {
+        do {
+            try reader.validatePath()
+            return try reader.withTransaction { try armLocked(ttlSeconds: ttlSeconds) }
+        } catch let refusal as JournalRefusal {
+            throw ArmError.journalPathRefused(refusal)
+        }
+    }
+
+    private func armLocked(ttlSeconds: Int) throws -> Int {
         // THE INVARIANT this function answers for:
         //
         //   `arm` never returns success while the system holds a setting the
@@ -168,6 +179,16 @@ public struct ArmService: Sendable {
             throw ArmError.journalPathRefused(refusal)
         }
 
+        do {
+            if try reader.journalNodeExists() { throw ArmError.alreadyArmed }
+        } catch let refusal as JournalRefusal {
+            throw ArmError.journalPathRefused(refusal)
+        }
+
+        guard let bootIdentity = bootSession(), !bootIdentity.isEmpty else {
+            throw ArmError.unknownBootIdentity
+        }
+
         // Read the value to restore TO. Never assumed false (spec D6): a
         // machine that already had `disablesleep` set keeps it on revert.
         let priorValue = try power.isEnabled()
@@ -182,15 +203,8 @@ public struct ArmService: Sendable {
             // against. The wall stamp stays because a human reading `report`
             // needs a date, not a since-boot number.
             setAtMonotonic: monotonicClock(),
-            // Which boot this hold belongs to, so the daemon can tell an
-            // unclean exit from its own start without consulting a clock.
-            //
-            // `""` when the identity cannot be read. The daemon treats that as
-            // a different boot and reverts on its next tick — the same
-            // direction an unreadable `kern.boottime` used to take, and the
-            // reason the unknown is not a sentinel that could match another
-            // unknown.
-            bootSessionID: bootSession() ?? "",
+            // The watchdog uses this identity to detect a later boot.
+            bootSessionID: bootIdentity,
             ttlSeconds: ttlSeconds,
             armedBy: Self.provenance())
 
@@ -216,24 +230,8 @@ public struct ArmService: Sendable {
                 throw ArmError.displayStayedAwake
             }
 
-            // The second guard, and the general one. Deciding §8.2(4) from the
-            // MACHINE's boot rather than from this process's start removed the
-            // daemon's REASON to revert on its first tick; it did not remove
-            // its ABILITY, and nothing stops a future policy, an
-            // operator running `revert`, or a race nobody has thought of from
-            // clearing the journal in this window.
-            //
-            // So the invariant is enforced by OBSERVATION rather than by
-            // enumerating causes: read the journal back, and if it cannot be
-            // read, fail the arm and put the setting back. That converts every
-            // such race — present and future — from "held forever" into "failed
-            // arm", which the user can see and retry.
-            //
-            // Deliberately LAST, so it covers the widest window `arm` can see,
-            // including the display verification above. A launchd exec is
-            // asynchronous, so a revert landing after this point is still
-            // possible; that residue belongs to the daemon's own next tick and
-            // is recorded in the report rather than claimed as closed.
+            // The transaction serializes arm, watchdog, and revert. Read back
+            // last to detect a journal that vanished or became unreadable.
             let confirmed = (try? reader.read()) ?? nil
             guard let confirmed else {
                 throw ArmError.journalVanished
@@ -401,6 +399,13 @@ public struct WatchdogService: Sendable {
     public func evaluate(now: Date,
                          monotonicNow: TimeInterval,
                          lastHeartbeat: Date? = nil) throws -> WatchdogDecision {
+        try reader.withTransaction {
+            try evaluateLocked(now: now, monotonicNow: monotonicNow, lastHeartbeat: lastHeartbeat)
+        }
+    }
+
+    private func evaluateLocked(now: Date, monotonicNow: TimeInterval,
+                                lastHeartbeat: Date?) throws -> WatchdogDecision {
         switch readJournal() {
         case .refused:
             return .revert(.journalRefused)
@@ -491,7 +496,8 @@ public struct WatchdogService: Sendable {
                 // The SOURCE decides, not the charge. A plugged-in laptop at
                 // 15% is not draining, and reverting there would refuse to hold
                 // on a machine that is in no danger.
-                onBattery: reading.source == .battery)
+                onBattery: reading.source == .battery,
+                powerReadingKnown: reading.source != .unknown)
 
             let decision = decide(inputs, policy: policy)
             guard case .revert(let reason) = decision else { return decision }
@@ -509,6 +515,10 @@ public struct WatchdogService: Sendable {
     /// Returns whether anything was armed.
     @discardableResult
     public func revertNow() throws -> Bool {
+        try reader.withTransaction { try revertLocked() }
+    }
+
+    private func revertLocked() throws -> Bool {
         switch readJournal() {
         case .refused:
             return true          // something WAS armed, and it is now undone

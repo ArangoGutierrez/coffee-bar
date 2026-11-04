@@ -151,13 +151,17 @@ vulnerability under this policy. Report it.
 
 **It does open one socket, and it is not a network socket.** Ingest listens on a
 **unix domain socket** at `~/Library/Application Support/coffee-bar/ingest.sock`,
-mode `0600`, so Claude Code hooks can post session events. A unix domain socket
+mode `0600`, so hooks and the local activity bridge can post session events. A unix domain socket
 lives in the filesystem namespace: it has no address, no port and no route off
 this machine, and the file permissions are what stop another user reaching it.
-`IngestListener` also calls `Darwin.connect` **against that same local path**,
-once, to tell a stale socket file from one a live instance is still serving —
-without that probe a second app instance would delete the running instance's
-socket and kill ingest silently.
+`IngestListener` holds an exclusive local file lock for the listener lifetime.
+It records the socket identity in that locked file and calls `Darwin.connect`
+**against that same local path** before recovery. A full accept queue can also
+return `ECONNREFUSED`, so that error alone does not prove that an owner is dead.
+Recovery requires the lock and matching recorded node identity. An ambiguous
+legacy socket, including one reached through a symlink, is preserved and start
+is refused. Such a node can need manual recovery after its owner has stopped.
+If ownership metadata cannot be written, later recovery also fails closed.
 
 Four facts back the network claim, all checkable from a clone:
 
@@ -389,17 +393,12 @@ policy:
   shipped, a backward step landing inside a live window was invisible to every
   check the daemon made, and it extended the hold by its own size — far past the
   bound stated above, and without limit for a large enough step (#77).
-- The monotonic stamp means nothing across a reboot and never has to survive
-  one: a deadline measured on a clock that restarts at boot cannot outlive that
-  boot. **What it does not do** is make the reboot check itself clock-proof.
-  That check compares the journal's own timestamp against `kern.boottime`, and
-  both are wall-clock values — `kern.boottime` is stored as realtime, so moving
-  the clock backward moves it too while the journal's timestamp stays put. The
-  comparison then gets harder to satisfy, which suppresses a revert rather than
-  causing one. The cap above is bounded regardless; this remaining gap is
-  tracked on its own and is not claimed as closed here. Adding the stamp also
-  moved the journal's `schemaVersion` on, so a journal an older build left
-  behind is refused rather than judged against a reference it never recorded.
+- A reboot resets the monotonic clock. The watchdog compares the journal's
+  boot-session UUID with `kern.bootsessionuuid` to detect a hold from another
+  boot. A wall-clock change cannot alter that identity check. Arming refuses
+  an unreadable identity before changing power. If the watchdog cannot read
+  its own identity later, it restores the recorded setting and clears the
+  journal. An older journal with an unsupported schema is refused.
 - Supervision is **TTL-only**. There is no heartbeat channel, because there is
   no channel at all. Nothing cuts a hold short when the work finishes early, so
   the hold you ask for is what a machine you have walked away from will spend —
@@ -594,8 +593,10 @@ hold in the shipped code, and they are recorded in `docs/ROADMAP.md` under
      `0755` directory is refused; so is a `0640` file, which is unwritable by
      anyone else and still leaks the `armedBy` provenance to every account on
      the machine.
-2. The helper refuses to act on a journal it did not write, or one whose
-   ownership or mode does not match expectation, and quarantines it instead.
+2. The helper refuses a journal whose ownership or mode does not match
+   expectation. With a safe transaction lock, it quarantines the journal and
+   restores the safe value described below. If the directory or lock is unsafe,
+   it preserves the journal, reports the fault, and requires path repair.
 3. The privileged side creates the directory and the file with explicit modes
    (`0700` and `0600`). Neither is left to whichever process created the path
    first.
@@ -626,8 +627,8 @@ code you are reading, that is a vulnerability. Report it.
 
 #### What refusing a journal costs you
 
-A journal that fails these checks is refused, and refusing it has a price you
-should be able to find before you meet it. The privileged side **discards the
+A journal that fails these checks is refused. If the path permits a safe
+transaction lock, the privileged side **discards the
 journal's `priorValue`** — untrusted data cannot be allowed to name the value a
 root process restores — and forces `SleepDisabled` to `false` instead.
 
@@ -641,6 +642,14 @@ that launchd captures, which is not somewhere a user looks.
 The refused journal is quarantined rather than deleted. It still proves
 something was armed, and it is the only evidence of why a machine stopped
 sleeping, so it is renamed and left for you to find.
+
+If the directory or transaction lock is unsafe, recovery cannot run under the
+same lock as arming. The helper then leaves both the journal and global power
+setting unchanged and reports the fault. Repair is required before further lid
+changes. This can leave a previous lid hold active. A secure `0755` journal
+directory permits locked refusal recovery; a writable `0777` directory does
+not. Coffee Bar still releases its own wake assertions and requests sleep at
+the battery floor, but macOS can refuse that request.
 
 ## Things that are not vulnerabilities
 

@@ -65,7 +65,7 @@ extension SessionHub {
     public static func expiring(_ sessions: [AgentSession],
                                 now: Date,
                                 policy: StalePolicy = .standard) -> [AgentSession] {
-        sessions.map { session in
+        let updated = sessions.map { session in
             guard let timeout = policy.timeout(for: session.state),
                   // `>=` so that exactly the timeout retires the session. Both
                   // sides of this boundary are guarded by tests: M1 shipped two
@@ -98,5 +98,6 @@ extension SessionHub {
                 attentionSince: nil,
                 turnCount: session.turnCount)
         }
+        return compacted(updated)
     }
 }

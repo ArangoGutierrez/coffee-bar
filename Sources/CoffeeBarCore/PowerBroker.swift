@@ -134,7 +134,12 @@ public enum PowerBroker {
 
         // §8.1: the battery bullet carries no lid-closed qualifier, unlike
         // three of its four siblings, so it governs the plain assertion too.
-        // A nil reading never suppresses: a desktop has no battery.
+        // A desktop on AC has no battery percentage. A battery without a
+        // percentage, or an unknown source, cannot safely keep a hold.
+        if inputs.powerSource == .unknown ||
+            (inputs.powerSource == .battery && inputs.batteryPercent == nil) {
+            return DesiredPowerState(idleSleepAssertion: false, suppression: .unknownPower)
+        }
         if inputs.powerSource == .battery,
            let percent = inputs.batteryPercent,
            percent <= inputs.batteryFloorPercent {

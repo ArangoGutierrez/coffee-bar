@@ -8,9 +8,9 @@
 
 A macOS menu-bar app that binds the sleep assertion to agent session state.
 
-Your Mac stays awake while a coding agent is working, and sleeps the moment the
-agent is waiting on **you**. The screen still sleeps on its normal schedule —
-that is the difference from `caffeinate -d`.
+Coffee Bar keeps your Mac awake while a coding agent is working. When the agent
+waits for **you**, it releases its hold so macOS can apply its sleep policy.
+The screen still sleeps on its normal schedule.
 
 <!--
   RELEASE STATUS lives in exactly one place: the line below. Every other
@@ -28,8 +28,8 @@ See [Building](docs/BUILDING.md).
 ## Quick start
 
 [**docs/QUICKSTART.md**](docs/QUICKSTART.md) — install it, wire the Claude Code
-hooks, and check it is listening. coffee-bar does nothing until those hooks
-exist; it reads session state from agent hooks and from nothing else.
+hooks, and check it is listening. Automatic task detection needs hooks or the
+local activity bridge. A timed manual hold is available for other apps.
 
 ## What it does
 
@@ -47,8 +47,16 @@ exist; it reads session state from agent hooks and from nothing else.
 - Shows how many sessions are working, and which ones are waiting on you.
 - Retires a session whose agent crashed, so a dead process cannot pin the
   machine awake forever.
-- A Serving switch with Off, Auto and On. **Off is an absolute veto.**
-- A battery floor: at or below 15% on battery, it does not hold.
+- A Serving switch with Off, Auto and On. Off prevents a wake hold.
+- A 30-minute manual hold for apps without task hooks.
+- A battery floor: at or below 15% on battery, it releases its holds, asks the
+  installed helper to restore its lid setting, and requests Mac sleep. This
+  safety action applies in every Serving position, even if other apps hold
+  wake assertions. macOS can refuse the request; the panel reports failures.
+- Missing battery data releases Coffee Bar's holds until valid data returns.
+- Native hook setup for Claude Code, Codex CLI, and Cursor. ChatGPT, Claude
+  desktop, and cmux need a launcher that sends activity events or a manual hold;
+  opening an app alone does not show that an agent is working.
 - Asks what it needs to know the first time it runs: whether to hold the
   display, where to put the battery floor, and which agent tools to listen for.
 - Opens at login once you ask it to, and installs nothing until you do.

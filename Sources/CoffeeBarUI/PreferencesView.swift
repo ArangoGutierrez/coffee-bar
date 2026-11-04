@@ -459,25 +459,23 @@ public struct PreferencesView: View {
                 // advisory that never clears is a permanent complaint about a
                 // Mac that is fine.
                 //
-                // The panel carries the same line, and it is repeated rather
-                // than moved for the reason `hookAdvisory` below is: the panel
-                // is where the user notices, and this window is where the
-                // command to fix it already lives.
+                // The panel reports a short fault. This window gives recovery
+                // steps for the capability of the running build.
                 //
                 // Rendered verbatim from the model with no text built here, and
                 // `Bundle.main.executableURL` read here rather than in the
                 // model — both for the reasons the summary above states.
                 if let advisory = model.staleHelperAdvisory(
                     probeAt: ServingModel.probePath(
-                        besideExecutable: Bundle.main.executableURL)) {
+                        besideExecutable: Bundle.main.executableURL),
+                    availability: helperAvailability) {
                     AdvisoryRow(line: advisory)
                         // The one advisory whose sentence carries a command
                         // meant to be pasted into a root shell. Chained here
                         // rather than put inside `AdvisoryRow` because the other
                         // advisories carry nothing worth selecting;
                         // `.textSelection` reaches the Text through the
-                        // Environment. The panel's copy of this line does the
-                        // same, at its own call site, for the same reason.
+                        // Environment.
                         .textSelection(.enabled)
                 }
 
@@ -602,7 +600,7 @@ public struct PreferencesView: View {
                 // would arrive uncopyable with every check still green.
                 // `theCopyActionOffersEveryToolTheCheckerCanAdviseAbout` reads
                 // this loop out of `body`.
-                ForEach(AgentTool.allCases, id: \.self) { tool in
+                ForEach(AgentTool.hookTools, id: \.self) { tool in
                     HStack {
                         // THE ANSWER TO THE QUESTION coffee-bar used to guess at
                         // (issue #51). Before this, the product decided which
@@ -627,7 +625,7 @@ public struct PreferencesView: View {
                         // the three.
                         Toggle(isOn: Binding(get: { model.advises(tool) },
                                              set: { model.setAdvises($0, for: tool) })) {
-                            Text("~/" + HookHealth.settingsPath(for: tool))
+                            Text("~/" + (HookHealth.settingsPath(for: tool) ?? ""))
                                 .font(.caption)
                                 .monospaced()
                         }
@@ -659,9 +657,9 @@ public struct PreferencesView: View {
                         // enclosing directory, which is the right answer for a
                         // user who has not set that tool up yet.
                         Button("Reveal") {
-                            NSWorkspace.shared.activateFileViewerSelecting(
-                                [HookHealthReader.defaultURL(for: tool)]
-                            )
+                            if let url = HookHealthReader.defaultURL(for: tool) {
+                                NSWorkspace.shared.activateFileViewerSelecting([url])
+                            }
                         }
                     }
                 }
