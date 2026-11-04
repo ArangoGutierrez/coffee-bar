@@ -93,6 +93,8 @@ public final class ServingModel {
     private var safetyCondition = SafetyCondition.normal
     public private(set) var sleepRequestError: String?
     @ObservationIgnored var onSafetyCompletion: (@MainActor () -> Void)?
+    /// Tests can hold the deadline pending; nil uses the real timeout.
+    @ObservationIgnored var safetyTimeoutWait: (@Sendable () async -> Void)?
 
     /// The composition root for process demotion, or `nil` to govern nothing.
     ///
@@ -2585,8 +2587,12 @@ public final class ServingModel {
                 let outcome = await removal.revert()
                 self?.finishSafetyRevert(outcome, attempt: attempt, requestSleep: floor)
             }
-            Task { [weak self, safetyTimeout] in
-                try? await Task.sleep(for: .seconds(safetyTimeout))
+            Task { [weak self, safetyTimeout, safetyTimeoutWait] in
+                if let safetyTimeoutWait {
+                    await safetyTimeoutWait()
+                } else {
+                    try? await Task.sleep(for: .seconds(safetyTimeout))
+                }
                 self?.safetyRevertTimedOut(attempt: attempt)
             }
         } else {
