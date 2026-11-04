@@ -176,6 +176,7 @@ private func vocabulary(of tool: AgentTool) -> [String] {
     switch tool {
     case .claudeCode, .codex: return HookEventKind.allCases.map(\.rawValue)
     case .cursor: return CursorEventKind.allCases.map(\.rawValue)
+    case .activityBridge: return []
     }
 }
 
@@ -217,13 +218,14 @@ func everyHookEventIsEitherRequiredOrDeliberatelyExcluded(_ tool: AgentTool) thr
 /// their tool send. Named bug this catches: an event copied from one tool's list
 /// into another's because the vocabulary looks the same. `PermissionDenied` is
 /// exactly that trap — it is real for Claude Code and unrecorded for Codex.
-@Test(arguments: AgentTool.allCases)
+@Test(arguments: AgentTool.hookTools)
 func everyRequiredEventHasARecordedPayloadForThatTool(_ tool: AgentTool) throws {
     let corpus: String
     switch tool {
     case .claudeCode: corpus = "claude-hooks"
     case .codex: corpus = "codex-hooks"
     case .cursor: corpus = "cursor-hooks"
+    case .activityBridge: corpus = "claude-hooks" // Excluded by hookTools.
     }
     let directory = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
@@ -247,8 +249,10 @@ func everyRequiredEventHasARecordedPayloadForThatTool(_ tool: AgentTool) throws 
     }
 
     let required = try #require(HookHealth.requiredEvents(for: tool))
+    let documentedCursorSignals: Set<String> = ["beforeSubmitPrompt", "stop"]
     for event in required {
-        #expect(recorded.contains(event),
+        #expect(recorded.contains(event)
+                || (tool == .cursor && documentedCursorSignals.contains(event)),
                 "\(tool.rawValue) requires \(event), but no payload for it exists in \(directory.lastPathComponent). Recorded: \(recorded.sorted())")
     }
 }
@@ -269,7 +273,7 @@ func everyRequiredEventHasARecordedPayloadForThatTool(_ tool: AgentTool) throws 
     //
     // Sorted matters because `status(ofSettings:)` filters the array and a
     // filter preserves order, so the panel's line rests on the source list.
-    for tool in AgentTool.allCases {
+    for tool in AgentTool.hookTools {
         if let events = HookHealth.requiredEvents(for: tool) {
             #expect(!events.isEmpty, "\(tool.rawValue) has an advisory that asks for nothing")
             #expect(events == events.sorted(), "\(tool.rawValue)'s advisory is not sorted")

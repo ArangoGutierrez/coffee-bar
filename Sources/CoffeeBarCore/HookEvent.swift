@@ -13,14 +13,14 @@ import Foundation
 /// exact names under the `hook_event_name` key, which is why one enum and one
 /// decoder serve both. It is also why neither the names nor the payload can say
 /// which of the two sent it — see `AgentTool.declared(byEndpoint:)`. Cursor uses
-/// a different vocabulary and has its own enum, `CursorEventKind`.
+/// a different vocabulary and has its own enum, `CursorEventKind`. The generic
+/// bridge accepts this vocabulary as a caller contract; it does not claim native
+/// app support.
 ///
-/// Seven of the eight have a recorded payload. Six are in
-/// `Tests/Fixtures/claude-hooks/`, including `sessionStart` and `sessionEnd`: a
-/// later capture crossed a real session boundary and closed the gap design §3.2
-/// recorded. `userPromptSubmit` is recorded in `Tests/Fixtures/codex-hooks/`.
-/// `preCompact` is the one with no payload behind it. Write no transition
-/// against an event until a real payload lands in one of those directories.
+/// Seven of the eight have recorded payloads: six in
+/// `Tests/Fixtures/claude-hooks/` and `userPromptSubmit` in
+/// `Tests/Fixtures/codex-hooks/`. The generic activity bridge uses this
+/// vocabulary as a caller contract; its events are not native captures.
 public enum HookEventKind: String, Sendable, CaseIterable {
     case sessionStart = "SessionStart"
 
@@ -109,27 +109,20 @@ public struct HookEvent: Codable, Equatable, Sendable {
 
 // MARK: - Cursor, the second envelope
 
-/// The Cursor hook events with a recorded payload.
+/// The Cursor hook event names used by the adapter.
 ///
-/// Raw values are pinned to literals for the same reason `HookEventKind` pins
-/// its own: renaming a case must not silently stop matching what Cursor sends.
-///
-/// **Four real Cursor events are deliberately absent** — `beforeSubmitPrompt`,
-/// `stop`, `beforeMCPExecution` and `preCompact`. Issue #10a could not reach any
-/// of them headlessly, so no payload exists for them. Leaving out the case is
-/// stronger than adding one that maps to nil: a transition cannot be written for
-/// a name this type cannot express.
-///
-/// `stop` is the costly absence. It is the event that would say the human is now
-/// the bottleneck, so without it a Cursor session that finishes its turn stays
-/// `.working` until `sessionEnd` or the stale timeout.
-/// `noRecordedCursorEventReachesAnAttentionState` pins that gap.
+/// Six names have recorded payloads in the local fixture set. `stop` and
+/// `beforeSubmitPrompt` follow the documented event contract and have synthetic
+/// transition tests, not local captures. `beforeMCPExecution` and `preCompact`
+/// remain absent because neither has a local payload or mapped transition.
 public enum CursorEventKind: String, Sendable, CaseIterable {
     case sessionStart = "sessionStart"
     case beforeShellExecution = "beforeShellExecution"
     case afterShellExecution = "afterShellExecution"
     case beforeReadFile = "beforeReadFile"
     case afterFileEdit = "afterFileEdit"
+    case beforeSubmitPrompt = "beforeSubmitPrompt"
+    case stop = "stop"
     case sessionEnd = "sessionEnd"
 }
 

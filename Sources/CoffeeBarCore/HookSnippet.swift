@@ -133,6 +133,7 @@ public enum HookSnippet {
         switch tool {
         case .claudeCode, .codex: return false
         case .cursor: return true
+        case .activityBridge: return false
         }
     }
 

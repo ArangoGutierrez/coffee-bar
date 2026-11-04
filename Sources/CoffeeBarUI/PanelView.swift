@@ -132,7 +132,7 @@ public struct PanelView: View {
     // The advisory treatment is `AdvisoryRow`, in its own file, and the reasons
     // it moved there are on the type. It was private to this view, which is
     // exactly why issue #30 shipped with a fifth advisory still painted: the
-    // Preferences window renders the same `staleHelperAdvisory` sentence, could
+    // Preferences window renders its detailed helper advice, could
     // not reach this treatment, and wrote its own in the pigment #30 removed.
     //
     // PLACEMENT stays here and deliberately so. Each advisory sits directly
@@ -176,6 +176,14 @@ public struct PanelView: View {
             // controls the brand doc assigns to `action`, which is web-only.
             .tint(brand(.state))
 
+            if let remaining = model.manualHoldRemaining {
+                Button("End manual hold (\(Int(ceil(remaining / 60))) min)") {
+                    model.endManualHold()
+                }
+            } else {
+                Button("Hold for 30 minutes") { model.startManualHold() }
+            }
+
             // What is ACTUALLY held, right under the control that asked for it.
             // The user has to be able to see that Auto is holding right now, or
             // is not — the control says what was asked for and this line says
@@ -217,6 +225,9 @@ public struct PanelView: View {
             // and are asserted there.
             if let line = model.suppressionAdvisory {
                 AdvisoryRow(line: line)
+            }
+            if let error = model.sleepRequestError {
+                AdvisoryRow(line: "Sleep safety: \(error)")
             }
 
             // Beside the serving state rather than in a footer, because under
@@ -264,28 +275,9 @@ public struct PanelView: View {
             // asserting on rendered AppKit text, so a sentence composed here
             // would be a sentence no check reads.
             //
-            // `Bundle.main.executableURL` is read HERE and the model stays pure,
-            // the same split `versionLine(from: Bundle.main.infoDictionary)`
-            // uses below. The probe is this app's neighbour in `Contents/MacOS`,
-            // so the running bundle is the only thing that knows the path — a
-            // literal would be right for a disk-image install and wrong for
-            // Homebrew, for a `swift build` tree, and for a copy on the Desktop,
-            // and the command in this sentence is meant to be pasted into a root
-            // shell.
-            //
-            // Silent on a machine whose helper is current or was never armed.
-            if let line = model.staleHelperAdvisory(
-                probeAt: ServingModel.probePath(
-                    besideExecutable: Bundle.main.executableURL)) {
+            // The panel points to the detailed recovery steps in Preferences.
+            if let line = model.staleHelperPanelAdvisory {
                 AdvisoryRow(line: line)
-                    // The one advisory whose sentence carries a command meant to
-                    // be pasted into a root shell. Chained here rather than put
-                    // in `AdvisoryRow` because the other three carry nothing
-                    // worth selecting; `.textSelection` reaches the Text through
-                    // the Environment. The Preferences window's copy of this
-                    // line does the same, at its own call site, for the same
-                    // reason.
-                    .textSelection(.enabled)
             }
 
             // What is holding the machine awake, right under the line that says

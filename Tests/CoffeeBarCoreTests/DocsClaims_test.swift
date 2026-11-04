@@ -621,6 +621,8 @@ func theProseHookCountMatchesTheRequiredEventCount(_ name: String) throws {
 private let productConstants: [String: Double] = [
     "workingTimeout": StalePolicy.standard.workingTimeout,
     "blockedTimeout": StalePolicy.standard.blockedTimeout,
+    "HoldController.defaultManualHoldDuration": HoldController.defaultManualHoldDuration,
+    "HoldController.maximumManualHoldDuration": HoldController.maximumManualHoldDuration,
     "JournalRecord.maxTTLSeconds": Double(JournalRecord.maxTTLSeconds),
 ]
 

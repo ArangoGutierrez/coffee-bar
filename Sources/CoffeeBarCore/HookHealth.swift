@@ -86,14 +86,14 @@ public enum HookHealth {
             return ["PostToolUse", "PreToolUse", "SessionStart", "Stop",
                     "UserPromptSubmit"]
         case .cursor:
-            // Cursor's own vocabulary, not a translation of Claude Code's.
-            // `sessionEnd` is left out for the same reason `SessionEnd` is.
-            //
-            // Cursor's `stop` is absent because no payload for it exists, not
-            // because it would be unwanted — it is the one event that would tell
-            // the panel a Cursor session is waiting on the human.
+            // Cursor's own vocabulary. The six-event local capture does not
+            // contain these two documented turn signals, so synthetic tests
+            // cover them separately from the recorded payload oracle.
             return ["afterFileEdit", "afterShellExecution", "beforeReadFile",
-                    "beforeShellExecution", "sessionStart"]
+                    "beforeShellExecution", "beforeSubmitPrompt", "sessionStart",
+                    "stop"]
+        case .activityBridge:
+            return nil
         }
     }
 
@@ -119,11 +119,12 @@ public enum HookHealth {
     ///
     /// Design §6 fixes the Claude Code location. The other two were read off the
     /// running tools.
-    public static func settingsPath(for tool: AgentTool) -> String {
+    public static func settingsPath(for tool: AgentTool) -> String? {
         switch tool {
         case .claudeCode: return ".claude/settings.json"
         case .codex: return ".codex/hooks.json"
         case .cursor: return ".cursor/hooks.json"
+        case .activityBridge: return nil
         }
     }
 
@@ -243,6 +244,7 @@ public enum HookHealth {
         switch tool {
         case .claudeCode, .codex: return .nested
         case .cursor: return .flat
+        case .activityBridge: return .nested
         }
     }
 

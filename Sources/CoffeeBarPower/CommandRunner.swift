@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import Foundation
+import Darwin
 
 public struct CommandResult: Equatable, Sendable {
     public let exitCode: Int32
@@ -38,6 +39,9 @@ public enum CommandError: Error, Equatable {
     /// caller that is out of descriptors needs to hear about it rather than
     /// receive quietly corrupted output.
     case descriptorUnavailable(errno: Int32)
+
+    /// A pipe could not be configured or read completely.
+    case pipeReadFailed(errno: Int32)
 }
 
 public protocol CommandRunning: Sendable {
@@ -104,7 +108,11 @@ public struct SystemCommandRunner: CommandRunning {
             try? err.fileHandleForReading.close()
             try? err.fileHandleForWriting.close()
         }
+        let completion = DispatchGroup()
+        completion.enter()
+        process.terminationHandler = { _ in completion.leave() }
         try process.run()
+        let deadline = DispatchTime.now() + bound
 
         // Both pipes are drained concurrently. Reading stdout to EOF first and
         // stderr only afterwards deadlocks the moment a child fills the 64 KB
@@ -113,7 +121,7 @@ public struct SystemCommandRunner: CommandRunning {
         // The later probe spikes shell out to commands that are more than
         // capable of a megabyte of output, so this is not hypothetical.
         let sink = OutputSink()
-        let group = DispatchGroup()
+        let readers = DispatchGroup()
         // Each reader gets its own copy of the pipe's read end, and BOTH are
         // taken before either reader starts: a failure here then leaves
         // nothing already parked on a thread to reason about. `errno` is
@@ -130,29 +138,25 @@ public struct SystemCommandRunner: CommandRunning {
             throw CommandError.descriptorUnavailable(
                 errno: outFD < 0 ? outErrno : errErrno)
         }
-        Self.drain(outFD, into: sink, isStdout: true, group: group)
-        Self.drain(errFD, into: sink, isStdout: false, group: group)
-        // Waiting on the drain BEFORE `waitUntilExit()` is the ordering the
-        // comment above is about; the bound goes on the drain wait because
-        // that is the one that can block indefinitely.
-        //
-        // What it bounds is subtler than a slow child: EOF arrives when the
-        // last HOLDER of the write end closes it, and that need not be the
-        // child. A child that exits immediately having backgrounded
-        // `( sleep 20; … ) &` leaves the grandchild holding the pipes, and the
-        // drain then waits on the grandchild — measured at 12.35 s for a child
-        // that had already exited, with the grandchild's late bytes folded
-        // into stdout as if the child had produced them.
-        guard group.wait(timeout: .now() + bound) == .success else {
+        Self.drain(outFD, into: sink, isStdout: true, group: readers,
+                   completion: completion, deadline: deadline)
+        Self.drain(errFD, into: sink, isStdout: false, group: readers,
+                   completion: completion, deadline: deadline)
+        // Both process exit and pipe EOF must occur before the deadline. A
+        // child can close its pipes before exit, or leave a descendant holding
+        // them after exit; neither event alone proves the command is complete.
+        guard completion.wait(timeout: deadline) == .success, !sink.timedOut else {
             // Terminate what can be terminated, then abandon the read rather
             // than block on it — waiting is precisely the hang being bounded,
             // and the grandchild will not be reached by this signal anyway.
-            // The drain threads stay parked on their own dup'd descriptors
-            // until whoever holds the write end lets go.
             if process.isRunning { process.terminate() }
+            // Readers own their descriptors and observe the same deadline.
+            // Wait briefly for them to close, without extending the bound
+            // indefinitely if a reader thread cannot be scheduled.
+            _ = readers.wait(timeout: .now() + 1)
             throw CommandError.timedOut(after: bound)
         }
-        process.waitUntilExit()
+        if let error = sink.readError { throw CommandError.pipeReadFailed(errno: error) }
         return CommandResult(
             exitCode: process.terminationStatus,
             stdout: sink.stdout,
@@ -175,7 +179,7 @@ public struct SystemCommandRunner: CommandRunning {
         return clamped.isFinite ? clamped : defaultTimeout
     }
 
-    /// Reads one descriptor to EOF on a thread of its own, then closes it. The
+    /// Reads one descriptor to EOF or the deadline on its own thread. The
     /// descriptor is passed as an `Int32` rather than a `FileHandle` because
     /// the pipe's handle is not `Sendable` under the v6 language mode.
     ///
@@ -196,21 +200,45 @@ public struct SystemCommandRunner: CommandRunning {
     /// inside the closure would let `wait` return before the reader started.
     ///
     /// Ownership is the point: the caller hands over a `dup` of the pipe's
-    /// read end, never the pipe's own. On the timeout path `run` returns while
-    /// this read is still blocked on a grandchild that inherited the pipe, and
-    /// closes the pipe's descriptors as it goes. Closing a descriptor another
-    /// thread is sitting in `read(2)` on does not unblock that thread, and the
-    /// number can then be handed to the next `open` — at which point the
-    /// parked read would steal bytes from an unrelated file.
+    /// read end, never the pipe's own. Nonblocking reads and bounded `poll`
+    /// let the owning thread close its descriptor even when a descendant keeps
+    /// the write end open. No other thread closes or reuses that descriptor.
     private static func drain(_ descriptor: Int32, into sink: OutputSink,
-                              isStdout: Bool, group: DispatchGroup) {
+                              isStdout: Bool, group: DispatchGroup,
+                              completion: DispatchGroup, deadline: DispatchTime) {
         group.enter()
+        completion.enter()
         Thread.detachNewThread {
-            defer { group.leave() }
-            let handle = FileHandle(fileDescriptor: descriptor,
-                                    closeOnDealloc: false)
-            sink.append(handle.readDataToEndOfFile(), isStdout: isStdout)
-            close(descriptor)
+            defer { close(descriptor); group.leave(); completion.leave() }
+            let flags = fcntl(descriptor, F_GETFL)
+            guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0 else {
+                sink.recordError(errno); return
+            }
+            var buffer = [UInt8](repeating: 0, count: 16_384)
+            while DispatchTime.now() < deadline {
+                var item = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+                let now = DispatchTime.now().uptimeNanoseconds
+                let end = deadline.uptimeNanoseconds
+                guard now < end else { sink.markTimedOut(); return }
+                let milliseconds = Int32(min(100, max(1, (end - now) / 1_000_000)))
+                let ready = poll(&item, 1, milliseconds)
+                if ready < 0 {
+                    if errno == EINTR { continue }
+                    sink.recordError(errno)
+                    return
+                }
+                if ready == 0 { continue }
+                let count = read(descriptor, &buffer, buffer.count)
+                if count > 0 {
+                    sink.append(Data(buffer.prefix(count)), isStdout: isStdout)
+                } else if count == 0 {
+                    return
+                } else if errno != EINTR && errno != EAGAIN {
+                    sink.recordError(errno)
+                    return
+                }
+            }
+            sink.markTimedOut()
         }
     }
 }
@@ -222,6 +250,28 @@ private final class OutputSink: @unchecked Sendable {
     private let lock = NSLock()
     private var outBuffer = Data()
     private var errBuffer = Data()
+    private var expired = false
+    private var errorCode: Int32?
+
+    func recordError(_ code: Int32) {
+        lock.lock(); defer { lock.unlock() }
+        if errorCode == nil { errorCode = code }
+    }
+
+    var readError: Int32? {
+        lock.lock(); defer { lock.unlock() }
+        return errorCode
+    }
+
+    func markTimedOut() {
+        lock.lock(); defer { lock.unlock() }
+        expired = true
+    }
+
+    var timedOut: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return expired
+    }
 
     func append(_ data: Data, isStdout: Bool) {
         lock.lock()

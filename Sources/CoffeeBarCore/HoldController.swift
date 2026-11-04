@@ -37,6 +37,8 @@ public enum ServeCancellation: Equatable, Sendable {
 /// position they were on rather than to `.stop` — see `evaluate` for both
 /// halves, which are separate decisions.
 public struct HoldController: Equatable, Sendable {
+    public static let defaultManualHoldDuration: TimeInterval = 1_800
+    public static let maximumManualHoldDuration: TimeInterval = 86_400
     public private(set) var intent: UserIntent
     public private(set) var lastSuppression: HoldSuppression?
 
@@ -169,6 +171,9 @@ public struct HoldController: Equatable, Sendable {
     ///
     /// Private, so a check can only reach it through behaviour.
     private var standing: UserIntent
+
+    /// The Off or Auto position restored when a temporary On request ends.
+    public var standingIntent: UserIntent { standing }
 
     /// `.auto` by default: a fresh install follows the agent sessions until
     /// the user says otherwise.

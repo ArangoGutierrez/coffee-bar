@@ -80,6 +80,7 @@ import Foundation
         .claudeCode: "POST /event HTTP/1.1",
         .codex: "POST /event/codex HTTP/1.1",
         .cursor: "POST /event/cursor HTTP/1.1",
+        .activityBridge: "POST /event/activity HTTP/1.1",
     ]
     #expect(expected.count == AgentTool.allCases.count,
             "a tool has no expected request line here; the loop below would skip it")

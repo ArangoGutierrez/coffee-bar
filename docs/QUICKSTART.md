@@ -307,6 +307,51 @@ where it actually is, and this page cannot.
 [How coffee-bar works](https://arangogutierrez.github.io/coffee-bar/docs.html)
 explains both routes in full.
 
+## Generic activity bridge
+
+Use `/event/activity` when your own launcher or automation can report agent
+activity. This is a generic event interface. It does not install native hooks
+for Claude Desktop, ChatGPT, cmux, or another app. Native setup and health
+checks remain limited to Claude Code, Codex CLI, and Cursor.
+
+Send metadata only. Keep one stable `session_id` from start to end. These
+examples send a start, work, wait, and end signal to the local socket:
+
+```sh
+SOCKET="$HOME/Library/Application Support/coffee-bar/ingest.sock"
+SID="my-stable-session-id"
+
+curl --silent --show-error --unix-socket "$SOCKET" -X POST \
+  -H 'Content-Type: application/json' \
+  --data '{"hook_event_name":"SessionStart","session_id":"'"$SID"'"}' \
+  http://localhost/event/activity
+
+curl --silent --show-error --unix-socket "$SOCKET" -X POST \
+  -H 'Content-Type: application/json' \
+  --data '{"hook_event_name":"PreToolUse","session_id":"'"$SID"'"}' \
+  http://localhost/event/activity
+
+curl --silent --show-error --unix-socket "$SOCKET" -X POST \
+  -H 'Content-Type: application/json' \
+  --data '{"hook_event_name":"Stop","session_id":"'"$SID"'"}' \
+  http://localhost/event/activity
+
+curl --silent --show-error --unix-socket "$SOCKET" -X POST \
+  -H 'Content-Type: application/json' \
+  --data '{"hook_event_name":"SessionEnd","session_id":"'"$SID"'"}' \
+  http://localhost/event/activity
+```
+
+The event names mean session starting, active work, waiting for input, and done.
+The bridge stores the session ID and optional working directory. Do not send
+prompt text, replies, file contents, commands, or other private content.
+
+If an app cannot send task events, select **Hold for 30 minutes** in the panel.
+The hold ends automatically and restores the previous Off or Auto position.
+Select **End manual hold** to end it sooner. A mode change or a power safety
+condition cancels the timer. Valid battery data does not restart a cancelled
+manual hold. Auto can resume when valid data and an active task are present.
+
 ## Where to look in the UI
 
 coffee-bar has no Dock icon and opens no window. It is a menu-bar app, so after
@@ -363,7 +408,13 @@ frontmost.
 | Arm lid-closed mode | Preferences | Whether the Mac may stay awake with the lid shut. Signed builds only. |
 
 The Battery floor control ships at 15%.
-On battery, coffee-bar does not hold at or below 15%.
+On battery, coffee-bar does not hold at or below 15%. It asks the helper to
+restore Coffee Bar's lid setting, then requests Mac sleep. This action applies
+in Off, Auto, and On, even if another app has a wake assertion. Save work before
+testing this behavior. macOS can refuse sleep; the panel reports the failure
+and Coffee Bar retries. Missing battery data releases holds without requesting
+sleep. A failed helper call has a bounded wait and does not block the sleep
+request indefinitely.
 Move it up if you want the machine to sleep sooner, or down if you are beside a
 charger. The floor governs every Serving position, including Auto, and it
 outranks the Display control — a screen held below the floor drains the battery

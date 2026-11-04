@@ -176,6 +176,7 @@ private let expectedAppLayerEntries = [
     "Sources/CoffeeBarUI/QuickStartView.swift",
     "Sources/CoffeeBarUI/ServingModel.swift",
     "Sources/CoffeeBarUI/SleepHoldReader.swift",
+    "Sources/CoffeeBarUI/SystemSleepRequester.swift",
     "Sources/CoffeeBarUI/UpdateCheck.swift",
     "Sources/CoffeeBarUI/UpdateChecker.swift",
 ]
@@ -2174,8 +2175,8 @@ private func httpsAddresses(in code: String) -> [String] {
     // §5.4 forbids asserting on rendered AppKit text, so no check in this
     // package can watch either surface draw a line.
     //
-    // LIMIT, stated rather than hidden: this proves each view NAMES the property
-    // in CODE and hands it a path derived from the running bundle. It cannot
+    // LIMIT, stated rather than hidden: this proves each view names its advice
+    // in code, and Preferences supplies the bundle path and capability. It cannot
     // prove either renders what it reads, and — unlike the lid-closed summary
     // below — it cannot compare brace depth against an unconditional neighbour,
     // because this line is conditional BY DESIGN. A machine with a current
@@ -2189,39 +2190,13 @@ private func httpsAddresses(in code: String) -> [String] {
     let window = try #require(files.first { $0.lastPathComponent == "PreferencesView.swift" },
                               "the app layer no longer compiles a PreferencesView.swift")
 
-    for surface in [panel, window] {
-        // CODE, never the raw file, for the reason `2247ae4` records on the
-        // lid-closed check below: a comment naming a property that had been
-        // deleted left the raw-file version of that guard green.
-        //
-        // WHITESPACE REMOVED, not merely collapsed, for the reason
-        // `thePreferencesWindowAsksTheRunningBundleWhereTheProbeIs` records:
-        // the call is long enough that both views wrap it over three lines, so
-        // a needle containing `(probeAt:` never matches the raw text and the
-        // guard would be red against a correct view.
-        let code = swiftCodeWithoutComments(try String(contentsOf: surface, encoding: .utf8))
-            .replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
+    let panelCode = swiftCodeWithoutComments(try String(contentsOf: panel, encoding: .utf8))
+        .replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
+    let windowCode = swiftCodeWithoutComments(try String(contentsOf: window, encoding: .utf8))
+        .replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
+    #expect(panelCode.contains("model.staleHelperPanelAdvisory"))
+    #expect(windowCode.contains("model.staleHelperAdvisory(probeAt:ServingModel.probePath(besideExecutable:Bundle.main.executableURL),availability:helperAvailability)"))
 
-        #expect(code.contains("model.staleHelperAdvisory(probeAt:"), """
-            \(surface.lastPathComponent) never reads model.staleHelperAdvisory \
-            in code, so a stale root helper reaches the user nowhere on this \
-            surface. Render it, or delete the property and the checks that \
-            assert its text. A comment naming the property does not satisfy this.
-            """)
-
-        // The PATH, not only the property. Named bug: calling the advisory with
-        // `documentedProbePath`, which is right for a disk-image install and
-        // names a file a Homebrew user, a `swift build` tree and a copy on the
-        // Desktop do not have — so the command the advisory prints copies
-        // nothing. `Bundle.main` is read in the VIEW and the model stays pure,
-        // which is the split `versionLine(from: Bundle.main.infoDictionary)`
-        // already uses in both of these files.
-        #expect(code.contains("ServingModel.probePath(besideExecutable:Bundle.main.executableURL)"), """
-            \(surface.lastPathComponent) does not hand the advisory a probe path \
-            derived from the running bundle, so whatever command it prints is \
-            not the derivation this package holds under test.
-            """)
-    }
 }
 
 @Test func thePanelRendersTheLegalLineItComposes() throws {

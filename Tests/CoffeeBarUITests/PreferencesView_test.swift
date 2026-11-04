@@ -405,7 +405,7 @@ private let versionSurfaces = [(file: "PanelView.swift", type: "PanelView"),
         // install with no uninstall.
         (needle: "$model.launchAtLogin", braces: 0, control: "the Open at login toggle", enclosing: "nothing"),
         // Issue #51's control, and the two braces are its row rather than a
-        // condition: the `ForEach` closure over `AgentTool.allCases`, then the
+        // condition: the `ForEach` closure over `AgentTool.hookTools`, then the
         // `HStack` that carries the path and the buttons. `Toggle(isOn:` and not
         // `Toggle(`, because the Quiet everything else toggle above spells its
         // label first and `braceDepth(atFirst:)` would find that one.
@@ -528,9 +528,9 @@ private let versionSurfaces = [(file: "PanelView.swift", type: "PanelView"),
 @Test func theCopyActionOffersEveryToolTheCheckerCanAdviseAbout() throws {
     // Named bug this catches: a section wired to a hardcoded two tools, so the
     // third stays uncopyable for ever. `ServingModel.hookAdvisory` iterates
-    // `AgentTool.allCases`, so it will tell the user about a file this window
+    // `AgentTool.hookTools`, so it will tell the user about a file this window
     // would then give them no way to fix — advice with no remedy beside it.
-    for tool in AgentTool.allCases {
+    for tool in AgentTool.hookTools {
         #expect(HookSnippet.json(for: tool) != nil, "\(tool) has no snippet to copy")
     }
 
@@ -554,7 +554,7 @@ private let versionSurfaces = [(file: "PanelView.swift", type: "PanelView"),
     // not a stylistic preference. `HookSnippet.command(for:)` is internal to
     // `CoffeeBarCore` and cannot be reached from here at all; `defaultURL(for:)`
     // is the one place in the package that resolves a home directory.
-    for seam in ["AgentTool.allCases",
+    for seam in ["AgentTool.hookTools",
                  "HookSnippet.json(for:",
                  "HookHealthReader.defaultURL(for:"] {
         #expect(body.block.contains(seam), """

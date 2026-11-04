@@ -57,7 +57,12 @@ struct CoffeeBarMenuBarApp: App {
         // holds the launch restore and the terminate restore SEPARATELY: they
         // are the same method name, so one guard reading for that name once was
         // satisfied by either call on its own.
-        let model = ServingModel(governance: ProcessGovernance())
+        let model = ServingModel(systemSleep: SystemSleepRequester(), governance: ProcessGovernance())
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak model] _ in
+            Task { @MainActor in model?.systemDidWake() }
+        }
 
         // Undo whatever an EARLIER run left demoted, before this one can demote
         // anything.

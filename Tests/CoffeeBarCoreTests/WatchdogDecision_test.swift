@@ -38,7 +38,7 @@ private func inputs(journal j: JournalRecord? = journal(),
                     boot: Bool = false,
                     thermal: ThermalLevel = .nominal,
                     battery: Int? = 80,
-                    onBattery: Bool = false) -> WatchdogInputs {
+                    onBattery: Bool = false, powerKnown: Bool = true) -> WatchdogInputs {
     WatchdogInputs(journal: j, now: now,
                    // DERIVED from `now` by default: a machine whose wall clock
                    // never moved, which is what every test written before #77
@@ -48,7 +48,7 @@ private func inputs(journal j: JournalRecord? = journal(),
                    monotonicNow: monotonicNow ?? (m0 + now.timeIntervalSince(t0)),
                    lastHeartbeat: heartbeat,
                    isBootEvaluation: boot, thermal: thermal,
-                   batteryPercent: battery, onBattery: onBattery)
+                   batteryPercent: battery, onBattery: onBattery, powerReadingKnown: powerKnown)
 }
 
 @Test func noJournalMeansNothingToRevert() {
@@ -258,8 +258,10 @@ private func inputs(journal j: JournalRecord? = journal(),
     #expect(decide(inputs(battery: 14, onBattery: false)) == .hold)
 }
 
-@Test func unknownBatteryDoesNotTriggerFloor() {
-    #expect(decide(inputs(battery: nil, onBattery: true)) == .hold)
+@Test func unknownBatteryEndsTheHold() {
+    #expect(decide(inputs(battery: nil, onBattery: true)) == .revert(.unknownPower))
+    #expect(decide(inputs(battery: 80, onBattery: false, powerKnown: false)) == .revert(.unknownPower))
+    #expect(decide(inputs(battery: nil, onBattery: false)) == .hold)
 }
 
 @Test func bootEvaluationOutranksThermalAndTTL() {

@@ -328,6 +328,17 @@ extension SMAppService: HelperRegistering {
 public protocol RegisteredHelperReporting: Sendable {
     /// `true` only while macOS reports this build's daemon as enabled.
     func registeredHelperIsActive() -> Bool
+    func safetyRegistrationStatus() -> HelperSafetyRegistration
+}
+
+public enum HelperSafetyRegistration: Sendable {
+    case active, inactive, unavailable
+}
+
+extension RegisteredHelperReporting {
+    public func safetyRegistrationStatus() -> HelperSafetyRegistration {
+        registeredHelperIsActive() ? .active : .inactive
+    }
 }
 
 /// The two things a removal does to the helper, behind the same boundary the
@@ -660,6 +671,11 @@ public struct PrivilegedHelperClient: Sendable, RegisteredHelperReporting, Helpe
     public func registeredHelperIsActive() -> Bool {
         guard availability() == .registrable else { return false }
         return daemon().registrationState == .enabled
+    }
+
+    public func safetyRegistrationStatus() -> HelperSafetyRegistration {
+        guard availability() == .registrable else { return .unavailable }
+        return registeredHelperIsActive() ? .active : .inactive
     }
 
     /// Asks macOS to install the helper, and answers with what it did.

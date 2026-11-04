@@ -130,7 +130,7 @@ private func scratchCopy(of fixture: String) throws -> URL {
     defer { try? files.removeItem(at: scratch) }
 
     let present = scratch.appending(path: "cursor-hooks.json")
-    try Data(contentsOf: packageRoot.appending(path: "Tests/Fixtures/cursor-settings/wired.json"))
+    try Data(contentsOf: packageRoot.appending(path: "Tests/Fixtures/cursor-settings/wired-with-turn-signals.json"))
         .write(to: present)
     let absent = scratch.appending(path: "definitely-not-here.json")
     #expect(files.fileExists(atPath: absent.path) == false)
@@ -273,16 +273,12 @@ private func scratchCopy(of fixture: String) throws -> URL {
     let reader = HookHealthReader(hookFiles: [
         .claudeCode: root.appending(path: "claude-settings/missing-stop.json"),
         .codex: root.appending(path: "codex-settings/wired.json"),
-        .cursor: root.appending(path: "cursor-settings/captured.json"),
+        .cursor: root.appending(path: "cursor-settings/wired-with-turn-signals.json"),
     ])
 
     #expect(reader.status(for: .claudeCode) == .missing(["Stop"]))
     #expect(reader.status(for: .codex) == .wired)
-    // The captured Cursor file carries three of the five required event KEYS and
-    // none of coffee-bar's commands, so the true answer is all five.
-    #expect(reader.status(for: .cursor)
-            == .missing(["afterFileEdit", "afterShellExecution", "beforeReadFile",
-                         "beforeShellExecution", "sessionStart"]))
+    #expect(reader.status(for: .cursor) == .wired)
 
     #expect(reader.statuses().count == 3)
 }
@@ -304,7 +300,7 @@ private func scratchCopy(of fixture: String) throws -> URL {
     #expect(statuses[.claudeCode] == .wired)
     #expect(statuses[.cursor] == .missing(["afterFileEdit", "afterShellExecution",
                                            "beforeReadFile", "beforeShellExecution",
-                                           "sessionStart"]))
+                                           "beforeSubmitPrompt", "sessionStart", "stop"]))
 }
 
 @Test func readingEveryToolsStatusLeavesEveryFileExactlyAsItWas() throws {

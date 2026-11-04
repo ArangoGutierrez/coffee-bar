@@ -348,8 +348,7 @@ func indicatorComesFromTheModel() throws {
 ///
 /// TWO FILES, and that is the whole of issue #30's remainder. The list this
 /// replaces was one flat array read against `PanelView.swift` alone, so the
-/// identical `staleHelperAdvisory` sentence in `PreferencesView.swift` — same
-/// model value, same systemOrange — was never looked at. Issue #30 closed with
+/// helper advice in `PreferencesView.swift` was never looked at. Issue #30 closed with
 /// four sites fixed, a fifth shipping the defect, and this guard green.
 ///
 /// `staleHelperAdvisory(` keeps its parenthesis because that one is a CALL
@@ -380,7 +379,7 @@ private let advisorySurfaces: [(file: String, throughTheRow: [String], neutralOn
      throughTheRow: ["model.suppressionAdvisory",
                      "model.hookAdvisory",
                      "model.ingestAdvisory",
-                     "model.staleHelperAdvisory("],
+                     "model.staleHelperPanelAdvisory"],
      neutralOnly: []),
     (file: "PreferencesView.swift",
      throughTheRow: ["model.staleHelperAdvisory("],

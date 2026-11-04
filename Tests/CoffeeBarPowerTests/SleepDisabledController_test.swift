@@ -276,6 +276,22 @@ private struct RecordingRunner: CommandRunning, @unchecked Sendable {
     #expect(result.stdout == "hello\n")
 }
 
+@Test func realRunnerTimesOutWhenChildClosesOutputBeforeExit() {
+    let started = Date()
+    #expect(throws: CommandError.timedOut(after: 0.2)) {
+        try SystemCommandRunner().run("/bin/sh", ["-c", "exec 1>&- 2>&-; exec /bin/sleep 3"], timeout: 0.2)
+    }
+    #expect(Date().timeIntervalSince(started) < 2)
+}
+
+@Test func realRunnerTimesOutDuringContinuousOutput() {
+    let started = Date()
+    #expect(throws: CommandError.timedOut(after: 0.2)) {
+        try SystemCommandRunner().run("/usr/bin/yes", [], timeout: 0.2)
+    }
+    #expect(Date().timeIntervalSince(started) < 2)
+}
+
 @Test func realRunnerTimesOutRatherThanWaitingOnALeakedGrandchild() throws {
     // Waiting for EOF on the pipes waits on whoever HOLDS them, which is not
     // necessarily the child: a child that exits immediately can leave a

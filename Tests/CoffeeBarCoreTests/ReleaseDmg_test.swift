@@ -289,6 +289,11 @@ private func withProducedImage(_ body: (URL, URL, String) throws -> Void) throws
         #expect(v.rc == 0, "codesign --verify --deep --strict failed:\n\(v.out)")
         #expect(v.out.contains("coffee-bar-probe"),
                 "verification never mentions coffee-bar-probe, so the nested binary was not covered:\n\(v.out)")
+        let probe = mount.appending(path: "CoffeeBar.app/Contents/MacOS/coffee-bar-probe").path
+        let signature = try run(["codesign", "-d", "--verbose=4", probe])
+        #expect(signature.rc == 0, "\(signature.out)")
+        #expect(signature.out.split(separator: "\n").contains("Identifier=com.coffeebar.probehelper"),
+                "\(signature.out)")
     }
 }
 

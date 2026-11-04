@@ -10,6 +10,7 @@ public enum RevertReason: String, Codable, Equatable, Sendable {
     case unknownSchema
     case thermalAbort
     case batteryFloor
+    case unknownPower
     case clockAnomaly
     /// The journal failed a SECURITY.md precondition, so its `priorValue` was
     /// discarded and the setting was restored to `false` instead. Refusing to
@@ -120,11 +121,12 @@ public struct WatchdogInputs: Sendable {
     public let thermal: ThermalLevel
     public let batteryPercent: Int?
     public let onBattery: Bool
+    public let powerReadingKnown: Bool
 
     public init(journal: JournalRecord?, now: Date, monotonicNow: TimeInterval,
                 lastHeartbeat: Date?,
                 isBootEvaluation: Bool, thermal: ThermalLevel,
-                batteryPercent: Int?, onBattery: Bool) {
+                batteryPercent: Int?, onBattery: Bool, powerReadingKnown: Bool = true) {
         self.journal = journal
         self.now = now
         self.monotonicNow = monotonicNow
@@ -133,6 +135,7 @@ public struct WatchdogInputs: Sendable {
         self.thermal = thermal
         self.batteryPercent = batteryPercent
         self.onBattery = onBattery
+        self.powerReadingKnown = powerReadingKnown
     }
 }
 
@@ -178,6 +181,9 @@ public func decide(_ inputs: WatchdogInputs,
     }
     if inputs.thermal.rawValue >= ThermalLevel.serious.rawValue {
         return .revert(.thermalAbort)
+    }
+    if !inputs.powerReadingKnown || (inputs.onBattery && inputs.batteryPercent == nil) {
+        return .revert(.unknownPower)
     }
     if inputs.onBattery, let pct = inputs.batteryPercent,
        pct <= policy.batteryFloorPercent {

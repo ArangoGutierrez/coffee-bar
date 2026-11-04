@@ -117,10 +117,10 @@ public struct QuickStartView: View {
                 // next thing they do, in the window behind it, and a first-run
                 // page offering three buttons per row asks a beginner to choose
                 // between them before they know what any of them does.
-                ForEach(AgentTool.allCases, id: \.self) { tool in
+                ForEach(AgentTool.hookTools, id: \.self) { tool in
                     Toggle(isOn: Binding(get: { model.advises(tool) },
                                          set: { model.setAdvises($0, for: tool) })) {
-                        Text("~/" + HookHealth.settingsPath(for: tool))
+                        Text("~/" + (HookHealth.settingsPath(for: tool) ?? ""))
                             .font(.caption)
                             .monospaced()
                     }

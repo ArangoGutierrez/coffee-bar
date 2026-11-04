@@ -114,20 +114,6 @@ for argument in CommandLine.arguments.dropFirst() {
 
 // MARK: - The payload
 
-/// Read to end of stream, and NOT truncated at the listener's cap.
-///
-/// A shim that cut the body short would deliver something the agent never sent,
-/// which is worse than the refusal: the listener refuses an over-cap request
-/// with 413 and stores nothing, and that is a visible answer this process can
-/// report. Truncation would be a silent corruption instead.
-let body = FileHandle.standardInput.readDataToEndOfFile()
-
-// Nothing to say. A hook fires with no payload during start-up and shutdown
-// races, and an empty POST would only earn a 400 for an event that never was.
-if body.isEmpty { exit(0) }
-
-// MARK: - Posting it
-
 /// How long the whole run gets, after the environment has had its say.
 ///
 /// `HookShim.resolvedTotalTimeout(from:)` holds the bounds and the reasons; the
@@ -149,15 +135,55 @@ let totalTimeout = HookShim.resolvedTotalTimeout(from: ProcessInfo.processInfo.e
 ///
 /// Every wait below takes what is LEFT of it, so the total cannot grow with the
 /// number of steps.
-let deadline = Date().addingTimeInterval(totalTimeout)
+let deadline = DispatchTime.now() + totalTimeout
 
-func remaining(cappedAt ceiling: TimeInterval) -> TimeInterval {
-    max(0, min(ceiling, deadline.timeIntervalSinceNow))
+// Every retry uses the same monotonic deadline, including interrupted calls.
+func ready(_ fd: Int32, _ events: Int16, until limit: DispatchTime) -> Bool {
+    while true {
+        let now = DispatchTime.now().uptimeNanoseconds
+        let end = limit.uptimeNanoseconds
+        if now >= end { return false }
+        let milliseconds = Int32(min((end - now + 999_999) / 1_000_000, UInt64(Int32.max)))
+        var pending = pollfd(fd: fd, events: events, revents: 0)
+        let result = poll(&pending, 1, milliseconds)
+        if result > 0 { return true }
+        if result == 0 || errno != EINTR { return false }
+    }
 }
 
-func timeval(_ seconds: TimeInterval) -> Darwin.timeval {
-    Darwin.timeval(tv_sec: Int(seconds),
-                   tv_usec: Int32((seconds - floor(seconds)) * 1_000_000))
+// Read the whole body within the same budget. An over-cap body is dropped,
+// never posted in part. Its contents are never included in diagnostics.
+func readBody() -> Data? {
+    let input = FileHandle.standardInput.fileDescriptor
+    let flags = fcntl(input, F_GETFL, 0)
+    guard flags >= 0, fcntl(input, F_SETFL, flags | O_NONBLOCK) == 0 else { return nil }
+    defer { _ = fcntl(input, F_SETFL, flags) }
+    var body = Data()
+    var buffer = [UInt8](repeating: 0, count: 16_384)
+    while ready(input, Int16(POLLIN), until: deadline) {
+        let count = Darwin.read(input, &buffer, buffer.count)
+        if count == 0 { return body }
+        if count < 0 {
+            if errno == EINTR || errno == EAGAIN { continue }
+            return nil
+        }
+        if count > HookShim.maximumRequestBytes - body.count {
+            warn("event exceeds the size limit: 413")
+            return nil
+        }
+        body.append(contentsOf: buffer[0..<count])
+    }
+    return nil
+}
+guard let body = readBody(), !body.isEmpty else { exit(0) }
+
+// MARK: - Posting it
+
+// The listener applies its limit to headers and body together.
+let request = HookShim.request(posting: body, as: tool)
+guard request.count <= HookShim.maximumRequestBytes else {
+    warn("event exceeds the size limit: 413")
+    exit(0)
 }
 
 let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
@@ -185,7 +211,7 @@ withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: pathBytes) }
 // running, ECONNREFUSED on a node a crash left behind — but a full listen
 // backlog blocks, and that must not become the agent's problem.
 let originalFlags = fcntl(descriptor, F_GETFL, 0)
-_ = fcntl(descriptor, F_SETFL, originalFlags | O_NONBLOCK)
+guard originalFlags >= 0, fcntl(descriptor, F_SETFL, originalFlags | O_NONBLOCK) == 0 else { exit(0) }
 
 let connected = withUnsafePointer(to: &address) { pointer in
     pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
@@ -199,9 +225,8 @@ if connected != 0 {
     // complained on every tool call would be worse than useless.
     if errno != EINPROGRESS { exit(0) }
 
-    var pending = pollfd(fd: descriptor, events: Int16(POLLOUT), revents: 0)
-    let milliseconds = Int32(remaining(cappedAt: HookShim.connectTimeout) * 1000)
-    guard poll(&pending, 1, milliseconds) > 0 else { exit(0) }
+    let connectDeadline = min(deadline, DispatchTime.now() + HookShim.connectTimeout)
+    guard ready(descriptor, Int16(POLLOUT), until: connectDeadline) else { exit(0) }
 
     // `poll` reports the descriptor writable for a REFUSED connection too. The
     // pending error is the only thing that tells the two apart, and treating a
@@ -213,23 +238,16 @@ if connected != 0 {
     else { exit(0) }
 }
 
-_ = fcntl(descriptor, F_SETFL, originalFlags)
-
-// Blocking again, but with the rest of the deadline as the ceiling on each
-// side. A zero timeout means "wait for ever" to the kernel, so a spent budget
-// leaves now rather than blocking without a bound.
-let writeBudget = remaining(cappedAt: totalTimeout)
-if writeBudget <= 0 { exit(0) }
-var sendTimeout = timeval(writeBudget)
-setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, &sendTimeout,
-           socklen_t(MemoryLayout<Darwin.timeval>.size))
-
-let request = HookShim.request(posting: body, as: tool)
 var written = 0
 request.withUnsafeBytes { buffer in
     while written < buffer.count {
+        guard ready(descriptor, Int16(POLLOUT), until: deadline) else { break }
         let sent = Darwin.write(descriptor, buffer.baseAddress! + written, buffer.count - written)
-        if sent <= 0 { break }
+        if sent < 0 {
+            if errno == EINTR || errno == EAGAIN { continue }
+            break
+        }
+        if sent == 0 { break }
         written += sent
     }
 }
@@ -248,23 +266,27 @@ request.withUnsafeBytes { buffer in
 // process is still here to read the answer.
 shutdown(descriptor, SHUT_WR)
 
-let readBudget = remaining(cappedAt: totalTimeout)
-if readBudget <= 0 { exit(0) }
-var receiveTimeout = timeval(readBudget)
-setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &receiveTimeout,
-           socklen_t(MemoryLayout<Darwin.timeval>.size))
-
-// Only the status line is wanted, so one small read is enough. `Connection:
-// close` means there is no length to parse and nothing to keep reading for.
-var answer = [UInt8](repeating: 0, count: 256)
-let received = Darwin.read(descriptor, &answer, answer.count)
+// Collect a possibly fragmented status line, with a fixed memory bound.
+var answer = [UInt8]()
+var responseBuffer = [UInt8](repeating: 0, count: 256)
+while answer.count < responseBuffer.count,
+      ready(descriptor, Int16(POLLIN), until: deadline) {
+    let received = Darwin.read(descriptor, &responseBuffer, responseBuffer.count - answer.count)
+    if received < 0 {
+        if errno == EINTR || errno == EAGAIN { continue }
+        break
+    }
+    if received == 0 { break }
+    answer.append(contentsOf: responseBuffer[0..<received])
+    if answer.contains(10) { break }
+}
 
 // A lost answer is NOT a failure to report. The event was written and may well
 // have been stored; only the confirmation went missing, and saying so on every
 // slow tool call would train the user to ignore this channel.
-if received <= 0 { exit(0) }
+if answer.isEmpty { exit(0) }
 
-let code = HookShim.statusCode(inResponse: Data(answer[0..<received]))
+let code = HookShim.statusCode(inResponse: Data(answer))
 if !HookShim.isSuccess(code) {
     // The STATUS, never the payload. This diagnostic lands in the agent's own
     // log, which is the one place the listener's dropping cannot reach.

@@ -8,6 +8,10 @@ public enum AgentTool: String, Codable, Sendable, CaseIterable {
     case claudeCode
     case codex
     case cursor
+    case activityBridge
+
+    /// Tools with a native hook file and a setup adapter.
+    public static let hookTools: [AgentTool] = [.claudeCode, .codex, .cursor]
 }
 
 // MARK: - How a payload's origin is decided
@@ -77,6 +81,7 @@ extension AgentTool {
         case .claudeCode: return "/event"
         case .codex: return "/event/codex"
         case .cursor: return "/event/cursor"
+        case .activityBridge: return "/event/activity"
         }
     }
 

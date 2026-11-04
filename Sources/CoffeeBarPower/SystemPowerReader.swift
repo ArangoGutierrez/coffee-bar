@@ -38,11 +38,10 @@ extension SystemPowerReader: PowerReadingProviding {
     /// test, so the decision is testable on its own here and `read()` is the
     /// thin IOKit shim over it.
     ///
-    /// `source` comes from `IOPSGetProvidingPowerSourceType` by way of the M0
-    /// decision, not from any one source's `kIOPSPowerSourceStateKey`. The
-    /// per-source key describes the source that was picked first, so it made
-    /// this type answer "is this machine on battery" by a second mechanism that
-    /// could disagree with `isOnBattery()`.
+    /// `source` comes from `IOPSGetProvidingPowerSourceType`, not from a
+    /// source’s `kIOPSPowerSourceStateKey`. The
+    /// per-source key describes only that source. Unlike the older Boolean
+    /// probe, this reading preserves an unknown source so holds can stop.
     ///
     /// `percent` comes only from a source of type `kIOPSInternalBatteryType`. A
     /// UPS charge is not the battery percentage: §8.1 suppresses a hold because
@@ -50,14 +49,18 @@ extension SystemPowerReader: PowerReadingProviding {
     /// external supply the run is not draining.
     static func reading(from descriptions: [[String: Any]],
                         providingType: String?) -> PowerReading {
-        let source: PowerSource =
-            onBattery(providingType: providingType) ? .battery : .ac
+        let source: PowerSource
+        switch providingType {
+        case kIOPSBatteryPowerValue: source = .battery
+        case kIOPSACPowerValue, kIOPMUPSPowerKey: source = .ac
+        default: source = .unknown
+        }
 
         for description in descriptions {
             guard description[kIOPSTypeKey] as? String == kIOPSInternalBatteryType,
                   let current = description[kIOPSCurrentCapacityKey] as? Int,
                   let maximum = description[kIOPSMaxCapacityKey] as? Int,
-                  maximum > 0
+                  maximum > 0, current >= 0, current <= maximum
             else { continue }
 
             let percent = Int((Double(current) / Double(maximum) * 100).rounded())
@@ -72,9 +75,7 @@ extension SystemPowerReader: PowerReadingProviding {
               let sources = IOPSCopyPowerSourcesList(blob)?.takeRetainedValue()
                 as? [CFTypeRef]
         else {
-            // Unreadable is reported as AC with no battery: the safe default,
-            // because it never suppresses a hold the user asked for.
-            return PowerReading(source: .ac, percent: nil)
+            return PowerReading(source: .unknown, percent: nil)
         }
 
         // `IOPSGetPowerSourceDescription` is an unaudited Get — the result
@@ -85,8 +86,7 @@ extension SystemPowerReader: PowerReadingProviding {
         }
         // `IOPSGetProvidingPowerSourceType` is a Get for the same reason, so it
         // takes the same accessor as `isOnBattery()` in BaselineProbes.swift.
-        // The two calls answer one question and must not differ, in mechanism
-        // or in memory management.
+        // This preserves the source independently of the battery percentage.
         let providingType = IOPSGetProvidingPowerSourceType(blob)?
             .takeUnretainedValue() as String?
 

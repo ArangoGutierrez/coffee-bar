@@ -51,6 +51,11 @@ struct HTTPRequestFramer {
     private static let terminator = Data("\r\n\r\n".utf8)
 
     private var buffer = Data()
+    // Test seams count the actual search range and completed header parses.
+    private(set) var headerScanBytes = 0
+    private(set) var headerParseCount = 0
+    private var nextHeaderScan = 0
+    private var bodyBounds: (start: Int, length: Int)?
 
     /// The path the client posted to, once the header block has arrived.
     ///
@@ -86,39 +91,36 @@ struct HTTPRequestFramer {
         buffer.append(chunk)
         if buffer.count > Self.maximumBytes { return .tooLarge }
 
-        guard let separator = buffer.range(of: Self.terminator) else {
-            return .needMore
+        if bodyBounds == nil {
+            // Only the final three bytes can start a terminator split across
+            // chunks. Search those and the new bytes once per append.
+            let scanRange = nextHeaderScan..<buffer.endIndex
+            headerScanBytes += scanRange.count
+            guard let separator = buffer.range(of: Self.terminator, in: scanRange) else {
+                nextHeaderScan = max(0, buffer.count - (Self.terminator.count - 1))
+                return .needMore
+            }
+
+            let headers = buffer[..<separator.lowerBound]
+            headerParseCount += 1
+            // One parse yields both fields, so their validity agrees.
+            let line = Self.requestLine(in: headers)
+            requestMethod = line?.method
+            requestTarget = line?.target
+
+            // A negative length would put bodyEnd before bodyStart and trap.
+            // Zero is valid for a body-less request.
+            guard let length = Self.contentLength(in: headers), length >= 0 else {
+                return .malformed
+            }
+
+            // Refuse an oversized declared length before buffering its body.
+            guard length <= Self.maximumBytes else { return .tooLarge }
+            bodyBounds = (separator.upperBound, length)
         }
-
-        let headers = buffer[..<separator.lowerBound]
-        // One parse, both fields. Two scans could disagree about which line they
-        // read, and the arity guard has to cover the pair atomically.
-        let line = Self.requestLine(in: headers)
-        requestMethod = line?.method
-        requestTarget = line?.target
-
-        // The declared length is VALIDATED, not merely parsed. `Int` accepts a
-        // negative, and a negative length walked straight through the
-        // `available >= length` guard below, put `bodyEnd` BEFORE `bodyStart`,
-        // and trapped the range subscript with "Range requires lowerBound <=
-        // upperBound". Reproduced against a raw AF_UNIX client: one 60-byte
-        // POST from any same-user process killed the menu-bar app, which
-        // released the power assertion and let the machine sleep under a
-        // running agent.
-        //
-        // `>= 0` and not `> 0`: a body-less POST is legal and must still frame.
-        guard let length = Self.contentLength(in: headers), length >= 0 else {
-            return .malformed
-        }
-
-        // Refused on the DECLARED length, before the bytes are buffered. Capping
-        // only what has already arrived lets a client declare 4 GiB and then
-        // dribble bytes, holding the partial request in memory for as long as it
-        // cares to keep sending.
-        guard length <= Self.maximumBytes else { return .tooLarge }
 
         // `separator.upperBound` already sits past the four terminator bytes.
-        let bodyStart = separator.upperBound
+        guard let (bodyStart, length) = bodyBounds else { return .malformed }
         let available = buffer.distance(from: bodyStart, to: buffer.endIndex)
         guard available >= length else { return .needMore }
 

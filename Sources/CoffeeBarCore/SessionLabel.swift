@@ -202,15 +202,14 @@ public enum SessionLabel {
 
     /// The shortest prefix length at which `ids` are all different.
     ///
-    /// Starts at `shortIDLength` and grows, so the usual answer is eight
-    /// characters and the unusual one is still correct. It stops at the longest
-    /// id: prefixes of that length ARE the ids, so a set of distinct ids is
-    /// always separated by the time the loop gets there.
+    /// Adjacent sorted IDs contain the longest shared prefix. Compare each
+    /// pair once, rather than hashing every successively longer prefix.
     private static func distinguishingWidth(of ids: [String]) -> Int {
-        let longest = ids.map(\.count).max() ?? 0
-        var width = min(shortIDLength, longest)
-        while width < longest, Set(ids.map { $0.prefix(width) }).count < ids.count {
-            width += 1
+        let sorted = ids.sorted()
+        var width = shortIDLength
+        for (left, right) in zip(sorted, sorted.dropFirst()) {
+            let shared = zip(left, right).prefix { $0 == $1 }.count
+            width = max(width, shared + 1)
         }
         return width
     }
@@ -240,6 +239,7 @@ extension AgentTool {
         case .claudeCode: return "claude"
         case .codex: return "codex"
         case .cursor: return "cursor"
+        case .activityBridge: return "activity"
         }
     }
 }

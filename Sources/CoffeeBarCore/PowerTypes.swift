@@ -7,6 +7,7 @@ import Foundation
 public enum PowerSource: String, Codable, Sendable {
     case ac
     case battery
+    case unknown
 }
 
 /// What the user last asked for through the menu-bar control.
@@ -43,4 +44,5 @@ public enum UserIntent: String, Codable, Sendable, CaseIterable {
 /// 18%, floor 20%" rather than something vague the user cannot check.
 public enum HoldSuppression: Equatable, Sendable {
     case batteryFloor(percent: Int, floor: Int)
+    case unknownPower
 }

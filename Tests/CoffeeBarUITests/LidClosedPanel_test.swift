@@ -1222,6 +1222,28 @@ private func shellSplit(of command: String) throws -> ShellSplit {
         """)
 }
 
+@Test func panelHelperFaultsAreShortAndUnverifiableHasRecoveryAdvice() throws {
+    for state in [PrivilegedHelperState.current, .notInstalled] {
+        #expect(ServingModel.staleHelperPanelAdvisory(state: state) == nil)
+        for availability in [HelperAvailability.registrable, .unavailable] {
+            #expect(ServingModel.staleHelperAdvisory(
+                state: state, probeAt: "/tmp/probe", availability: availability) == nil)
+        }
+    }
+    for state in [PrivilegedHelperState.stale, .unverifiable] {
+        let line = try #require(ServingModel.staleHelperPanelAdvisory(state: state))
+        #expect(line.contains("Preferences"))
+        #expect(line.contains("Power"))
+        #expect(!line.contains("sudo"))
+        #expect(line.count < 120)
+    }
+    for availability in [HelperAvailability.registrable, .unavailable] {
+        let line = try #require(ServingModel.staleHelperAdvisory(
+            state: .unverifiable, probeAt: "/tmp/probe", availability: availability))
+        #expect(line.contains("Reinstall"))
+    }
+}
+
 // MARK: - Issue #71: what the user-facing surfaces may claim about a hold
 
 /// The user-facing documents these three guards police, found on disk.
