@@ -121,8 +121,7 @@ private let postedSessionID = "11111111-2222-3333-4444-555555555555"
 /// endpoint refuses would turn every assertion below into a report about the
 /// payload instead of about the command.
 ///
-/// A `switch` with no `default`, so a fourth `AgentTool` fails to compile here
-/// rather than silently borrowing another tool's envelope.
+/// A `switch` with no `default`, so each `AgentTool` has an explicit envelope.
 private func payload(for tool: AgentTool) -> (json: String, eventName: String) {
     switch tool {
     case .claudeCode, .codex:
@@ -130,6 +129,9 @@ private func payload(for tool: AgentTool) -> (json: String, eventName: String) {
     case .cursor:
         return (#"{"hook_event_name":"sessionStart","conversation_id":"\#(postedSessionID)"}"#,
                 "sessionStart")
+    case .activityBridge:
+        return (#"{"hook_event_name":"SessionStart","session_id":"\#(postedSessionID)"}"#,
+                "SessionStart")
     }
 }
 
@@ -185,7 +187,7 @@ private func run(_ command: String, in sandbox: HomeSandbox,
 
 // MARK: - The acceptance
 
-@Test(arguments: AgentTool.allCases)
+@Test(arguments: AgentTool.hookTools)
 func everyCommandTheSnippetPastesDeliversItsEvent(_ tool: AgentTool) throws {
     // Named bug this catches: any edit to the emitted command that leaves it
     // looking right and stops it working. That is not a category invented here
@@ -207,7 +209,9 @@ func everyCommandTheSnippetPastesDeliversItsEvent(_ tool: AgentTool) throws {
     try requireReady(listener)
 
     let found = try commands(in: tool)
-    #expect(found.count == 5, "\(tool) snippet holds \(found.count) commands, expected 5")
+    let expectedCount = tool == .cursor ? 7 : 5
+    #expect(found.count == expectedCount,
+            "\(tool) snippet holds \(found.count) commands, expected \(expectedCount)")
 
     let body = payload(for: tool)
     for command in found {
@@ -242,7 +246,7 @@ func everyCommandTheSnippetPastesDeliversItsEvent(_ tool: AgentTool) throws {
     }
 }
 
-@Test(arguments: AgentTool.allCases)
+@Test(arguments: AgentTool.hookTools)
 func aRefusedPostIsReportedThroughTheCommandsExitStatus(_ tool: AgentTool) throws {
     // The `--fail` family, proved rather than spelled out in a comment. Without
     // it curl exits 0 on a 4xx, so an ingest refusing every payload would be

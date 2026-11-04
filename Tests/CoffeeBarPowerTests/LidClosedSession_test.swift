@@ -304,6 +304,246 @@ private let laterBootSession = "5C0FFEE0-0000-4000-8000-00000000B008"
 
 // MARK: - §8.2(1) — the journal lands before the mutation
 
+@Test func aSecondArmCannotOverwriteTheOriginalRestoreValue() throws {
+    let root = try makeScratchRoot()
+    let log = CallLog()
+    let url = root.appending(path: "state/probe-journal.json")
+    let store = FileJournalStore(url: url)
+    let power = RecordingPower(log: log, state: .init(false))
+    let reader = GuardedJournalReader(url: url, requiredOwner: getuid(), quarantineOnRefusal: false)
+    let supervisor = RecordingSupervisor(log: log)
+    let arm = ArmService(journal: store, reader: reader, power: power,
+                         supervisor: supervisor, display: RecordingDisplay(log: log, awakeAfterForcing: false),
+                         clock: { fixedNow }, monotonicClock: { fixedUptime }, displayVerifyDelay: 0)
+    try arm.arm(ttlSeconds: 60)
+    #expect(power.state.current)
+    #expect(throws: (any Error).self) { try arm.arm(ttlSeconds: 120) }
+    #expect(try store.load()?.priorValue == false)
+    let watchdog = WatchdogService(reader: reader, power: power, supervisor: supervisor,
+                                   notifier: RecordingNotifier(), environment: FakeEnvironment())
+    #expect(try watchdog.revertNow())
+    #expect(!power.state.current)
+}
+
+@Test func armRefusesExistingCorruptOrDanglingJournal() throws {
+    for dangling in [false, true] {
+        let root = try makeScratchRoot()
+        let directory = root.appending(path: "state")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        let url = directory.appending(path: "probe-journal.json")
+        if dangling {
+            try FileManager.default.createSymbolicLink(atPath: url.path, withDestinationPath: "missing")
+        } else {
+            try Data("invalid journal".utf8).write(to: url)
+        }
+        let log = CallLog()
+        let power = RecordingPower(log: log, state: .init(false))
+        let arm = ArmService(journal: FileJournalStore(url: url),
+                             reader: GuardedJournalReader(url: url, requiredOwner: getuid()),
+                             power: power, supervisor: RecordingSupervisor(log: log),
+                             display: RecordingDisplay(log: log, awakeAfterForcing: false), displayVerifyDelay: 0)
+        #expect(throws: (any Error).self) { try arm.arm(ttlSeconds: 60) }
+        #expect(!power.state.current)
+        var info = stat()
+        #expect(lstat(url.path, &info) == 0)
+        if !dangling { #expect(try Data(contentsOf: url) == Data("invalid journal".utf8)) }
+    }
+}
+
+@Test func armRefusesAnUnknownBootIdentityBeforeChangingPower() throws {
+    for identity: String? in [nil, ""] {
+        let root = try makeScratchRoot()
+        let url = root.appending(path: "state/probe-journal.json")
+        let store = FileJournalStore(url: url)
+        let log = CallLog()
+        let power = RecordingPower(log: log, state: .init(false))
+        let arm = ArmService(journal: store,
+                             reader: GuardedJournalReader(url: url, requiredOwner: getuid()),
+                             power: power, supervisor: RecordingSupervisor(log: log),
+                             display: RecordingDisplay(log: log, awakeAfterForcing: false),
+                             bootSession: { identity }, displayVerifyDelay: 0)
+        #expect(throws: ArmError.unknownBootIdentity) { try arm.arm(ttlSeconds: 60) }
+        #expect(try store.load() == nil)
+        #expect(!power.state.current)
+        #expect(!log.calls.contains("watchdog.install"))
+        #expect(!log.calls.contains("power.set(true)"))
+    }
+}
+
+@Test func watchdogRecoversFromSafeButNonPrivateJournalDirectory() throws {
+    let root = try makeScratchRoot()
+    let url = root.appending(path: "state/probe-journal.json")
+    let store = FileJournalStore(url: url)
+    try store.write(armedRecord(priorValue: false, ttlSeconds: 3600))
+    try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                          ofItemAtPath: url.deletingLastPathComponent().path)
+    let power = RecordingPower(log: CallLog(), state: .init(true))
+    let service = WatchdogService(reader: GuardedJournalReader(url: url, store: store, requiredOwner: getuid()),
+                                  power: power, supervisor: RecordingSupervisor(log: CallLog()),
+                                  notifier: RecordingNotifier(), environment: FakeEnvironment())
+    _ = try service.evaluate(now: fixedNow, monotonicNow: fixedUptime, lastHeartbeat: nil)
+    #expect(!power.state.current)
+}
+
+@Test func armRefusesAnUnsafeTransactionLock() throws {
+    let root = try makeScratchRoot()
+    let directory = root.appending(path: "state")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                            attributes: [.posixPermissions: 0o700])
+    let lock = directory.appending(path: ".journal.lock")
+    try FileManager.default.createSymbolicLink(atPath: lock.path, withDestinationPath: "missing")
+    let url = directory.appending(path: "probe-journal.json")
+    let power = RecordingPower(log: CallLog(), state: .init(false))
+    let arm = ArmService(journal: FileJournalStore(url: url),
+                         reader: GuardedJournalReader(url: url, requiredOwner: getuid()),
+                         power: power, supervisor: RecordingSupervisor(log: CallLog()),
+                         display: RecordingDisplay(log: CallLog(), awakeAfterForcing: false), displayVerifyDelay: 0)
+    #expect(throws: (any Error).self) { try arm.arm(ttlSeconds: 60) }
+    #expect(!power.state.current)
+    var info = stat()
+    #expect(lstat(lock.path, &info) == 0)
+    #expect((info.st_mode & S_IFMT) == S_IFLNK)
+    #expect(!FileManager.default.fileExists(atPath: url.path))
+}
+
+private final class PausedPower: SleepDisabledControlling, @unchecked Sendable {
+    let inner: RecordingPower
+    let entered = DispatchSemaphore(value: 0)
+    let proceed = DispatchSemaphore(value: 0)
+    init(inner: RecordingPower) { self.inner = inner }
+    func isEnabled() throws -> Bool {
+        let result = try inner.isEnabled()
+        entered.signal()
+        guard proceed.wait(timeout: .now() + 60) == .success else {
+            throw PowerControlError.commandFailed(exitCode: 1, stderr: "test timed out")
+        }
+        return result
+    }
+    func set(_ on: Bool) throws { try inner.set(on) }
+}
+
+@Test func concurrentArmsCannotReplaceTheFirstJournal() throws {
+    let root = try makeScratchRoot()
+    let log = CallLog()
+    let url = root.appending(path: "state/probe-journal.json")
+    let store = FileJournalStore(url: url)
+    let reader = GuardedJournalReader(url: url, requiredOwner: getuid(), quarantineOnRefusal: false)
+    let power = RecordingPower(log: log, state: .init(false))
+    let paused = PausedPower(inner: power)
+    let supervisor = RecordingSupervisor(log: log)
+    let first = ArmService(journal: store, reader: reader, power: paused, supervisor: supervisor,
+                           display: RecordingDisplay(log: log, awakeAfterForcing: false),
+                           bootSession: { fixedBootSession }, displayVerifyDelay: 0)
+    let second = ArmService(journal: store, reader: reader, power: power, supervisor: supervisor,
+                            display: RecordingDisplay(log: log, awakeAfterForcing: false),
+                            bootSession: { fixedBootSession }, displayVerifyDelay: 0)
+    let done = DispatchSemaphore(value: 0)
+    let firstThread = Thread {
+        defer { done.signal() }
+        do {
+            _ = try first.arm(ttlSeconds: 60)
+            log.record("first.success")
+        } catch {
+            log.record("first.error: \(error)")
+        }
+    }
+    firstThread.start()
+    var finished = false
+    defer {
+        paused.proceed.signal()
+        if !finished { _ = done.wait(timeout: .now() + 30) }
+    }
+    try #require(paused.entered.wait(timeout: .now() + 30) == .success,
+                 "first arm did not reach the locked power read; calls: \(log.calls)")
+    #expect(throws: (any Error).self) { try second.arm(ttlSeconds: 120) }
+    let watchdog = WatchdogService(reader: reader, power: power, supervisor: supervisor,
+                                   notifier: RecordingNotifier(), environment: FakeEnvironment())
+    #expect(throws: (any Error).self) { try watchdog.revertNow() }
+    #expect(throws: (any Error).self) {
+        try watchdog.evaluate(now: fixedNow, monotonicNow: fixedUptime, lastHeartbeat: nil)
+    }
+    #expect(!power.state.current)
+    #expect(try store.load() == nil)
+    paused.proceed.signal()
+    try #require(done.wait(timeout: .now() + 30) == .success)
+    finished = true
+    #expect(log.calls.contains("first.success"), "first arm failed: \(log.calls)")
+    #expect(try store.load()?.priorValue == false)
+    #expect(power.state.current)
+    #expect(try watchdog.revertNow())
+    #expect(!power.state.current)
+}
+
+private func receivedLockReadyByte(_ handle: FileHandle) -> Bool {
+    var descriptor = pollfd(fd: handle.fileDescriptor, events: Int16(POLLIN), revents: 0)
+    guard poll(&descriptor, 1, 5_000) == 1, descriptor.revents & Int16(POLLIN) != 0 else { return false }
+    return handle.readData(ofLength: 1) == Data([120])
+}
+
+@Test func lockReadinessRequiresTheReadyByte() {
+    for payload in [Data(), Data([121])] {
+        let pipe = Pipe()
+        pipe.fileHandleForWriting.write(payload)
+        pipe.fileHandleForWriting.closeFile()
+        #expect(!receivedLockReadyByte(pipe.fileHandleForReading))
+    }
+}
+
+@Test func aSeparateProcessHoldingTheLockBlocksTransactions() throws {
+    let root = try makeScratchRoot()
+    let directory = root.appending(path: "state")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                            attributes: [.posixPermissions: 0o700])
+    let lock = directory.appending(path: ".journal.lock")
+    #expect(FileManager.default.createFile(atPath: lock.path, contents: Data(),
+                                          attributes: [.posixPermissions: 0o600]))
+    let input = Pipe()
+    let output = Pipe()
+    let child = Process()
+    child.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
+    child.arguments = ["-e", "alarm 30; open(my $f, q(+<), $ARGV[0]) or die; flock($f, 2) or die; syswrite(STDOUT, q(x)); sysread(STDIN, my $b, 1);", lock.path]
+    child.standardInput = input
+    child.standardOutput = output
+    try child.run()
+    let exited = DispatchSemaphore(value: 0)
+    Thread { child.waitUntilExit(); exited.signal() }.start()
+    func stopChild() -> Bool {
+        input.fileHandleForWriting.closeFile()
+        return exited.wait(timeout: .now() + 5) == .success
+    }
+    var released = false
+    defer {
+        if !released { #expect(stopChild(), "lock holder did not exit") }
+    }
+    try #require(receivedLockReadyByte(output.fileHandleForReading) && child.isRunning)
+    let url = directory.appending(path: "probe-journal.json")
+    let store = FileJournalStore(url: url)
+    let reader = GuardedJournalReader(url: url, requiredOwner: getuid())
+    let log = CallLog()
+    let power = RecordingPower(log: log, state: .init(false))
+    let supervisor = RecordingSupervisor(log: log)
+    let arm = ArmService(journal: store, reader: reader, power: power, supervisor: supervisor,
+                         display: RecordingDisplay(log: log, awakeAfterForcing: false), displayVerifyDelay: 0)
+    let watchdog = WatchdogService(reader: reader, power: power, supervisor: supervisor,
+                                   notifier: RecordingNotifier(), environment: FakeEnvironment())
+    #expect(throws: JournalTransactionError.self) { try arm.arm(ttlSeconds: 60) }
+    #expect(throws: JournalTransactionError.self) { try watchdog.revertNow() }
+    #expect(throws: JournalTransactionError.self) {
+        try watchdog.evaluate(now: fixedNow, monotonicNow: fixedUptime, lastHeartbeat: nil)
+    }
+    #expect(!power.state.current)
+    #expect(try store.load() == nil)
+    let stopped = stopChild()
+    released = true
+    try #require(stopped, "lock holder did not exit")
+    #expect(child.terminationStatus == 0)
+    try arm.arm(ttlSeconds: 60)
+    #expect(power.state.current)
+    #expect(try watchdog.revertNow())
+    #expect(!power.state.current)
+}
+
 @Test func armWritesAndSyncsTheJournalBeforeItTouchesTheSleepSetting() throws {
     // §8.2(1), and the reason the whole component exists. A journal written
     // after `pmset` is defeated by a SIGKILL in the window between the two:
@@ -1150,30 +1390,10 @@ private func probeMainSource() throws -> String {
         """)
 }
 
-@Test func armFailsWhenItsOwnDaemonCannotReadTheBootItIsRunningIn() throws {
-    // The second reachable case, restated on the mechanism that replaced the
-    // boot-time comparison (#83).
-    //
-    // It used to be the BOOT SECOND: `HostInfo.now()` truncates `setAt` DOWN to
-    // the whole second, so an `arm` landing inside that second recorded a
-    // `setAt` fractionally below `kern.boottime` and rung 2 read the journal as
-    // older than the boot. Comparing identities removes that case entirely —
-    // `arm` and the daemon it starts are in the same boot whatever the
-    // second-hand says — and `armSurvivesTheDaemonThatArmItselfInstalls` is
-    // where that now lives.
-    //
-    // What remains reachable is an UNREADABLE identity. `kern.bootsessionuuid`
-    // is read through `sysctlbyname`, which can fail; a daemon that cannot name
-    // the boot it is running in cannot show the journal belongs to it, and
-    // §8.2(4) resolves the unknown toward reverting.
-    //
-    // Reverting is the RIGHT call here, exactly as it was for the boot second:
-    // rung 2 is deliberately biased that way. What must not happen is `arm`
-    // reporting success afterwards, leaving sleep held with no journal to
-    // explain it.
+@Test func watchdogRetriesAfterArmWhenItsBootIdentityIsUnknown() throws {
+    // The install-time tick cannot enter the arm transaction. A later tick
+    // must treat an unknown daemon boot identity as a dirty journal and revert.
     let root = try makeScratchRoot()
-    defer { try? FileManager.default.removeItem(at: root) }
-
     let log = CallLog()
     let url = root.appending(path: "state/probe-journal.json")
     let store = FileJournalStore(url: url)
@@ -1182,39 +1402,38 @@ private func probeMainSource() throws -> String {
     let watchdog = WatchdogService(
         reader: GuardedJournalReader(url: url, store: store, requiredOwner: getuid()),
         power: power, supervisor: supervisor, notifier: RecordingNotifier(),
-        environment: FakeEnvironment(),
-        // The daemon's own `sysctlbyname` came back empty-handed.
-        bootSession: { nil })
+        environment: FakeEnvironment(), bootSession: { nil })
     supervisor.runAtLoad = {
-        _ = try? watchdog.evaluate(now: fixedNow, monotonicNow: fixedUptime)
+        do {
+            _ = try watchdog.evaluate(now: fixedNow, monotonicNow: fixedUptime)
+            log.record("tick.unexpectedSuccess")
+        } catch JournalTransactionError.busy {
+            log.record("tick.busy")
+        } catch {
+            log.record("tick.unexpectedError")
+        }
     }
-
     let service = ArmService(
         journal: RecordingJournal(log: log, inner: store),
-        reader: GuardedJournalReader(url: url, requiredOwner: getuid(),
-                                     quarantineOnRefusal: false),
-        power: power,
-        supervisor: supervisor,
+        reader: GuardedJournalReader(url: url, requiredOwner: getuid(), quarantineOnRefusal: false),
+        power: power, supervisor: supervisor,
         display: RecordingDisplay(log: log, awakeAfterForcing: false),
-        clock: { fixedNow },
-        // Fixed for the same reason `clock` is: the real uptime of whatever
-        // machine runs the suite is machine state, not a fixture, and the
-        // record `arm` writes is read back by ticks that pass their own.
-        monotonicClock: { fixedUptime },
-        // The ARM side read the identity perfectly well. Only the daemon's read
-        // fails here, so the revert below is the unknown resolving toward
-        // safety and not two blank strings failing to match.
-        bootSession: { fixedBootSession },
-        displayVerifyDelay: 0)
+        clock: { fixedNow }, monotonicClock: { fixedUptime },
+        bootSession: { fixedBootSession }, displayVerifyDelay: 0)
 
-    #expect(throws: ArmError.journalVanished) { try service.arm(ttlSeconds: 3600) }
+    #expect(try service.arm(ttlSeconds: 3600) == 3600)
+    #expect(log.calls.contains("tick.busy"))
+    #expect(!log.calls.contains("tick.unexpectedSuccess"))
+    #expect(!log.calls.contains("tick.unexpectedError"))
+    #expect(power.state.current)
+    #expect(try store.load()?.priorValue == false)
+    #expect(supervisor.isLoaded)
 
-    #expect(power.state.current == false, """
-        the daemon could not name its own boot, reverted, and arm still \
-        reported success — so the machine holds sleep with no journal. \
-        order: \(log.calls)
-        """)
-    #expect(supervisor.isLoaded == false)
+    #expect(try watchdog.evaluate(now: fixedNow, monotonicNow: fixedUptime)
+            == .revert(.dirtyJournalAtBoot))
+    #expect(!power.state.current)
+    #expect(try store.load() == nil)
+    #expect(!supervisor.isLoaded)
 }
 
 // MARK: - §8.2(2,3) — the watchdog reverts
@@ -1810,30 +2029,32 @@ private func recordFromTheEarlierBoot() -> JournalRecord {
         this hold from one left behind by a machine that has since rebooted
         """)
 
-    // The unreadable case, which must reach disk as the empty string rather
-    // than as anything a later read could mistake for a boot.
+    // An unreadable identity cannot produce a useful journal. Refuse before
+    // the watchdog is installed or the power setting is changed.
     let other = try makeScratchRoot()
     defer { try? FileManager.default.removeItem(at: other) }
 
     let blindURL = other.appending(path: "state/probe-journal.json")
     let blindStore = FileJournalStore(url: blindURL)
+    let blindLog = CallLog()
+    let blindPower = RecordingPower(log: blindLog, state: .init(false))
     let blind = ArmService(
-        journal: RecordingJournal(log: log, inner: blindStore),
+        journal: RecordingJournal(log: blindLog, inner: blindStore),
         reader: GuardedJournalReader(url: blindURL, requiredOwner: getuid(),
                                      quarantineOnRefusal: false),
-        power: RecordingPower(log: log, state: .init(false)),
-        supervisor: RecordingSupervisor(log: log),
-        display: RecordingDisplay(log: log, awakeAfterForcing: false),
+        power: blindPower,
+        supervisor: RecordingSupervisor(log: blindLog),
+        display: RecordingDisplay(log: blindLog, awakeAfterForcing: false),
         clock: { fixedNow },
         monotonicClock: { fixedUptime },
         bootSession: { nil },
         displayVerifyDelay: 0)
 
-    try blind.arm(ttlSeconds: 3600)
-    #expect(try #require(try blindStore.load()).bootSessionID == "", """
-        an arm that could not read the boot identity wrote something else into \
-        the journal, and whatever it wrote is a value some later read may match
-        """)
+    #expect(throws: ArmError.unknownBootIdentity) { try blind.arm(ttlSeconds: 3600) }
+    #expect(try blindStore.load() == nil)
+    #expect(!blindPower.state.current)
+    #expect(!blindLog.calls.contains("watchdog.install"))
+    #expect(!blindLog.calls.contains("power.set(true)"))
 }
 
 @Test func theBootIdentityThisMachineReportsIsAReadableUUID() throws {
@@ -1906,24 +2127,17 @@ private func recordFromTheEarlierBoot() -> JournalRecord {
     #expect(try armed.store.load() == nil)
 }
 
-@Test func aRefusedJournalStillEndsWithTheSleepSettingRestored() throws {
-    // The fail-safe direction, and the trap in SECURITY.md item 2. "Refuse to
-    // act on it" cannot mean "do nothing": a watchdog that threw and stopped
-    // would leave `SleepDisabled` held forever, which is precisely the failure
-    // §8.2 exists to prevent. Refusing to TRUST the journal is not the same as
-    // refusing to ACT.
-    //
-    // So the untrusted `priorValue` is discarded and the setting goes to
-    // `false` — the safe direction — and the journal is quarantined as
-    // evidence. The cost is real and deliberate: a user who genuinely had
-    // `disablesleep` set loses it. An untrusted file cannot tell us otherwise.
+@Test func unsafeJournalDirectoryRequiresRepairBeforeWatchdogEvaluation() throws {
+    // An attacker can replace a lock in a writable directory. Acting without
+    // the same lock as an armer can race its power change, so preserve the
+    // journal and report the fault until the directory is repaired.
     let root = try makeScratchRoot()
     defer { try? FileManager.default.removeItem(at: root) }
 
     let log = CallLog()
     let url = root.appending(path: "state/probe-journal.json")
     let store = FileJournalStore(url: url)
-    try store.write(armedRecord(priorValue: true, ttlSeconds: 3600))
+    try store.write(armedRecord(priorValue: false, ttlSeconds: 3600))
 
     // The gap SECURITY.md "One gap stays open on purpose" names: a directory the store did not create.
     let stateDir = url.deletingLastPathComponent()
@@ -1939,17 +2153,34 @@ private func recordFromTheEarlierBoot() -> JournalRecord {
         notifier: notifier,
         environment: FakeEnvironment())
 
-    _ = try service.evaluate(now: fixedNow.addingTimeInterval(5),
+    #expect(throws: JournalRefusal.self) {
+        try service.evaluate(now: fixedNow.addingTimeInterval(5),
                              monotonicNow: uptime(after: 5), lastHeartbeat: nil)
+    }
+    #expect(power.state.current)
+    #expect(try store.load()?.priorValue == false)
+    #expect(!log.calls.contains("watchdog.uninstall"))
+    #expect(notifier.posted.isEmpty)
+}
 
-    #expect(power.state.current == false, """
-        a refused journal left sleep disabled with nothing supervising it. \
-        Refusing to trust the file is not a reason to leave the machine awake.
-        """)
-    let siblings = try FileManager.default.contentsOfDirectory(atPath: stateDir.path)
-    #expect(siblings.contains { $0.hasPrefix("probe-journal.corrupt.") },
-            "the refused journal was not quarantined: \(siblings)")
-    #expect(notifier.posted.isEmpty == false)
+@Test func unsafeJournalDirectoryRequiresRepairBeforeManualRevert() throws {
+    let root = try makeScratchRoot()
+    let url = root.appending(path: "state/probe-journal.json")
+    let store = FileJournalStore(url: url)
+    try store.write(armedRecord(priorValue: false, ttlSeconds: 3600))
+    try FileManager.default.setAttributes([.posixPermissions: 0o777],
+                                          ofItemAtPath: url.deletingLastPathComponent().path)
+    let log = CallLog()
+    let power = RecordingPower(log: log, state: .init(true))
+    let notifier = RecordingNotifier()
+    let service = WatchdogService(reader: GuardedJournalReader(url: url, store: store, requiredOwner: getuid()),
+                                  power: power, supervisor: RecordingSupervisor(log: log),
+                                  notifier: notifier, environment: FakeEnvironment())
+    #expect(throws: JournalRefusal.self) { try service.revertNow() }
+    #expect(power.state.current)
+    #expect(try store.load()?.priorValue == false)
+    #expect(!log.calls.contains("watchdog.uninstall"))
+    #expect(notifier.posted.isEmpty)
 }
 
 @Test func aRefusedJournalNotifiesBeforeTheBootoutThatEndsTheProcess() throws {
@@ -1974,10 +2205,9 @@ private func recordFromTheEarlierBoot() -> JournalRecord {
     let store = FileJournalStore(url: url)
     try store.write(armedRecord(priorValue: true, ttlSeconds: 3600))
 
-    // The same tamper the guard above uses: a journal directory the store did
-    // not create, left writable by everyone, which the reader must refuse.
+    // This directory permits a secure lock but fails the journal privacy rule.
     let stateDir = url.deletingLastPathComponent()
-    try FileManager.default.setAttributes([.posixPermissions: 0o777],
+    try FileManager.default.setAttributes([.posixPermissions: 0o755],
                                           ofItemAtPath: stateDir.path)
 
     let supervisor = DyingSupervisor()

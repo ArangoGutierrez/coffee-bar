@@ -875,15 +875,9 @@ private func waitUntilNothingAnswers(at path: String) {
             "the bind went through the link that survived the delete")
 }
 
-@Test func aSymlinkToAnUnservedSocketIsClearedRatherThanFollowed() throws {
-    // One of the three symlink cases that were already correct before I2 was
-    // fixed. Connecting through the link reaches a bound node whose owner has
-    // gone, which gives ECONNREFUSED, so the probe says `.stale`. `removeItem`
-    // does not follow a symlink, so it takes the LINK and the far end survives.
-    //
-    // Named bug this catches: a fix for the dangling case that reclassifies
-    // EVERY symlink, leaving the app refusing to start on a path it used to
-    // reclaim without help.
+@Test func aSymlinkToAnUnservedSocketIsRefused() throws {
+    // A dead socket and a live legacy listener with a full backlog both give
+    // ECONNREFUSED. The link must remain when ownership is ambiguous.
     let sandbox = SocketSandbox()
     defer { sandbox.remove() }
     let target = RelocationTarget()
@@ -905,11 +899,8 @@ private func waitUntilNothingAnswers(at path: String) {
 
     let listener = UnixSocketIngestListener(socketPath: sandbox.path)
     defer { listener.stop() }
-    try listener.start { _, _ in }
-    try requireReady(listener)
-
-    #expect(fileType(ofItemAtPath: sandbox.path) == .typeSocket,
-            "the configured path is \(fileType(ofItemAtPath: sandbox.path)?.rawValue ?? "absent"), not a socket")
+    #expect(throws: IngestError.alreadyServing(sandbox.path)) { try listener.start { _, _ in } }
+    #expect(fileType(ofItemAtPath: sandbox.path) == .typeSymbolicLink)
     #expect(FileManager.default.fileExists(atPath: target.path),
             "removeItem followed the link and deleted the node at the far end")
 }

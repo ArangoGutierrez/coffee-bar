@@ -61,12 +61,14 @@ private func codeLines(of source: String) -> String {
         """)
 }
 
-@Test func theMonotonicClockIsAtLeastTheAwakeUptimeItContains() throws {
+@Test func theMonotonicClockContainsAwakeUptimeWithinConversionPrecision() throws {
     // `ProcessInfo.systemUptime` is the AWAKE-only clock: how long the machine
     // has been up excluding sleep. Continuous time is that plus the sleep, so
     // it can never be the smaller of the two. Foundation derives it
     // independently, which is what makes this a comparison rather than a
-    // restatement of the implementation.
+    // restatement of the implementation. The conversions to Double seconds
+    // can round differently. A 20,000-sample check reproduced differences of
+    // one ULP; allow two rounding steps, not an elapsed-time grace period.
     //
     // Named bug this catches: reading `mach_continuous_time()`'s TICKS as
     // nanoseconds. On Apple silicon one tick is 125/3 ns, so a raw count runs
@@ -74,8 +76,9 @@ private func codeLines(of source: String) -> String {
     // uptime lands far below the awake uptime this compares against.
     let awake = ProcessInfo.processInfo.systemUptime
     let continuous = SystemMonotonicClock.now()
+    let roundingAllowance = 2 * max(awake.ulp, continuous.ulp)
 
-    #expect(continuous >= awake, """
+    #expect(continuous + roundingAllowance >= awake, """
         continuous time reads \(continuous) s while this machine has been AWAKE \
         for \(awake) s. Continuous time contains the awake time, so a smaller \
         value means the timebase conversion is wrong and every elapsed time \

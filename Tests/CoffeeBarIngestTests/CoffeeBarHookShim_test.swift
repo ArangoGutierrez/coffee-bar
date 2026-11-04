@@ -416,6 +416,7 @@ private func fixtureDirectoryName(for tool: AgentTool) -> String {
     case .claudeCode: return "claude-hooks"
     case .codex: return "codex-hooks"
     case .cursor: return "cursor-hooks"
+    case .activityBridge: preconditionFailure("activity bridge has no native capture corpus")
     }
 }
 
@@ -511,7 +512,7 @@ private func fixtureString(_ key: String, in name: String) throws -> String {
     #expect(collected.all.allSatisfy { $0.event.hookEventName == "Stop" })
 }
 
-@Test(arguments: AgentTool.allCases)
+@Test(arguments: AgentTool.hookTools)
 func eachToolsOwnRecordedPayloadArrivesUnderItsOwnOrigin(_ tool: AgentTool) throws {
     // The claim the documentation makes: ONE binary serves all three adapters.
     //
@@ -784,7 +785,7 @@ func eachToolsOwnRecordedPayloadArrivesUnderItsOwnOrigin(_ tool: AgentTool) thro
             "usage went to stdout, which the agent reads as a decision")
     #expect(run.errorText.contains(shimProductName))
     #expect(run.errorText.contains("--tool="))
-    for tool in AgentTool.allCases {
+    for tool in AgentTool.hookTools {
         #expect(run.errorText.contains(tool.shimName),
                 Comment(rawValue: "usage does not mention \(tool.shimName)"))
     }
@@ -890,16 +891,147 @@ private final class PseudoTerminal {
 
 // MARK: - Too large
 
+@Test func shimTimesOutWhenStandardInputRemainsOpen() throws {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: try shimBinaryPath())
+    process.arguments = ["--socket=/nonexistent/coffee-bar.sock"]
+    process.environment = shimEnvironment(totalTimeout: 0.2)
+    let input = Pipe()
+    process.standardInput = input
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    let finished = DispatchSemaphore(value: 0)
+    process.terminationHandler = { _ in finished.signal() }
+    try process.run()
+    let watchdog = DispatchWorkItem {
+        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+    }
+    DispatchQueue.global().asyncAfter(deadline: .now() + 5, execute: watchdog)
+    defer { watchdog.cancel() }
+    let result = finished.wait(timeout: .now() + 2)
+    try? input.fileHandleForWriting.close()
+    process.waitUntilExit()
+    #expect(result == .success, "the shim waited for stdin after its deadline")
+    #expect(process.terminationStatus == 0)
+}
+
+private final class SlowPeerProgress: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func add(_ value: Int) { lock.lock(); count += value; lock.unlock() }
+    var bytes: Int { lock.lock(); defer { lock.unlock() }; return count }
+}
+
+@Test func shimBoundsTheWholeWriteToASlowPeer() throws {
+    let sandbox = ShimSocketSandbox()
+    try sandbox.makeDirectory()
+    defer { sandbox.remove() }
+    let listener = socket(AF_UNIX, SOCK_STREAM, 0)
+    try #require(listener >= 0)
+    defer { Darwin.close(listener) }
+    var address = sockaddr_un()
+    address.sun_family = sa_family_t(AF_UNIX)
+    address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+    withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: sandbox.path.utf8) }
+    let bound = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            Darwin.bind(listener, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+        }
+    }
+    try #require(bound == 0, "could not bind the owned test socket")
+    try #require(listen(listener, 1) == 0)
+    let peerFinished = DispatchSemaphore(value: 0)
+    let progress = SlowPeerProgress()
+    DispatchQueue.global().async {
+        defer { peerFinished.signal() }
+        var pending = pollfd(fd: listener, events: Int16(POLLIN), revents: 0)
+        guard poll(&pending, 1, 3_000) > 0 else { return }
+        let peer = accept(listener, nil, nil)
+        guard peer >= 0 else { return }
+        defer { Darwin.close(peer) }
+        let end = DispatchTime.now() + 2.0
+        var bytes = [UInt8](repeating: 0, count: 4_096)
+        while DispatchTime.now() < end {
+            _ = poll(nil, 0, 100)
+            var ready = pollfd(fd: peer, events: Int16(POLLIN), revents: 0)
+            guard poll(&ready, 1, 0) > 0 else { continue }
+            let count = Darwin.read(peer, &bytes, bytes.count)
+            if count <= 0 { break }
+            progress.add(count)
+        }
+    }
+    let started = DispatchTime.now().uptimeNanoseconds
+    let run = try runShim(["--socket=\(sandbox.path)"],
+                          stdin: Data(repeating: 120, count: 900_000),
+                          totalTimeout: 0.2)
+    let elapsed = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000_000
+    #expect(elapsed < 1.5, "partial writes extended the total timeout")
+    #expect(run.status == 0)
+    #expect(peerFinished.wait(timeout: .now() + 4) == .success)
+    #expect(progress.bytes > 0 && progress.bytes < 900_000,
+            "the peer did not exercise a partial write")
+}
+
+@Test func shimReportsEarlyRefusalWithoutSigpipe() throws {
+    let sandbox = ShimSocketSandbox()
+    try sandbox.makeDirectory()
+    defer { sandbox.remove() }
+    let listener = socket(AF_UNIX, SOCK_STREAM, 0)
+    try #require(listener >= 0)
+    defer { Darwin.close(listener) }
+    var address = sockaddr_un()
+    address.sun_family = sa_family_t(AF_UNIX)
+    address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+    withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: sandbox.path.utf8) }
+    let bound = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            Darwin.bind(listener, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+        }
+    }
+    try #require(bound == 0, "could not bind the owned test socket")
+    try #require(listen(listener, 1) == 0)
+    let peerFinished = DispatchSemaphore(value: 0)
+    DispatchQueue.global().async {
+        defer { peerFinished.signal() }
+        var pending = pollfd(fd: listener, events: Int16(POLLIN), revents: 0)
+        guard poll(&pending, 1, 3_000) > 0 else { return }
+        let peer = accept(listener, nil, nil)
+        guard peer >= 0 else { return }
+        defer { Darwin.close(peer) }
+        var noSignal: Int32 = 1
+        setsockopt(peer, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size))
+        var bytes = [UInt8](repeating: 0, count: 1_024)
+        var readable = pollfd(fd: peer, events: Int16(POLLIN), revents: 0)
+        guard poll(&readable, 1, 3_000) > 0 else { return }
+        guard Darwin.read(peer, &bytes, bytes.count) > 0 else { return }
+        let answer = Data("HTTP/1.1 413 Payload Too Large\r\n\r\n".utf8)
+        answer.withUnsafeBytes { buffer in
+            _ = Darwin.write(peer, buffer.baseAddress!, buffer.count)
+        }
+    }
+    let run = try runShim(["--socket=\(sandbox.path)"],
+                          stdin: Data(repeating: 120, count: 900_000),
+                          totalTimeout: shimRefusalBudget)
+    #expect(peerFinished.wait(timeout: .now() + 4) == .success)
+    expectHookModeContract(run)
+    #expect(run.errorText.contains("413"), "the early refusal was lost")
+}
+
+@Test func aBodyAtTheLimitStillRespectsTheListenersHeaderInclusiveLimit() throws {
+    let sandbox = ShimSocketSandbox()
+    defer { sandbox.remove() }
+    let (listener, collected) = try startCollectingListener(at: sandbox)
+    defer { listener.stop() }
+    let body = Data(repeating: 120, count: HookShim.maximumRequestBytes)
+    let run = try runShim(["--socket=\(sandbox.path)"], stdin: body,
+                          totalTimeout: shimRefusalBudget)
+    expectHookModeContract(run)
+    #expect(run.errorText.contains("413"))
+    #expect(collected.all.isEmpty)
+}
+
 @Test func aPayloadOverTheListenersCapIsRefusedAndTheShimStillExitsZero() throws {
-    // `HTTPRequestFramer.maximumBytes` refuses on the DECLARED length, before
-    // the bytes are buffered, so the listener answers 413 and closes while the
-    // shim is still writing.
-    //
-    // Named bug, and the reason this test is not merely a status check: writing
-    // to a socket whose peer has closed raises SIGPIPE, which no exit code can
-    // survive. A shim without `SO_NOSIGPIPE` dies here with `.uncaughtSignal`
-    // and status 13, the agent sees a failed hook, and the failure appears only
-    // for large payloads — which is to say, on real replies carrying code.
+    // An over-cap payload must be dropped whole and reported without exposing it.
     let sandbox = ShimSocketSandbox()
     defer { sandbox.remove() }
     let (listener, collected) = try startCollectingListener(at: sandbox)
@@ -910,10 +1042,7 @@ private final class PseudoTerminal {
     #expect(body.count > HTTPRequestFramer.maximumBytes,
             "the payload is under the cap; this test would exercise the success path")
 
-    // `shimRefusalBudget` for the reason `shimRefusalBudget` states, and with an
-    // extra edge here: the listener answers 413 on the DECLARED length and closes
-    // while this payload is still being written, so the answer has to be read out
-    // of a socket the write already failed on. See issue #90.
+    // The shim reports the limit even when it drops the body before connecting.
     let run = try runShim(["--socket=\(sandbox.path)"], stdin: body,
                           totalTimeout: shimRefusalBudget)
     expectHookModeContract(run)

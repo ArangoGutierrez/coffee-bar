@@ -42,7 +42,7 @@ private let settingsFixtures: [(tool: AgentTool, directory: String, files: [Stri
       "no-hooks.json", "wired.json"]),
     (.cursor, "cursor-settings",
      ["captured.json", "malformed.json", "missing-session-start.json",
-      "missing-two.json", "no-hooks.json", "wired.json"]),
+      "missing-two.json", "no-hooks.json", "wired-with-turn-signals.json", "wired.json"]),
 ]
 
 @Test(arguments: settingsFixtures)
@@ -122,9 +122,9 @@ func theSettingsFixturesForEachToolAreOnDisk(
     // inside, and reports every Cursor entry as not wired.
     //
     // Named bug this catches: applying Claude Code's nesting to Cursor. A
-    // correctly wired Cursor user is then told to wire all five entries they
+    // correctly wired Cursor user is then told to wire all seven entries they
     // have already wired, which is a fault they cannot clear.
-    #expect(try HookHealth.status(of: cursor("wired.json"), for: .cursor) == .wired)
+    #expect(try HookHealth.status(of: cursor("wired-with-turn-signals.json"), for: .cursor) == .wired)
 }
 
 @Test func aCursorFileWithNoHooksAsksForCursorEventsInCursorsOwnVocabulary() throws {
@@ -133,19 +133,19 @@ func theSettingsFixturesForEachToolAreOnDisk(
     // user to add keys their tool does not read.
     #expect(try HookHealth.status(of: cursor("no-hooks.json"), for: .cursor)
             == .missing(["afterFileEdit", "afterShellExecution", "beforeReadFile",
-                         "beforeShellExecution", "sessionStart"]))
+                         "beforeShellExecution", "beforeSubmitPrompt", "sessionStart", "stop"]))
 }
 
 @Test func aMissingCursorEntryIsNamed() throws {
     // `sessionStart` is present and runs another tool's script.
     #expect(try HookHealth.status(of: cursor("missing-session-start.json"), for: .cursor)
-            == .missing(["sessionStart"]))
+            == .missing(["beforeSubmitPrompt", "sessionStart", "stop"]))
 }
 
 @Test func twoMissingCursorEntriesAreNamedInASortedOrder() throws {
     // `beforeReadFile` is absent outright; `sessionStart` points elsewhere.
     #expect(try HookHealth.status(of: cursor("missing-two.json"), for: .cursor)
-            == .missing(["beforeReadFile", "sessionStart"]))
+            == .missing(["beforeReadFile", "beforeSubmitPrompt", "sessionStart", "stop"]))
 }
 
 @Test func aMalformedCursorFileIsReportedNotCrashed() throws {
@@ -155,17 +155,18 @@ func theSettingsFixturesForEachToolAreOnDisk(
 @Test func theCapturedCursorFileReportsEveryRequiredEventMissing() throws {
     // The REAL `~/.cursor/hooks.json`, and the sharpest guard in this file.
     //
-    // THREE of the five required event KEYS are present in it —
+    // THREE of the seven required event KEYS are present in it —
     // `sessionStart`, `beforeShellExecution` and `afterFileEdit` — and NONE of
     // its commands is coffee-bar's. So a reader that matched on the key answers
     // `.missing(["afterShellExecution", "beforeReadFile"])`, and the true answer
-    // is all five.
+    // is all seven. The two turn-signal events have a documented synthetic
+    // contract; this historical file remains the six-event captured corpus.
     //
     // Named bug this catches: exactly that two-element answer. It would tell a
     // Cursor user three entries were healthy while no event could ever arrive.
     #expect(try HookHealth.status(of: cursor("captured.json"), for: .cursor)
             == .missing(["afterFileEdit", "afterShellExecution", "beforeReadFile",
-                         "beforeShellExecution", "sessionStart"]))
+                         "beforeShellExecution", "beforeSubmitPrompt", "sessionStart", "stop"]))
 }
 
 @Test func anotherToolsFlatCursorEntryDoesNotCount() throws {
@@ -330,7 +331,7 @@ func theClaudeCodeVerdictIsTheSameThroughBothEntryPoints(_ name: String) throws 
     // Named bug this catches: folding the two claims together. An empty required
     // list satisfies every filter and reports `.wired` for a check that never
     // ran, which is the strongest form of a false healthy verdict.
-    for tool in AgentTool.allCases {
+    for tool in AgentTool.hookTools {
         #expect(HookHealth.requiredEvents(for: tool) != nil,
                 "\(tool.rawValue) lost its advisory")
         #expect(HookHealth.status(of: Data("{}".utf8), for: tool) != nil,
@@ -342,7 +343,7 @@ func theClaudeCodeVerdictIsTheSameThroughBothEntryPoints(_ name: String) throws 
     // A zero-byte file is what a truncating writer leaves behind. It carries no
     // evidence that the entries are gone, so it must never be reported as
     // missing entries — for any tool, not only for Claude Code.
-    for tool in AgentTool.allCases {
+    for tool in AgentTool.hookTools {
         #expect(HookHealth.status(of: nil, for: tool) == .unreadable,
                 "\(tool.rawValue) did not report an absent file as unreadable")
         #expect(HookHealth.status(of: Data(), for: tool) == .unreadable,
@@ -354,7 +355,7 @@ func theClaudeCodeVerdictIsTheSameThroughBothEntryPoints(_ name: String) throws 
 
 // MARK: - Where each tool keeps the file
 
-@Test func everyToolNamesItsOwnHookFileAndNoTwoShareOne() {
+@Test func everyToolNamesItsOwnHookFileAndNoTwoShareOne() throws {
     // Named bug this catches: a second hardcoded path. `HookHealthReader` held
     // `.claude/settings.json` as the only location, so a Codex user's advisory
     // was measured against a file their tool never reads.
@@ -369,14 +370,15 @@ func theClaudeCodeVerdictIsTheSameThroughBothEntryPoints(_ name: String) throws 
     // codex-cli 0.146.0: that file carries `[features] hooks = true` and
     // `[hooks.state]` trust hashes, and every trust-hash key points AT
     // `~/.codex/hooks.json`. No TOML is parsed anywhere in this package.
-    for tool in AgentTool.allCases {
-        let path = HookHealth.settingsPath(for: tool)
+    for tool in AgentTool.hookTools {
+        let path = try #require(HookHealth.settingsPath(for: tool))
         #expect(path.hasSuffix(".json"),
                 "\(tool.rawValue) reads \(path), which this package cannot parse")
     }
 
-    let paths = AgentTool.allCases.map { HookHealth.settingsPath(for: $0) }
-    #expect(Set(paths).count == AgentTool.allCases.count,
+    let paths = try AgentTool.hookTools.map { try #require(HookHealth.settingsPath(for: $0)) }
+    #expect(HookHealth.settingsPath(for: .activityBridge) == nil)
+    #expect(Set(paths).count == AgentTool.hookTools.count,
             "two tools share one hook file: \(paths)")
 }
 

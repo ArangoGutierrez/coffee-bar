@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [{"command": "/usr/local/bin/coffeebar-hook --tool=cursor"}],
+    "beforeShellExecution": [{"command": "/usr/local/bin/coffeebar-hook --tool=cursor"}],
+    "afterShellExecution": [{"command": "/usr/local/bin/coffeebar-hook --tool=cursor"}],
+    "beforeReadFile": [{"command": "/usr/local/bin/coffeebar-hook --tool=cursor"}],
+    "afterFileEdit": [{"command": "/usr/local/bin/coffeebar-hook --tool=cursor"}],
+    "beforeSubmitPrompt": [{"command": "/usr/local/bin/coffeebar-hook --tool=cursor"}],
+    "stop": [{"command": "/usr/local/bin/coffeebar-hook --tool=cursor"}]
+  }
+}

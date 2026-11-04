@@ -150,33 +150,35 @@ private func cursorSessionID() throws -> String {
         #expect(recorded[kind] == file,
                 "no recorded Cursor \(kind.rawValue) payload at \(file); its transition has no evidence")
     }
-    #expect(CursorEventKind.allCases.count == driven.count,
-            "CursorEventKind has \(CursorEventKind.allCases.count) cases and \(driven.count) are driven by a payload")
+    #expect(recorded.count == driven.count)
+    #expect(CursorEventKind.allCases.count == driven.count + 2,
+            "Cursor has two synthetic turn signals in addition to six captured events")
 }
 
-/// The four Cursor events with NO recorded payload map to nothing.
-///
-/// `beforeSubmitPrompt`, `stop`, `beforeMCPExecution` and `preCompact` are real
-/// Cursor events. Issue #10a could not reach any of them headlessly, so no
-/// payload exists. They get no case at all, which is stronger than a case
-/// mapping to nil: a transition cannot be written for a name the type cannot
-/// express.
-///
-/// Named bug this catches: mapping Cursor's `stop` to `.awaitingInput` from the
-/// documentation rather than from a capture. The event name is a guess until a
-/// payload proves the shape, and this project has already paid for that mistake.
-@Test func cursorEventsWithNoRecordedPayloadDriveNothing() throws {
+/// Two Cursor events still lack payload captures and have no mapping.
+@Test func cursorEventsWithoutPayloadCapturesDriveNothing() throws {
     let before = [session(.working, id: "c1")]
-
-    for name in ["beforeSubmitPrompt", "stop", "beforeMCPExecution", "preCompact"] {
-        #expect(CursorEventKind(rawValue: name) == nil,
-                "\(name) has a CursorEventKind case but no recorded payload")
-
-        let invented = HookEvent(hookEventName: name, sessionID: "c1")
-        #expect(SessionHub.apply(from: .cursor, invented, to: before, now: t0.addingTimeInterval(60))
-                == before,
-                "\(name) changed the session list with no payload behind it")
+    for name in ["beforeMCPExecution", "preCompact"] {
+        #expect(CursorEventKind(rawValue: name) == nil)
+        let event = HookEvent(hookEventName: name, sessionID: "c1")
+        #expect(SessionHub.apply(from: .cursor, event, to: before,
+                                  now: t0.addingTimeInterval(60)) == before)
     }
+}
+
+@Test func cursorTurnSignalsMapToWaitAndWorkStates() {
+    let sid = "synthetic-cursor-contract"
+    let work = SessionHub.apply(from: .cursor,
+        HookEvent(hookEventName: "beforeSubmitPrompt", sessionID: sid),
+        to: [session(.awaitingInput, id: sid)], now: t0.addingTimeInterval(1))
+    #expect(CursorEventKind(rawValue: "beforeSubmitPrompt") != nil)
+    #expect(work.first?.state == .working)
+
+    let wait = SessionHub.apply(from: .cursor,
+        HookEvent(hookEventName: "stop", sessionID: sid),
+        to: work, now: t0.addingTimeInterval(2))
+    #expect(CursorEventKind(rawValue: "stop") != nil)
+    #expect(wait.first?.state == .awaitingInput)
 }
 
 // MARK: - The mapping, driven by recorded payloads

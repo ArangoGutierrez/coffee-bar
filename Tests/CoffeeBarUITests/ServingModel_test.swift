@@ -958,9 +958,8 @@ private func fixtureHealth(_ files: [AgentTool: String]) -> HookHealthReader {
     // Code entries into `~/.claude/settings.json` — a file Cursor never reads,
     // naming events Cursor never sends.
     //
-    // The captured fixture is the real `~/.cursor/hooks.json`. Three of the five
-    // required event KEYS are in it and none of the commands is coffee-bar's, so
-    // all five are missing.
+    // The captured fixture is the historical six-event `~/.cursor/hooks.json`.
+    // It has three required keys, but none of its commands is coffee-bar's.
     let model = ServingModel(holder: SpyHolder(),
                              reader: FakeReader(source: .ac, percent: 80),
                              health: fixtureHealth([.cursor: "captured.json"]),
@@ -971,7 +970,8 @@ private func fixtureHealth(_ files: [AgentTool: String]) -> HookHealthReader {
     // line that names the wrong file and tells the user nothing.
     #expect(model.hookAdvisory == """
         No coffee-bar hooks for afterFileEdit, afterShellExecution, \
-        beforeReadFile, beforeShellExecution, sessionStart in ~/.cursor/hooks.json.
+        beforeReadFile, beforeShellExecution, beforeSubmitPrompt, sessionStart, \
+        stop in ~/.cursor/hooks.json.
         """)
 }
 
@@ -1120,7 +1120,8 @@ private func fixtureHealth(_ files: [AgentTool: String]) -> HookHealthReader {
 
         No coffee-bar hooks for Stop in ~/.codex/hooks.json.
 
-        No coffee-bar hooks for sessionStart in ~/.cursor/hooks.json.
+        No coffee-bar hooks for beforeSubmitPrompt, sessionStart, stop in \
+        ~/.cursor/hooks.json.
         """)
 }
 
@@ -1137,7 +1138,7 @@ private func fixtureHealth(_ files: [AgentTool: String]) -> HookHealthReader {
                              reader: FakeReader(source: .ac, percent: 80),
                              health: fixtureHealth([.claudeCode: "wired.json",
                                                     .codex: "missing-stop.json",
-                                                    .cursor: "wired.json"]),
+                                                    .cursor: "wired-with-turn-signals.json"]),
                              settings: FakeSettings())
     model.refresh()
 
@@ -1232,7 +1233,7 @@ private func fixtureHealth(_ files: [AgentTool: String]) -> HookHealthReader {
 
     #expect(model.hookHealths[.claudeCode] == .missing(["Stop"]),
             "the evidence for an unselected tool was thrown away rather than left unspoken")
-    #expect(model.hookHealths[.cursor] == .missing(["sessionStart"]))
+    #expect(model.hookHealths[.cursor] == .missing(["beforeSubmitPrompt", "sessionStart", "stop"]))
 
     #expect(model.hookAdvisory == """
         No coffee-bar hooks for Stop in ~/.codex/hooks.json.
@@ -2617,6 +2618,22 @@ private final class StubHelperState: PrivilegedHelperStateProviding, @unchecked 
 private let installedElsewhere = "/Volumes/Spare/CoffeeBar.app/Contents/MacOS/coffee-bar-probe"
 
 @MainActor
+@Test func staleHelperPanelPointsToPowerWithoutAnInstallCommand() throws {
+    let model = ServingModel(holder: SpyHolder(),
+                             reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth(),
+                             helper: StubHelperState(.stale),
+                             registration: StubRegisteredHelper(active: false),
+                             settings: FakeSettings())
+    model.refresh()
+    let line = try #require(model.staleHelperPanelAdvisory)
+    #expect(line.contains("Preferences"))
+    #expect(line.contains("Power"))
+    #expect(!line.contains("sudo"))
+    #expect(line.count < 120)
+}
+
+@MainActor
 @Test func theModelRaisesTheStaleHelperAdvisoryTheSourceReports() throws {
     // Named bug this catches, and it is the whole of issue #81 as v0.2.1 left
     // it: a verdict computed correctly and published nowhere. Delete the
@@ -2704,6 +2721,7 @@ private let installedElsewhere = "/Volumes/Spare/CoffeeBar.app/Contents/MacOS/co
         the advisory survived the fix it told the user to apply, so pasting the \
         command appears to do nothing until coffee-bar is relaunched
         """)
+    #expect(model.staleHelperPanelAdvisory == nil)
 }
 
 // MARK: - Issue #71c: the advisory the registered helper makes false
@@ -2780,6 +2798,7 @@ private final class StubRegisteredHelper: RegisteredHelperReporting, @unchecked 
         puts the manual root binary back:
           \(model.staleHelperAdvisory(probeAt: installedElsewhere) ?? "")
         """)
+    #expect(model.staleHelperPanelAdvisory == nil)
 }
 
 @MainActor
@@ -2802,6 +2821,8 @@ private final class StubRegisteredHelper: RegisteredHelperReporting, @unchecked 
     model.refresh()
 
     #expect(model.helperState == .unverifiable, "precondition: the comparison did not run")
+    #expect(model.staleHelperPanelAdvisory == nil)
+    #expect(model.staleHelperAdvisory(probeAt: installedElsewhere, availability: .registrable) == nil)
     #expect(model.staleHelperAdvisory(probeAt: installedElsewhere) == nil, """
         the advisory speaks about the legacy probe on a Mac the registered \
         helper is running:
@@ -2810,18 +2831,7 @@ private final class StubRegisteredHelper: RegisteredHelperReporting, @unchecked 
 }
 
 @MainActor
-@Test func withoutARegisteredHelperTheStaleAdvisoryIsWordForWordWhatItWas() throws {
-    // The other half of the rule, and the half that keeps the fix from being a
-    // deletion. On an unsigned build, and on a signed one whose owner has never
-    // clicked the button, the `sudo` route is the only route there is and the
-    // advisory earns its place.
-    //
-    // The WHOLE SENTENCE, against a literal. `cad2577` on this branch is the
-    // precedent: two `contains(...)` assertions passed over a message that named
-    // no action at all, because a substring check cannot see what was dropped
-    // around it. This one goes red if a single word of the user-visible string
-    // moves — which is the point, since "unchanged, word for word" is the
-    // requirement being enforced.
+@Test func inactiveHelperAdviceUsesTheBuildCapability() throws {
     let model = ServingModel(holder: SpyHolder(),
                              reader: FakeReader(source: .ac, percent: 80),
                              health: fixtureHealth(),
@@ -2833,21 +2843,15 @@ private final class StubRegisteredHelper: RegisteredHelperReporting, @unchecked 
     #expect(model.registeredHelperIsActive == false,
             "precondition: no registered helper on this machine")
 
-    let line = try #require(model.staleHelperAdvisory(probeAt: installedElsewhere), """
-        the fix silenced the advisory on a machine that has no registered helper, \
-        so the only route this build has to lid-closed mode is now documented \
-        nowhere the user will look
-        """)
-    #expect(line == """
-        The probe at /Library/PrivilegedHelperTools/coffee-bar-probe is not the one in \
-        this build, so lid-closed mode is running an older root binary. Replace it with \
-        sudo install -o root -g wheel -m 755 \
-        /Volumes/Spare/CoffeeBar.app/Contents/MacOS/coffee-bar-probe \
-        /Library/PrivilegedHelperTools/coffee-bar-probe and arm it again.
-        """, """
-        the sentence a user without a registered helper reads has changed:
-          \(line)
-        """)
+    let registrable = try #require(model.staleHelperAdvisory(
+        probeAt: installedElsewhere, availability: .registrable))
+    #expect(registrable.contains("Arm lid-closed mode"))
+    #expect(registrable.contains("System Settings"))
+    #expect(!registrable.contains("sudo"))
+    let path = "/Volumes/Spare Disk/Coffee's Bar/coffee-bar-probe"
+    let unavailable = try #require(model.staleHelperAdvisory(
+        probeAt: path, availability: .unavailable))
+    #expect(unavailable.contains("sudo install -o root -g wheel -m 755 '/Volumes/Spare Disk/Coffee'\\''s Bar/coffee-bar-probe' /Library/PrivilegedHelperTools/coffee-bar-probe"))
 }
 
 @MainActor
@@ -2868,6 +2872,7 @@ private final class StubRegisteredHelper: RegisteredHelperReporting, @unchecked 
     model.refresh()
     #expect(model.staleHelperAdvisory(probeAt: installedElsewhere) != nil,
             "precondition: the stale legacy binary is being reported")
+    #expect(model.staleHelperPanelAdvisory != nil)
 
     // The user clicks "Arm lid-closed mode" and macOS registers the daemon. The
     // legacy binary on disk has not moved and is still a different build.
@@ -2882,6 +2887,7 @@ private final class StubRegisteredHelper: RegisteredHelperReporting, @unchecked 
         coffee-bar is relaunched:
           \(model.staleHelperAdvisory(probeAt: installedElsewhere) ?? "")
         """)
+    #expect(model.staleHelperPanelAdvisory == nil)
 }
 
 // MARK: - Issue #71k: the two paragraphs above the button
@@ -3380,4 +3386,323 @@ private func floorTheWatchdogLadderEnforces() -> Int? {
         that scopes only the battery floor leaves the second control under a \
         lid-closed heading with its scope still unstated.
         """)
+}
+
+private final class CountingHealth: HookHealthProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var reads: Int { lock.lock(); defer { lock.unlock() }; return count }
+    func status() -> HookHealthStatus { .unreadable }
+    func statuses(advising selected: Set<AgentTool>) -> [AgentTool: HookHealthStatus] {
+        lock.lock(); defer { lock.unlock() }
+        count += 1
+        return [:]
+    }
+}
+
+@MainActor
+@Test func hookEventsDoNotRepeatAdvisoryReads() {
+    let health = CountingHealth()
+    let model = ServingModel(holder: SpyHolder(), reader: FakeReader(source: .ac, percent: 80),
+                             health: health, settings: FakeSettings())
+    model.refresh()
+    let before = health.reads
+    model.ingest(from: .claudeCode, HookEvent(hookEventName: "SessionStart", sessionID: "a"))
+    model.ingest(from: .claudeCode, HookEvent(hookEventName: "PreToolUse", sessionID: "a"))
+    #expect(health.reads == before)
+    #expect(model.isServing)
+    model.refresh()
+    #expect(health.reads == before + 1)
+    model.setAdvises(true, for: .claudeCode)
+    #expect(health.reads == before + 2)
+}
+
+@MainActor
+@Test func firstHookEventLoadsAdvisories() {
+    let health = CountingHealth()
+    let model = ServingModel(holder: SpyHolder(), reader: FakeReader(source: .ac, percent: 80),
+                             health: health, settings: FakeSettings())
+    model.ingest(from: .claudeCode, HookEvent(hookEventName: "SessionStart", sessionID: "a"))
+    #expect(health.reads == 1)
+}
+
+@MainActor
+private final class SleepRequestSpy: SystemSleepRequesting {
+    var requests = 0
+    var fails = false
+    func requestSleep() throws {
+        requests += 1
+        if fails { throw NSError(domain: "test", code: 1) }
+    }
+}
+
+private struct UnavailableSafetyRegistration: RegisteredHelperReporting {
+    func registeredHelperIsActive() -> Bool { false }
+    func safetyRegistrationStatus() -> HelperSafetyRegistration { .unavailable }
+}
+
+@MainActor
+@Test func unavailableHelperIsReportedWhileSleepIsRequested() {
+    let sleep = SleepRequestSpy()
+    let model = ServingModel(holder: SpyHolder(), reader: FakeReader(source: .battery, percent: 1),
+                             systemSleep: sleep, health: fixtureHealth(),
+                             registration: UnavailableSafetyRegistration(), settings: FakeSettings())
+    model.refresh()
+    #expect(sleep.requests == 1)
+    #expect(model.sleepRequestError != nil)
+}
+
+@MainActor
+@Test func floorRequestsSleepWithoutAnActiveHold() async {
+    let sleep = SleepRequestSpy()
+    let model = ServingModel(holder: SpyHolder(), reader: FakeReader(source: .battery, percent: 1),
+                             systemSleep: sleep, health: fixtureHealth(),
+                             registration: StubRegisteredHelper(active: false), settings: FakeSettings())
+    model.refresh()
+    #expect(sleep.requests == 1)
+    model.refresh()
+    #expect(sleep.requests == 1)
+}
+
+@MainActor
+@Test func manualHoldExpiresAndRestoresThePriorMode() {
+    let clock = SafetyClock()
+    let model = ServingModel(holder: SpyHolder(), reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth(), settings: FakeSettings(),
+                             monotonicNow: { clock.read() })
+    model.intent = .stop
+    model.startManualHold(for: 10)
+    #expect(model.isServing)
+    clock.advance(9)
+    model.refresh()
+    #expect(model.isServing)
+    clock.advance(1)
+    model.refresh()
+    #expect(model.intent == .stop)
+    #expect(!model.isServing)
+    #expect(model.manualHoldRemaining == nil)
+}
+
+@MainActor
+@Test func aModeChangeAndPowerSuppressionCancelTheManualHold() {
+    let clock = SafetyClock()
+    let reader = FakeReader(source: .ac, percent: 80)
+    let model = ServingModel(holder: SpyHolder(), reader: reader, health: fixtureHealth(),
+                             settings: FakeSettings(), monotonicNow: { clock.read() })
+    model.startManualHold(for: 10)
+    model.intent = .stop
+    clock.advance(20)
+    model.refresh()
+    #expect(model.intent == .stop)
+    model.startManualHold(for: 10)
+    reader.set(source: .unknown, percent: nil)
+    model.refresh()
+    #expect(model.manualHoldRemaining == nil)
+    reader.set(source: .ac, percent: 80)
+    model.refresh()
+    #expect(!model.isServing)
+    #expect(model.intent == .stop)
+}
+
+@MainActor
+@Test func manualHoldRejectsInvalidDurationsAndHasAHardLimit() {
+    let model = ServingModel(holder: SpyHolder(), reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth(), settings: FakeSettings())
+    for invalid in [0.0, -1.0, .nan, .infinity] {
+        model.startManualHold(for: invalid)
+        #expect(model.manualHoldRemaining == nil)
+        #expect(!model.isServing)
+    }
+    model.startManualHold(for: 172_800)
+    #expect(model.manualHoldRemaining != nil)
+    #expect((model.manualHoldRemaining ?? .infinity) <= 86_400)
+    model.endManualHold()
+    #expect(model.intent == .auto)
+    #expect(!model.isServing)
+}
+
+@MainActor
+@Test func manualHoldRestoresOffAfterAnUnlimitedOn() {
+    let clock = SafetyClock()
+    let model = ServingModel(holder: SpyHolder(), reader: FakeReader(source: .ac, percent: 80),
+                             health: fixtureHealth(), settings: FakeSettings(),
+                             monotonicNow: { clock.read() })
+    model.intent = .stop
+    model.intent = .serve
+    model.startManualHold(for: 10)
+    clock.advance(10)
+    model.refresh()
+    #expect(model.intent == .stop)
+    #expect(!model.isServing)
+}
+
+@MainActor
+@Test func acceptedSleepHasABoundedRetryAndWakeRetriesImmediately() {
+    let clock = SafetyClock()
+    let sleep = SleepRequestSpy()
+    let model = ServingModel(holder: SpyHolder(), reader: FakeReader(source: .battery, percent: 1),
+                             systemSleep: sleep, health: fixtureHealth(),
+                             registration: StubRegisteredHelper(active: false), settings: FakeSettings(),
+                             monotonicNow: { clock.read() })
+    model.refresh()
+    clock.advance(299)
+    model.refresh()
+    #expect(sleep.requests == 1)
+    clock.advance(1)
+    model.refresh()
+    #expect(sleep.requests == 2)
+    clock.advance(1)
+    model.systemDidWake()
+    #expect(sleep.requests == 3)
+}
+
+private final class SafetyClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: TimeInterval = 0
+    func read() -> TimeInterval { lock.lock(); defer { lock.unlock() }; return value }
+    func advance(_ seconds: TimeInterval) { lock.lock(); value += seconds; lock.unlock() }
+}
+
+private actor SuspendedRevert: HelperRemovalControlling {
+    private var pending: [CheckedContinuation<HelperRevertOutcome, Never>] = []
+    func revert() async -> HelperRevertOutcome {
+        await withCheckedContinuation { pending.append($0) }
+    }
+    nonisolated func unregisterHelper() throws {}
+    var calls: Int { pending.count }
+    func completeFirst() { pending.removeFirst().resume(returning: .reverted(wasArmed: true)) }
+    func refuseFirst() { pending.removeFirst().resume(returning: .refused("refused")) }
+}
+
+@MainActor
+private func waitForSafety(_ predicate: @MainActor () async -> Bool) async -> Bool {
+    for _ in 0..<200 {
+        if await predicate() { return true }
+        try? await Task.sleep(for: .milliseconds(10))
+    }
+    return false
+}
+
+@MainActor
+@Test func sleepFailureRetriesAndRecoveryStartsANewEpisode() {
+    let clock = SafetyClock()
+    let sleep = SleepRequestSpy()
+    let reader = FakeReader(source: .battery, percent: 1)
+    let model = ServingModel(holder: SpyHolder(), reader: reader, systemSleep: sleep,
+                             health: fixtureHealth(), registration: StubRegisteredHelper(active: false),
+                             settings: FakeSettings(), monotonicNow: { clock.read() })
+    sleep.fails = true
+    model.refresh()
+    #expect(sleep.requests == 1)
+    #expect(model.sleepRequestError != nil)
+    model.refresh()
+    #expect(sleep.requests == 1)
+    clock.advance(60)
+    sleep.fails = false
+    model.refresh()
+    #expect(sleep.requests == 2)
+    #expect(model.sleepRequestError == nil)
+    clock.advance(60)
+    model.refresh()
+    #expect(sleep.requests == 2)
+    model.systemDidWake()
+    #expect(sleep.requests == 3)
+    reader.set(source: .ac, percent: 1)
+    model.refresh()
+    reader.set(source: .battery, percent: 1)
+    model.refresh()
+    #expect(sleep.requests == 4)
+}
+
+@MainActor
+@Test func timedOutHelpersStayBoundedWhileSleepRequestsContinue() async throws {
+    let clock = SafetyClock()
+    let sleep = SleepRequestSpy()
+    let removal = SuspendedRevert()
+    let reader = FakeReader(source: .battery, percent: 1)
+    let model = ServingModel(holder: SpyHolder(), reader: reader, systemSleep: sleep,
+                             health: fixtureHealth(), registration: StubRegisteredHelper(active: true),
+                             removal: removal, settings: FakeSettings(),
+                             monotonicNow: { clock.read() }, safetyTimeout: 0.01)
+    var completions = 0
+    model.onSafetyCompletion = { completions += 1 }
+    model.refresh()
+    #expect(await waitForSafety { sleep.requests == 1 })
+    #expect(model.sleepRequestError != nil)
+    clock.advance(60)
+    model.systemDidWake()
+    #expect(await waitForSafety { sleep.requests == 2 })
+    clock.advance(60)
+    model.systemDidWake()
+    #expect(sleep.requests == 3)
+    try #require(await removal.calls == 2)
+    reader.set(source: .ac, percent: 1)
+    model.refresh()
+    await removal.completeFirst()
+    await removal.completeFirst()
+    #expect(await waitForSafety { completions == 5 })
+    #expect(sleep.requests == 3)
+}
+
+@MainActor
+@Test func recoveryDuringRevertPreventsSleep() async throws {
+    let sleep = SleepRequestSpy()
+    let removal = SuspendedRevert()
+    let reader = FakeReader(source: .battery, percent: 1)
+    let model = ServingModel(holder: SpyHolder(), reader: reader, systemSleep: sleep,
+                             health: fixtureHealth(), registration: StubRegisteredHelper(active: true),
+                             removal: removal, settings: FakeSettings(), safetyTimeout: 30)
+    var completions = 0
+    model.onSafetyCompletion = { completions += 1 }
+    model.refresh()
+    try #require(await waitForSafety { await removal.calls == 1 })
+    reader.set(source: .ac, percent: 80)
+    model.refresh()
+    await removal.completeFirst()
+    #expect(await waitForSafety { completions == 1 })
+    #expect(sleep.requests == 0)
+}
+
+@MainActor
+@Test func unknownAndFloorTransitionsStartDistinctSafetyActions() async throws {
+    let sleep = SleepRequestSpy()
+    let removal = SuspendedRevert()
+    let reader = FakeReader(source: .unknown, percent: nil)
+    let model = ServingModel(holder: SpyHolder(), reader: reader, systemSleep: sleep,
+                             health: fixtureHealth(), registration: StubRegisteredHelper(active: true),
+                             removal: removal, settings: FakeSettings(), safetyTimeout: 30)
+    var completions = 0
+    model.onSafetyCompletion = { completions += 1 }
+    model.refresh()
+    try #require(await waitForSafety { await removal.calls == 1 })
+    reader.set(source: .battery, percent: 1)
+    model.refresh()
+    try #require(await waitForSafety { await removal.calls == 2 })
+    await removal.completeFirst()
+    #expect(await waitForSafety { completions == 1 })
+    #expect(sleep.requests == 0)
+    await removal.completeFirst()
+    #expect(await waitForSafety { sleep.requests == 1 })
+    reader.set(source: .unknown, percent: nil)
+    model.refresh()
+    try #require(await waitForSafety { await removal.calls == 1 })
+    await removal.completeFirst()
+    #expect(await waitForSafety { completions == 3 })
+    #expect(sleep.requests == 1)
+}
+
+@MainActor
+@Test func unknownPowerReportsARefusedLidRevert() async throws {
+    let sleep = SleepRequestSpy()
+    let removal = SuspendedRevert()
+    let model = ServingModel(holder: SpyHolder(), reader: FakeReader(source: .unknown, percent: nil),
+                             systemSleep: sleep, health: fixtureHealth(),
+                             registration: StubRegisteredHelper(active: true), removal: removal,
+                             settings: FakeSettings(), safetyTimeout: 30)
+    model.refresh()
+    try #require(await waitForSafety { await removal.calls == 1 })
+    await removal.refuseFirst()
+    #expect(await waitForSafety { model.sleepRequestError != nil })
+    #expect(model.sleepRequestError == "refused")
+    #expect(sleep.requests == 0)
 }

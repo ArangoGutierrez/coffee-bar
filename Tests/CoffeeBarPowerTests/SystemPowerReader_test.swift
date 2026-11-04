@@ -88,9 +88,7 @@ private struct PmsetReport {
         #expect(abs(percent - reported) <= 2,
                 "reader \(percent)% vs pmset \(reported)%")
     } else {
-        // The documented fallback in `read()`: absent or unreadable is
-        // reported as AC, because that never suppresses a hold the user asked
-        // for. Asserted so this branch is not empty either.
+        // On a desktop with no internal battery, the supply is AC.
         #expect(reading.source == .ac,
                 "no battery, so the reading must fall back to AC")
     }
@@ -147,6 +145,21 @@ private func internalBatteryDescription(percent: Int,
     #expect(reading.source == .battery)
 }
 
+@Test func invalidBatteryCapacitiesHaveNoPercentage() {
+    for (current, maximum) in [(-1, 100), (101, 100), (0, 0), (1, -1)] {
+        let description: [String: Any] = [kIOPSTypeKey: kIOPSInternalBatteryType,
+            kIOPSCurrentCapacityKey: current, kIOPSMaxCapacityKey: maximum]
+        let reading = SystemPowerReader.reading(from: [description],
+                                                providingType: kIOPSBatteryPowerValue)
+        #expect(reading.source == .battery)
+        #expect(reading.percent == nil)
+    }
+    let large: [String: Any] = [kIOPSTypeKey: kIOPSInternalBatteryType,
+        kIOPSCurrentCapacityKey: Int.max, kIOPSMaxCapacityKey: Int.max]
+    #expect(SystemPowerReader.reading(from: [large],
+        providingType: kIOPSBatteryPowerValue).percent == 100)
+}
+
 @Test func aUPSAloneReportsNoBatteryPercentage() {
     // A desktop with a UPS attached has no internal battery. Reporting the UPS
     // charge here would make §8.1 suppress a hold on a machine that cannot run
@@ -164,14 +177,12 @@ private func internalBatteryDescription(percent: Int,
     // literals, not re-derived from `onBattery(providingType:)`, so this fails
     // for a reading that decides the source by any other mechanism.
     //
-    // UPS power and an unreadable type are both `.ac`, because
-    // `BaselineProbes.swift` "a UPS is an external supply the run is not draining"
-    // documents why a UPS is not on battery.
+    // A UPS is external power. An unreadable type is unknown.
     let cases: [(String?, PowerSource)] = [
         (kIOPSACPowerValue, .ac),
         (kIOPSBatteryPowerValue, .battery),
         (kIOPMUPSPowerKey, .ac),
-        (nil, .ac),
+        (nil, .unknown),
     ]
     for (providingType, expected) in cases {
         let reading = SystemPowerReader.reading(

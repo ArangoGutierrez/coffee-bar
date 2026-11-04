@@ -76,7 +76,7 @@ private let nestedTools: [AgentTool] = [.claudeCode, .codex]
 
 // MARK: - The events come from the checker, not from a literal
 
-@Test(arguments: AgentTool.allCases)
+@Test(arguments: AgentTool.hookTools)
 func theSnippetWiresExactlyTheEventsTheCheckerLooksFor(_ tool: AgentTool) throws {
     // Named bug this catches: a hardcoded snippet wiring five events while
     // `requiredEvents(for:)` looks for six, or Claude Code's PascalCase names
@@ -157,7 +157,8 @@ func theNestedShapePutsTheCommandUnderAnInnerHooksArray(_ tool: AgentTool) throw
         checked += 1
     }
 
-    #expect(checked == 5, "\(tool) snippet has \(checked) events, expected 5")
+    let expectedCount = tool == .cursor ? 7 : 5
+    #expect(checked == expectedCount, "\(tool) snippet has \(checked) events, expected \(expectedCount)")
 }
 
 // MARK: - Cursor nests one level less
@@ -171,7 +172,7 @@ func theNestedShapePutsTheCommandUnderAnInnerHooksArray(_ tool: AgentTool) throw
     // runs nothing, and the panel reports the very fault the user just tried to
     // clear.
     let hooks = try hooksObject(.cursor)
-    #expect(hooks.count == 5, "the cursor snippet wires \(hooks.count) events, expected 5")
+    #expect(hooks.count == 7, "the cursor snippet wires \(hooks.count) events, expected 7")
 
     for (event, entry) in hooks {
         let elements = try #require(entry as? [[String: Any]],
@@ -191,7 +192,7 @@ func theNestedShapePutsTheCommandUnderAnInnerHooksArray(_ tool: AgentTool) throw
 
 // MARK: - What the user actually pastes
 
-@Test(arguments: AgentTool.allCases)
+@Test(arguments: AgentTool.hookTools)
 func theSnippetIsValidJSONWithNothingBesideTheHooksObject(_ tool: AgentTool) throws {
     // The button writes this to the pasteboard and the user merges it by hand.
     // Anything at the root beside `hooks` would be pasted into a settings file
@@ -201,14 +202,15 @@ func theSnippetIsValidJSONWithNothingBesideTheHooksObject(_ tool: AgentTool) thr
             "\(tool) snippet's root carries \(root.keys.sorted()); only `hooks` belongs in a fragment")
 }
 
-@Test(arguments: AgentTool.allCases)
+@Test(arguments: AgentTool.hookTools)
 func everySnippetCarriesAMarkerTheCheckerRecognises(_ tool: AgentTool) throws {
     // A snippet the checker cannot recognise leaves the user correctly wired and
     // still reported broken. Asserted on every command rather than on the text
     // once: one recognisable command among five would pass a text search and
     // leave four events reported missing.
     let found = try commands(in: tool)
-    #expect(found.count == 5, "\(tool) snippet holds \(found.count) commands, expected 5")
+    let expectedCount = tool == .cursor ? 7 : 5
+    #expect(found.count == expectedCount, "\(tool) snippet holds \(found.count) commands, expected \(expectedCount)")
 
     for command in found {
         #expect(HookHealth.commandMarkers.contains { command.contains($0) },
@@ -227,7 +229,7 @@ private func occurrences(of flag: String, in command: String) -> Int {
     command.components(separatedBy: flag).count - 1
 }
 
-@Test(arguments: AgentTool.allCases)
+@Test(arguments: AgentTool.hookTools)
 func everyCommandWouldActuallyDeliverAnEvent(_ tool: AgentTool) throws {
     // **This reads the command as TEXT, and text cannot answer whether it
     // works.** That is a stated limit and not a defect to be patched: five
@@ -261,7 +263,8 @@ func everyCommandWouldActuallyDeliverAnEvent(_ tool: AgentTool) throws {
     // `eachToolsCommandDeclaresThatToolsOwnOrigin` owns it, per tool, and a
     // second copy would drift from the first.
     let found = try commands(in: tool)
-    #expect(found.count == 5, "\(tool) snippet holds \(found.count) commands, expected 5")
+    let expectedCount = tool == .cursor ? 7 : 5
+    #expect(found.count == expectedCount, "\(tool) snippet holds \(found.count) commands, expected \(expectedCount)")
 
     for command in found {
         #expect(command.hasPrefix("curl "),
@@ -325,7 +328,7 @@ func everyCommandWouldActuallyDeliverAnEvent(_ tool: AgentTool) throws {
     }
 }
 
-@Test(arguments: AgentTool.allCases)
+@Test(arguments: AgentTool.hookTools)
 func noSnippetCarriesAnAbsoluteHomePath(_ tool: AgentTool) throws {
     // `CoffeeBarCore` does no I/O and resolves no home directory (design §8). A
     // literal `/Users/…` in a snippet is also a path that is wrong on every
@@ -350,7 +353,7 @@ private func declaredEndpoint(in command: String) throws -> String {
     return String(url.dropFirst(prefix.count))
 }
 
-@Test(arguments: AgentTool.allCases)
+@Test(arguments: AgentTool.hookTools)
 func eachToolsCommandDeclaresThatToolsOwnOrigin(_ tool: AgentTool) throws {
     // Named bug this catches: every tool posting to `http://localhost/event`.
     // That is Claude Code's endpoint, so every Codex and Cursor session is filed
@@ -359,7 +362,8 @@ func eachToolsCommandDeclaresThatToolsOwnOrigin(_ tool: AgentTool) throws {
     // `HookHealth` matches the socket path in the command, never the URL. The
     // panel reports `.wired` over a snippet that misattributes every session.
     let found = try commands(in: tool)
-    #expect(found.count == 5, "\(tool) snippet holds \(found.count) commands, expected 5")
+    let expectedCount = tool == .cursor ? 7 : 5
+    #expect(found.count == expectedCount, "\(tool) snippet holds \(found.count) commands, expected \(expectedCount)")
 
     for command in found {
         let endpoint = try declaredEndpoint(in: command)
@@ -375,7 +379,7 @@ func eachToolsCommandDeclaresThatToolsOwnOrigin(_ tool: AgentTool) throws {
 
 // MARK: - The generator and the checker agree
 
-@Test(arguments: AgentTool.allCases)
+@Test(arguments: AgentTool.hookTools)
 func theCheckerReportsOurOwnSnippetAsWired(_ tool: AgentTool) throws {
     // THE round trip. The fixture is the GENERATOR'S OUTPUT and not a literal: a
     // literal would only prove somebody typed the shape `HookHealth` wanted,

@@ -128,5 +128,6 @@ private func wireFixture(state: String) -> Data {
         "claudeCode",
         "codex",
         "cursor",
+        "activityBridge",
     ])
 }

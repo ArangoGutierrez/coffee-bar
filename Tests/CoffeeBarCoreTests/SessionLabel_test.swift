@@ -223,7 +223,7 @@ private let pathCases: [PathCase] = [
     // Named bug: the label is spelled at the call site, so the panel says
     // "claudeCode" in one place and "Claude Code" in another, and adding a tool
     // means finding every spelling. `AgentTool.displayName` is the one owner.
-    #expect(AgentTool.allCases.map(\.displayName) == ["claude", "codex", "cursor"])
+    #expect(AgentTool.allCases.map(\.displayName) == ["claude", "codex", "cursor", "activity"])
 
     // Distinct, because the label is the only thing separating two rows in the
     // same repository, and lowercase because it sits in 10pt caption text

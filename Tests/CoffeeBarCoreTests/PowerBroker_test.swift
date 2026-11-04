@@ -334,11 +334,13 @@ private func inputs(sessions: [AgentSession] = [],
         inputs(source: .ac, battery: 14, intent: .serve)).idleSleepAssertion == true)
 }
 
-@Test func absentBatteryReadingNeverSuppresses() {
-    // A desktop has no battery. An unreadable percentage must not silently
-    // stop the product from working.
+@Test func absentBatteryReadingSuppressesOnBattery() {
     #expect(PowerBroker.decide(
-        inputs(source: .battery, battery: nil, intent: .serve)).idleSleepAssertion == true)
+        inputs(source: .battery, battery: nil, intent: .serve)).idleSleepAssertion == false)
+    #expect(PowerBroker.decide(
+        inputs(source: .ac, battery: nil, intent: .serve)).idleSleepAssertion == true)
+    #expect(PowerBroker.decide(
+        inputs(source: .unknown, battery: 80, intent: .serve)).idleSleepAssertion == false)
 }
 
 @Test func suppressionReasonNamesTheMeasuredPercentAndFloor() {

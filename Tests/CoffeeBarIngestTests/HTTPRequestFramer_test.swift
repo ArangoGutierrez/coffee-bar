@@ -85,6 +85,28 @@ private func requestWithRawContentLength(_ raw: String, body: String = "") -> Da
     #expect(framer.append(whole.suffix(body.utf8.count)) == .body(Data(body.utf8)))
 }
 
+@Test func fragmentedHeadersAndBodyRequireOnlyLinearHeaderWork() {
+    let payload = Data(repeating: 0x78, count: 262_144)
+    let headers = Data("POST /ingest HTTP/1.1\r\nContent-Length: 262144\r\n\r\n".utf8)
+    var framer = HTTPRequestFramer()
+    for byte in headers {
+        #expect(framer.append(Data([byte])) == .needMore)
+    }
+    for offset in stride(from: 0, to: payload.count, by: 1024) {
+        let chunk = payload.subdata(in: offset..<min(offset + 1024, payload.count))
+        let result = framer.append(chunk)
+        if offset + chunk.count == payload.count {
+            #expect(result == .body(payload))
+        } else {
+            #expect(result == .needMore)
+        }
+    }
+    #expect(framer.requestMethod == "POST")
+    #expect(framer.requestTarget == "/ingest")
+    #expect(framer.headerScanBytes <= headers.count * 4)
+    #expect(framer.headerParseCount == 1)
+}
+
 @Test func onlyContentLengthBytesAreTaken() {
     // Named bug this catches: returning everything after the headers. A client
     // that pipelines a second request would have both bodies concatenated into
