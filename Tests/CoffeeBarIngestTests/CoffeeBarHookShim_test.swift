@@ -940,13 +940,18 @@ private final class SlowPeerProgress: @unchecked Sendable {
     }
     try #require(bound == 0, "could not bind the owned test socket")
     try #require(listen(listener, 1) == 0)
+    // The peer owns its duplicate even if the completion wait times out.
+    let peerListener = dup(listener)
+    try #require(peerListener >= 0)
+    let peerStarted = DispatchSemaphore(value: 0)
     let peerFinished = DispatchSemaphore(value: 0)
     let progress = SlowPeerProgress()
-    DispatchQueue.global().async {
-        defer { peerFinished.signal() }
-        var pending = pollfd(fd: listener, events: Int16(POLLIN), revents: 0)
+    Thread.detachNewThread {
+        defer { Darwin.close(peerListener); peerFinished.signal() }
+        peerStarted.signal()
+        var pending = pollfd(fd: peerListener, events: Int16(POLLIN), revents: 0)
         guard poll(&pending, 1, 3_000) > 0 else { return }
-        let peer = accept(listener, nil, nil)
+        let peer = accept(peerListener, nil, nil)
         guard peer >= 0 else { return }
         defer { Darwin.close(peer) }
         let end = DispatchTime.now() + 2.0
@@ -960,6 +965,8 @@ private final class SlowPeerProgress: @unchecked Sendable {
             progress.add(count)
         }
     }
+    try #require(peerStarted.wait(timeout: .now() + 3) == .success,
+                 "the slow peer did not start")
     let started = DispatchTime.now().uptimeNanoseconds
     let run = try runShim(["--socket=\(sandbox.path)"],
                           stdin: Data(repeating: 120, count: 900_000),
@@ -990,12 +997,16 @@ private final class SlowPeerProgress: @unchecked Sendable {
     }
     try #require(bound == 0, "could not bind the owned test socket")
     try #require(listen(listener, 1) == 0)
+    let peerListener = dup(listener)
+    try #require(peerListener >= 0)
+    let peerStarted = DispatchSemaphore(value: 0)
     let peerFinished = DispatchSemaphore(value: 0)
-    DispatchQueue.global().async {
-        defer { peerFinished.signal() }
-        var pending = pollfd(fd: listener, events: Int16(POLLIN), revents: 0)
+    Thread.detachNewThread {
+        defer { Darwin.close(peerListener); peerFinished.signal() }
+        peerStarted.signal()
+        var pending = pollfd(fd: peerListener, events: Int16(POLLIN), revents: 0)
         guard poll(&pending, 1, 3_000) > 0 else { return }
-        let peer = accept(listener, nil, nil)
+        let peer = accept(peerListener, nil, nil)
         guard peer >= 0 else { return }
         defer { Darwin.close(peer) }
         var noSignal: Int32 = 1
@@ -1009,6 +1020,8 @@ private final class SlowPeerProgress: @unchecked Sendable {
             _ = Darwin.write(peer, buffer.baseAddress!, buffer.count)
         }
     }
+    try #require(peerStarted.wait(timeout: .now() + 3) == .success,
+                 "the refusal peer did not start")
     let run = try runShim(["--socket=\(sandbox.path)"],
                           stdin: Data(repeating: 120, count: 900_000),
                           totalTimeout: shimRefusalBudget)

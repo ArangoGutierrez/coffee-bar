@@ -3574,6 +3574,23 @@ private actor SuspendedRevert: HelperRemovalControlling {
     func refuseFirst() { pending.removeFirst().resume(returning: .refused("refused")) }
 }
 
+private actor SafetyTimeoutGate {
+    private var opened = false
+    private var pending: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        guard !opened else { return }
+        await withCheckedContinuation { pending.append($0) }
+    }
+
+    func open() {
+        opened = true
+        let continuations = pending
+        pending.removeAll()
+        for continuation in continuations { continuation.resume() }
+    }
+}
+
 @MainActor
 private func waitForSafety(_ predicate: @MainActor () async -> Bool) async -> Bool {
     for _ in 0..<200 {
@@ -3648,10 +3665,13 @@ private func waitForSafety(_ predicate: @MainActor () async -> Bool) async -> Bo
 @Test func recoveryDuringRevertPreventsSleep() async throws {
     let sleep = SleepRequestSpy()
     let removal = SuspendedRevert()
+    let timeout = SafetyTimeoutGate()
+    defer { Task { await timeout.open() } }
     let reader = FakeReader(source: .battery, percent: 1)
     let model = ServingModel(holder: SpyHolder(), reader: reader, systemSleep: sleep,
                              health: fixtureHealth(), registration: StubRegisteredHelper(active: true),
                              removal: removal, settings: FakeSettings(), safetyTimeout: 30)
+    model.safetyTimeoutWait = { await timeout.wait() }
     var completions = 0
     model.onSafetyCompletion = { completions += 1 }
     model.refresh()
@@ -3667,10 +3687,13 @@ private func waitForSafety(_ predicate: @MainActor () async -> Bool) async -> Bo
 @Test func unknownAndFloorTransitionsStartDistinctSafetyActions() async throws {
     let sleep = SleepRequestSpy()
     let removal = SuspendedRevert()
+    let timeout = SafetyTimeoutGate()
+    defer { Task { await timeout.open() } }
     let reader = FakeReader(source: .unknown, percent: nil)
     let model = ServingModel(holder: SpyHolder(), reader: reader, systemSleep: sleep,
                              health: fixtureHealth(), registration: StubRegisteredHelper(active: true),
                              removal: removal, settings: FakeSettings(), safetyTimeout: 30)
+    model.safetyTimeoutWait = { await timeout.wait() }
     var completions = 0
     model.onSafetyCompletion = { completions += 1 }
     model.refresh()
@@ -3695,10 +3718,13 @@ private func waitForSafety(_ predicate: @MainActor () async -> Bool) async -> Bo
 @Test func unknownPowerReportsARefusedLidRevert() async throws {
     let sleep = SleepRequestSpy()
     let removal = SuspendedRevert()
+    let timeout = SafetyTimeoutGate()
+    defer { Task { await timeout.open() } }
     let model = ServingModel(holder: SpyHolder(), reader: FakeReader(source: .unknown, percent: nil),
                              systemSleep: sleep, health: fixtureHealth(),
                              registration: StubRegisteredHelper(active: true), removal: removal,
                              settings: FakeSettings(), safetyTimeout: 30)
+    model.safetyTimeoutWait = { await timeout.wait() }
     model.refresh()
     try #require(await waitForSafety { await removal.calls == 1 })
     await removal.refuseFirst()
